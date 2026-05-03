@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import type { Message } from '../../../lib/types';
+import type { ToolStreamPayload } from '../../../stores/appStore';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { ToolCallCard } from './ToolCallCard';
@@ -16,6 +17,15 @@ interface Props {
    * moment the SDK's `assistant` event lands.
    */
   streamingText?: string;
+  /**
+   * Live in-progress Codex tool execution snapshot (stdout for a running
+   * shell command, in-progress patch, etc.). Rendered as a transient
+   * "running" tool card that gets replaced by the canonical tool_use card
+   * when item.completed lands.
+   */
+  toolStreaming?: ToolStreamPayload | null;
+  /** Live model-reasoning text — italic preview while the agent thinks. */
+  reasoningStreaming?: string;
 }
 
 // Builds a map from tool_use id → its matching tool_result (if seen). The
@@ -30,20 +40,29 @@ function indexResults(messages: Message[]) {
   return byUseId;
 }
 
-export function MessageList({ messages, loading, emptyHint, projectId, streamingText }: Props) {
+export function MessageList({
+  messages,
+  loading,
+  emptyHint,
+  projectId,
+  streamingText,
+  toolStreaming,
+  reasoningStreaming,
+}: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const resultsByUseId = useMemo(() => indexResults(messages), [messages]);
 
   // Auto-scroll: only follow if the user is already near the bottom, so we
-  // don't yank them away while they're reading history.
+  // don't yank them away while they're reading history. We also follow
+  // tool/reasoning streaming so live output stays visible.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     if (atBottom) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, streamingText, atBottom]);
+  }, [messages, streamingText, toolStreaming, reasoningStreaming, atBottom]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -120,6 +139,46 @@ export function MessageList({ messages, loading, emptyHint, projectId, streaming
           }
           return null;
         })}
+        {reasoningStreaming && (
+          <div
+            key="__reasoning__"
+            style={{
+              margin: '6px 0',
+              padding: '4px 8px',
+              fontSize: 11.5,
+              fontStyle: 'italic',
+              color: 'var(--text-muted)',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              whiteSpace: 'pre-wrap',
+              opacity: 0.85,
+              borderLeft: '2px solid var(--border)',
+            }}
+          >
+            <span
+              style={{
+                fontSize: 9.5,
+                textTransform: 'uppercase',
+                letterSpacing: '0.18em',
+                color: 'var(--text-muted)',
+                marginRight: 6,
+              }}
+            >
+              Thinking
+            </span>
+            {reasoningStreaming}
+          </div>
+        )}
+        {toolStreaming && (
+          <ToolCallCard
+            key="__tool_streaming__"
+            toolName={toolStreaming.toolName}
+            input={toolStreaming.input}
+            output={toolStreaming.output}
+            isError={toolStreaming.isError}
+            pending
+            defaultOpen
+          />
+        )}
         {streamingText && (
           <AssistantMessage
             key="__streaming__"

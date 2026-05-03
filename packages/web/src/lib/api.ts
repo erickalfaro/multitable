@@ -77,6 +77,7 @@ export const api = {
       ),
   },
   sessions: {
+    get: (id: string) => get<Session>(`/api/sessions/${id}`),
     list: (projectId: string) => get<Session[]>(`/api/projects/${projectId}/sessions`),
     create: (
       projectId: string,

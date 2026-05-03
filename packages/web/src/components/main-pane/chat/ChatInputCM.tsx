@@ -175,9 +175,10 @@ export const ChatInputCM = memo(function ChatInputCM({
   const [sendHover, setSendHover] = useState(false);
   // Sessions are SDK-driven: 'stopped'/'idle' means "ready to start a new turn",
   // 'running' means a turn is in flight (we client-side queue more sends),
-  // 'errored' means the last turn failed and the input is blocked until the
-  // user takes an explicit action.
-  const disabled = state === 'errored';
+  // 'errored' means the last turn failed. Keep the editor usable so the user
+  // can retry; wsClient.sendTurn flips the session back to running
+  // optimistically while the daemon attempts the next turn.
+  const disabled = false;
   const queueing = state === 'running';
   disabledRef.current = disabled;
 
@@ -740,9 +741,7 @@ export const ChatInputCM = memo(function ChatInputCM({
           onMouseLeave={() => setSendHover(false)}
           title={
             !canSend
-              ? disabled
-                ? 'Session not running'
-                : 'Type a message'
+              ? 'Type a message'
               : queueing
                 ? 'Queue message (Enter)'
                 : 'Send (Enter)'
@@ -767,7 +766,7 @@ export const ChatInputCM = memo(function ChatInputCM({
         </button>
       </div>
 
-      {disabled && (
+      {state === 'errored' && (
         <div
           style={{
             marginTop: 6,
@@ -778,7 +777,7 @@ export const ChatInputCM = memo(function ChatInputCM({
             letterSpacing: '0.12em',
           }}
         >
-          Session errored — last turn failed. Send a new message to retry.
+          Last turn failed. Send a new message to retry.
         </div>
       )}
     </div>

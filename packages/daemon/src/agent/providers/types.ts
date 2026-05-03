@@ -45,6 +45,35 @@ export interface AdapterCallbacks {
   bumpActivity(): void;
   // First-prompt detection for AI rename.
   maybeRenameFromFirstPrompt(prompt: string): void;
+  // Daemon-side guarantee tick: the adapter has just diffed in-memory state
+  // against its authoritative on-disk log and broadcast any missing items.
+  // Manager re-emits as `session:reconciled` so the frontend can do a no-op
+  // REST sync to confirm consistency.
+  emitReconciled(addedMessageIds: string[]): void;
+  // Live in-progress tool execution snapshot — fires on every item.updated
+  // for command_execution / file_change / mcp_tool_call / web_search items
+  // so the chat UI can render the cumulative output as it arrives, before
+  // the canonical tool_use/tool_result messages land at item.completed. Pass
+  // `null` to clear the live slot (tool finished, switched, or turn ended).
+  emitToolDelta(payload: ToolDeltaPayload | null): void;
+  // Live reasoning text — codex emits a stream of model thinking that we
+  // surface as an italic preview while the agent is mid-turn. Empty string
+  // clears.
+  emitReasoningDelta(text: string): void;
+  // The optimistic message that was broadcast with `oldId` is now known to
+  // be the same logical message as the one with the canonical `newId` (e.g.
+  // the user's prompt that was pushed with a temp id, then matched against
+  // the codex JSONL after the turn). Frontend updates its store id in place.
+  // This is the SOTA pattern for optimistic-UI reconciliation — the same
+  // shape Linear/Figma/Slack use for client-temp-id → server-canonical-id.
+  emitMessageRekey(oldId: string, newId: string): void;
+}
+
+export interface ToolDeltaPayload {
+  toolName: string;
+  input: unknown;
+  output: string;
+  isError: boolean;
 }
 
 // Adapter contract. Each provider (claude, codex, gemini, ...) implements this.

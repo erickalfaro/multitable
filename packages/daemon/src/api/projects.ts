@@ -24,6 +24,7 @@ import type { GitWatcher } from '../git/watcher.js';
 import { loadProjectConfig, loadGlobalConfig } from '../config/loader.js';
 import { removeAttachmentDir } from './attachments.js';
 import type { PtyManager } from '../pty/manager.js';
+import type { AgentSessionManager } from '../agent/manager.js';
 import type { ProcessConfig, SpawnConfig } from '../types.js';
 
 // Ubuntu's VS Code snap injects GTK_PATH / LOCPATH / LD_LIBRARY_PATH that
@@ -198,7 +199,11 @@ function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig
   };
 }
 
-export function createProjectsRouter(manager: PtyManager, gitWatcher: GitWatcher): Router {
+export function createProjectsRouter(
+  manager: PtyManager,
+  gitWatcher: GitWatcher,
+  agentManager: AgentSessionManager,
+): Router {
   const router = Router();
 
   // GET /api/projects
@@ -277,6 +282,7 @@ export function createProjectsRouter(manager: PtyManager, gitWatcher: GitWatcher
     const terminals = getTerminalsByProject(req.params.id);
     for (const child of [...sessions, ...commands, ...terminals]) {
       try { manager.remove(child.id); } catch { /* best effort */ }
+      try { agentManager.remove(child.id); } catch { /* best effort */ }
     }
 
     // Clean up attachments dirs for the children. Only sessions/terminals can
@@ -317,8 +323,8 @@ export function createProjectsRouter(manager: PtyManager, gitWatcher: GitWatcher
     const sessions = getSessionsByProject(req.params.id);
     // Enrich with running state
     const enriched = sessions.map((s) => {
-      const proc = manager.get(s.id);
-      return { ...s, state: proc?.state ?? 'stopped', pid: proc?.pid ?? null };
+      const agent = agentManager.get(s.id);
+      return { ...s, state: agent?.state ?? 'stopped', pid: null };
     });
     res.json(enriched);
   });

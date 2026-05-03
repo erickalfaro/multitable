@@ -90,7 +90,7 @@ export function createServer(
 
   // ─── Mount API routes ───────────────────────────────────────────────────────
 
-  app.use('/api/projects', createProjectsRouter(manager, gitWatcher));
+  app.use('/api/projects', createProjectsRouter(manager, gitWatcher, agentManager));
   app.use('/api/sessions', createSessionsRouter(agentManager));
   app.use('/api/commands', createCommandsRouter(manager));
   app.use('/api/processes', createProcessesRouter(manager));
@@ -292,6 +292,25 @@ export function createServer(
     broadcastForProcess(sessionId, 'session:assistant-delta', { text });
   });
 
+  // Live in-progress tool snapshot — codex emits item.updated as a command's
+  // stdout grows, a patch applies, an mcp tool runs, etc. Forwarded straight
+  // to the chat UI as a transient "tool currently running" preview that gets
+  // replaced by the canonical tool_use card the moment item.completed lands.
+  agentManager.on(
+    'tool-delta',
+    ({ sessionId, payload }: { sessionId: string; payload: unknown }) => {
+      broadcastForProcess(sessionId, 'session:tool-delta', { payload });
+    },
+  );
+
+  // Live model reasoning text — italic preview while the agent thinks.
+  agentManager.on(
+    'reasoning-delta',
+    ({ sessionId, text }: { sessionId: string; text: string }) => {
+      broadcastForProcess(sessionId, 'session:reasoning-delta', { text });
+    },
+  );
+
   agentManager.on('user-message', ({ sessionId, messages }: { sessionId: string; messages: any[] }) => {
     broadcastForProcess(sessionId, 'session:user-message', { messages });
   });
@@ -312,6 +331,27 @@ export function createServer(
   agentManager.on('turn-complete', ({ sessionId }: { sessionId: string }) => {
     broadcastForProcess(sessionId, 'session:turn-complete', {});
   });
+
+  // Daemon just diffed in-memory s.messages against its on-disk JSONL and
+  // broadcast any items the live event stream missed. Frontend uses this as
+  // the canonical "now is the right moment to REST-sync" tick.
+  agentManager.on(
+    'reconciled',
+    ({ sessionId, addedMessageIds }: { sessionId: string; addedMessageIds: string[] }) => {
+      broadcastForProcess(sessionId, 'session:reconciled', { addedMessageIds });
+    },
+  );
+
+  // Optimistic message id → canonical id swap. Frontend updates the existing
+  // message in messagesBySession in place; no add, no remove. Avoids the
+  // optimistic-vs-canonical duplicate that would otherwise need brittle
+  // text-based dedup heuristics.
+  agentManager.on(
+    'message-rekeyed',
+    ({ sessionId, oldId, newId }: { sessionId: string; oldId: string; newId: string }) => {
+      broadcastForProcess(sessionId, 'session:message-rekeyed', { oldId, newId });
+    },
+  );
 
   // Hook-driven state propagation (Phase 6: replaces the HTTP receiver).
   agentManager.on('state-snapshot', ({ sessionId, snapshot }: { sessionId: string; snapshot: any }) => {

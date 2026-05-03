@@ -195,11 +195,16 @@ export class AgentSessionManager extends EventEmitter {
 
     const ctrl = new AbortController();
     const turnStartedAt = Date.now();
+    // Random suffix avoids a collision if two sendTurn calls happen in the
+    // same millisecond — the frontend dedups optimistic-vs-canonical user
+    // messages by content + near-time, which would falsely collapse two
+    // legitimate sends if their optimistic ids happened to match.
+    const userMessageId = `turn-${turnStartedAt}-${Math.random().toString(36).slice(2, 8)}`;
     s.currentTurn = {
       abortController: ctrl,
       startedAt: turnStartedAt,
       promptPreview: text.slice(0, 80),
-      userMessageId: `turn-${turnStartedAt}`,
+      userMessageId,
     };
     s.state = 'running';
     s.lastActivity = Date.now();
@@ -297,6 +302,28 @@ export class AgentSessionManager extends EventEmitter {
             `Check NODE_EXTRA_CA_CERTS (corporate TLS), ANTHROPIC_API_KEY, or network connection. ` +
             `(${baseMessage})`
           : baseMessage;
+      if (s.provider === 'codex') {
+        this.codexAdapter.reset?.(s);
+        console.error('[agent] Codex turn failed', {
+          sessionId,
+          threadId: s.agentSessionId,
+          error: err instanceof Error ? err.stack ?? err.message : String(err),
+        });
+      }
+      // Stable id keyed off the turn start time so a WS reconnect that
+      // re-delivers the same event doesn't render a second error bubble.
+      const errorId =
+        s.provider === 'codex'
+          ? `codex:${s.agentSessionId ?? 'pending'}:turn-error:${turnStartedAt}`
+          : `turn-error:${sessionId}:${turnStartedAt}`;
+      const errorMsg: Message = {
+        id: errorId,
+        ts: Date.now(),
+        kind: 'system',
+        text: `Turn failed: ${message}`,
+      };
+      s.messages.push(errorMsg);
+      this.emit('tool-event', { sessionId, messages: [errorMsg] });
       s.state = 'errored';
       this.emit('turn-error', { sessionId, error: message });
       this.emit('state-changed', { sessionId, state: 'errored' as ProcessState });
@@ -317,6 +344,9 @@ export class AgentSessionManager extends EventEmitter {
         s.streamingBlockIndex = null;
         this.emit('assistant-delta', { sessionId, text: '' });
       }
+      // Same safety for codex live tool/reasoning previews.
+      this.emit('tool-delta', { sessionId, payload: null });
+      this.emit('reasoning-delta', { sessionId, text: '' });
       if (s.state === 'running') {
         s.state = 'stopped';
         this.emit('state-changed', { sessionId, state: 'stopped' as ProcessState });
@@ -407,6 +437,12 @@ export class AgentSessionManager extends EventEmitter {
         if (s) s.lastActivity = Date.now();
       },
       maybeRenameFromFirstPrompt: (prompt) => this.maybeRenameFromFirstPrompt(sessionId, prompt),
+      emitReconciled: (addedMessageIds) =>
+        this.emit('reconciled', { sessionId, addedMessageIds }),
+      emitToolDelta: (payload) => this.emit('tool-delta', { sessionId, payload }),
+      emitReasoningDelta: (text) => this.emit('reasoning-delta', { sessionId, text }),
+      emitMessageRekey: (oldId, newId) =>
+        this.emit('message-rekeyed', { sessionId, oldId, newId }),
     };
   }
 

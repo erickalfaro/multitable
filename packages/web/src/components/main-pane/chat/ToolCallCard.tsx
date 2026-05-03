@@ -8,6 +8,8 @@ interface Props {
   output: string | null;
   isError: boolean;
   pending: boolean;
+  /** Start expanded — used by the live in-progress card so streaming output is visible. */
+  defaultOpen?: boolean;
 }
 
 function toolIcon(name: string, size = 13) {
@@ -72,8 +74,8 @@ function languageForTool(toolName: string, input: any): string | undefined {
   return undefined;
 }
 
-export const ToolCallCard = memo(function ToolCallCard({ toolName, input, output, isError, pending }: Props) {
-  const [open, setOpen] = useState(false);
+export const ToolCallCard = memo(function ToolCallCard({ toolName, input, output, isError, pending, defaultOpen }: Props) {
+  const [open, setOpen] = useState(!!defaultOpen);
   const summary = toolSummary(toolName, input);
   const lang = languageForTool(toolName, input);
 

@@ -27,6 +27,11 @@ import { NotificationCenter } from './components/notifications/NotificationCente
 import { ElicitationModalHost } from './components/elicitation/ElicitationModal';
 import type { Session } from './lib/types';
 
+// Slow safety-net poll for sessions that are mid-turn. The primary path is
+// event-driven (turn-complete, ws-reconnected, session:reconciled, focus,
+// visibility); this just covers a daemon hang where no events ever arrive.
+const RUNNING_SAFETY_POLL_MS = 15_000;
+
 function App() {
   const store = useAppStore();
   useTheme();
@@ -209,6 +214,31 @@ function App() {
           store.setSessions(allSessions);
           store.setCommands(allCommands);
           store.setTerminals(allTerminals);
+
+          // Restore last-selected process so a refresh (or Chrome
+          // backgrounding the tab on mobile) returns to the same screen
+          // instead of dumping the user back on the dashboard. Only restore
+          // if the id still exists in the loaded data — sessions may have
+          // been deleted while the tab was away. Skip if a hash deep-link
+          // is present; that path owns selection for this load.
+          try {
+            const hasDeepLink =
+              window.location.hash.includes('session=') ||
+              window.location.hash.includes('permission=');
+            if (!hasDeepLink && useAppStore.getState().selectedProcessId === null) {
+              const savedId = localStorage.getItem('mt:selectedProcessId');
+              if (savedId) {
+                const exists =
+                  allSessions.some((s) => s.id === savedId) ||
+                  allCommands.some((c) => c.id === savedId) ||
+                  allTerminals.some((t) => t.id === savedId);
+                if (exists) store.setSelectedProcess(savedId);
+                else localStorage.removeItem('mt:selectedProcessId');
+              }
+            }
+          } catch {
+            // localStorage unavailable; stay on dashboard
+          }
         })
         .catch(() => {
           // Daemon may not be running yet; WS reconnect will handle it
@@ -231,11 +261,104 @@ function App() {
       }
     });
 
-    // Wire WebSocket events to store
+    // Persist selectedProcessId so refresh / mobile-Chrome resume returns
+    // to the same screen rather than the dashboard.
+    const unsubPersistSelection = useAppStore.subscribe((state, prev) => {
+      if (state.selectedProcessId !== prev.selectedProcessId) {
+        try {
+          if (state.selectedProcessId) {
+            localStorage.setItem('mt:selectedProcessId', state.selectedProcessId);
+          } else {
+            localStorage.removeItem('mt:selectedProcessId');
+          }
+        } catch {
+          // ignore quota/availability errors
+        }
+      }
+    });
+
+    const syncInFlight = new Set<string>();
+
+    const upsertCanonicalSession = (incoming: Session) => {
+      const live = useAppStore.getState();
+      const existing = live.sessions[incoming.id];
+      live.upsertSession(
+        existing?.claudeState
+          ? { ...incoming, claudeState: existing.claudeState }
+          : incoming,
+      );
+    };
+
+    // Codex SDK contract: runStreamed() is live progress; completed turns and
+    // resumed threads are recovered from persisted session state. This keeps
+    // WebSocket as a fast path while REST reconciliation remains authoritative.
+    const syncSession = (sessionId: string, reason: string) => {
+      if (syncInFlight.has(sessionId)) return;
+      syncInFlight.add(sessionId);
+      Promise.allSettled([
+        api.sessions.get(sessionId),
+        api.sessions.messages(sessionId),
+      ])
+        .then(([sessionRes, messagesRes]) => {
+          if (sessionRes.status === 'fulfilled') {
+            upsertCanonicalSession(sessionRes.value);
+          } else {
+            console.warn(`[sessions] failed to sync state for ${sessionId} (${reason})`, sessionRes.reason);
+          }
+          if (messagesRes.status === 'fulfilled') {
+            useAppStore.getState().mergeMessages(sessionId, messagesRes.value.messages);
+          } else {
+            console.warn(`[sessions] failed to sync messages for ${sessionId} (${reason})`, messagesRes.reason);
+          }
+        })
+        .finally(() => {
+          syncInFlight.delete(sessionId);
+        });
+    };
+
+    const activeSessionIds = () => {
+      const live = useAppStore.getState();
+      const ids = new Set<string>();
+      for (const session of Object.values(live.sessions)) {
+        const status = live.statusBySession[session.id]?.status ?? null;
+        const hasStreaming = Boolean(live.streamingBySession[session.id]);
+        const hasToolProgress = Boolean(live.toolProgressBySession[session.id]);
+        if (session.state === 'running' || status !== null || hasStreaming || hasToolProgress) {
+          ids.add(session.id);
+        }
+      }
+      if (live.selectedProcessId && live.sessions[live.selectedProcessId]) {
+        ids.add(live.selectedProcessId);
+      }
+      return [...ids];
+    };
+
+    const runningSessionIds = () => {
+      const live = useAppStore.getState();
+      const ids: string[] = [];
+      for (const session of Object.values(live.sessions)) {
+        if (session.state === 'running') ids.push(session.id);
+      }
+      return ids;
+    };
+
+    const syncActiveSessions = (reason: string) => {
+      for (const sessionId of activeSessionIds()) {
+        syncSession(sessionId, reason);
+      }
+    };
+
+    const syncRunningSessions = (reason: string) => {
+      for (const sessionId of runningSessionIds()) {
+        syncSession(sessionId, reason);
+      }
+    };
+
     const offs = [
       // Re-fetch all data when WS reconnects (e.g. after server restart)
       wsClient.on('ws:reconnected', () => {
         loadData();
+        syncActiveSessions('ws-reconnected');
       }),
       wsClient.on('process-state-changed', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
@@ -288,6 +411,10 @@ function App() {
         const live = useAppStore.getState();
         const session = sessionId ? live.sessions[sessionId] : null;
         const name = session?.name ?? 'Claude';
+        if (sessionId) live.updateProcessState(sessionId, 'stopped');
+        // Don't syncSession here — `session:reconciled` fires ~250ms later
+        // with the daemon's authoritative disk-vs-memory diff and triggers
+        // its own sync. Doing it twice just doubles the REST traffic.
         toast.success(`${name} is done`, { duration: 4000 });
         playDoneChime();
         // Pulse the sidebar for sessions the user isn't currently looking at —
@@ -313,6 +440,34 @@ function App() {
         const text = msg.payload?.text;
         if (pid && typeof text === 'string') {
           store.setStreamingText(pid, text);
+        }
+      }),
+      wsClient.on('session:tool-delta', (msg: any) => {
+        const pid = msg.processId || msg.payload?.processId;
+        const payload = msg.payload?.payload ?? null;
+        if (!pid) return;
+        if (payload === null) {
+          store.setToolStreaming(pid, null);
+          return;
+        }
+        if (
+          typeof payload === 'object' &&
+          typeof payload.toolName === 'string' &&
+          typeof payload.output === 'string'
+        ) {
+          store.setToolStreaming(pid, {
+            toolName: payload.toolName,
+            input: payload.input,
+            output: payload.output,
+            isError: !!payload.isError,
+          });
+        }
+      }),
+      wsClient.on('session:reasoning-delta', (msg: any) => {
+        const pid = msg.processId || msg.payload?.processId;
+        const text = msg.payload?.text;
+        if (pid && typeof text === 'string') {
+          store.setReasoningStreaming(pid, text);
         }
       }),
       wsClient.on('git:status-changed', (msg: any) => {
@@ -342,11 +497,43 @@ function App() {
         const session = pid ? store.sessions[pid] : null;
         const name = session?.name ?? 'Agent';
         toast.error(`${name}: ${message}`, { duration: 6000, style: { maxWidth: 480 } });
+        // The daemon already pushes a canonical "Turn failed: ..." system
+        // message and broadcasts it via session:tool-event, so don't append a
+        // second copy here — that would put two error bubbles in the chat.
         if (pid) store.setStreamingText(pid, '');
+      }),
+      wsClient.on('session:reconciled', (msg: any) => {
+        // Daemon just confirmed disk == in-memory after a turn. Pull the
+        // canonical messages snapshot so the store mirrors authoritative
+        // state — covers any item the live WS stream dropped.
+        const sessionId = msg.processId || msg.payload?.sessionId;
+        if (typeof sessionId === 'string') syncSession(sessionId, 'reconciled');
+      }),
+      wsClient.on('session:message-rekeyed', (msg: any) => {
+        // Daemon paired an optimistic message with its canonical id (e.g.
+        // user prompt's `turn-...` id → `codex:...:user:0`). Update the id
+        // in place so subsequent dedup is pure id match.
+        const sessionId = msg.processId || msg.payload?.sessionId;
+        const oldId = msg.payload?.oldId;
+        const newId = msg.payload?.newId;
+        if (typeof sessionId === 'string' && typeof oldId === 'string' && typeof newId === 'string') {
+          store.rekeyMessage(sessionId, oldId, newId);
+        }
       }),
       wsClient.on('session:send-error', (msg: any) => {
         const message = msg.payload?.message || 'Send failed';
+        const pid = msg.processId || msg.payload?.processId;
         toast.error(message, { duration: 4000 });
+        if (pid) {
+          store.appendMessages(pid, [
+            {
+              id: `send-error-${Date.now()}`,
+              ts: Date.now(),
+              kind: 'system',
+              text: `Send failed: ${message}`,
+            },
+          ]);
+        }
       }),
       wsClient.on('session:alert', (msg: any) => {
         const alert = msg.payload?.alert;
@@ -401,9 +588,12 @@ function App() {
       wsClient.on('session:turn-complete', (msg: any) => {
         const sessionId = msg.processId;
         if (typeof sessionId === 'string') {
-          useAppStore.getState().setToolProgress(sessionId, null);
-          useAppStore.getState().setSessionStatus(sessionId, { status: null });
-          useAppStore.getState().setStreamingText(sessionId, '');
+          const live = useAppStore.getState();
+          live.setToolProgress(sessionId, null);
+          live.setSessionStatus(sessionId, { status: null });
+          live.setStreamingText(sessionId, '');
+          live.setToolStreaming(sessionId, null);
+          live.setReasoningStreaming(sessionId, '');
         }
       }),
       wsClient.on('session:state-updated', (msg: any) => {
@@ -434,9 +624,28 @@ function App() {
       }),
     ];
 
+    // Slow safety-net poll: only fires for sessions stuck in `running`. The
+    // primary correctness path is event-driven (turn-complete, reconciled,
+    // ws-reconnected, focus, visibility); this just guards against a daemon
+    // hang where no events ever arrive. At idle this issues zero requests.
+    const syncTimer = window.setInterval(() => {
+      syncRunningSessions('running-safety-poll');
+    }, RUNNING_SAFETY_POLL_MS);
+
+    const syncOnVisible = () => {
+      if (!document.hidden) syncActiveSessions('visible');
+    };
+    const syncOnFocus = () => syncActiveSessions('focus');
+    document.addEventListener('visibilitychange', syncOnVisible);
+    window.addEventListener('focus', syncOnFocus);
+
     return () => {
       offs.forEach(off => off());
+      window.clearInterval(syncTimer);
+      document.removeEventListener('visibilitychange', syncOnVisible);
+      window.removeEventListener('focus', syncOnFocus);
       unsubPersist();
+      unsubPersistSelection();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

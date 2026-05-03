@@ -120,6 +120,18 @@ class WsClient {
   }
 
   sendTurn(processId: string, text: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      useAppStore.getState().appendMessages(processId, [
+        {
+          id: `send-error-${Date.now()}`,
+          ts: Date.now(),
+          kind: 'system',
+          text: 'Send failed: WebSocket is not connected.',
+        },
+      ]);
+      console.warn(`[ws] dropped session turn — socket not open (readyState=${this.ws?.readyState})`);
+      return;
+    }
     useAppStore.getState().updateProcessState(processId, 'running');
     this.send({ type: 'session:send', processId, payload: { text } });
   }

@@ -111,6 +111,12 @@ interface AppState {
   /** Merge a fetched batch with already-stored messages; dedupes by id, sorts by ts. */
   mergeMessages: (sessionId: string, messages: Message[]) => void;
   clearMessages: (sessionId: string) => void;
+  /**
+   * Rename a message id in place. Fired by the daemon's `session:message-rekeyed`
+   * event when an optimistic message is reconciled to its canonical id —
+   * keeps id-based dedup working without text-matching heuristics.
+   */
+  rekeyMessage: (sessionId: string, oldId: string, newId: string) => void;
 
   /**
    * In-flight streaming text for the current assistant turn (one per session,
@@ -121,6 +127,21 @@ interface AppState {
    */
   streamingBySession: Record<string, string>;
   setStreamingText: (sessionId: string, text: string) => void;
+
+  /**
+   * Live in-progress tool execution snapshot from Codex item.updated events.
+   * Rendered as a transient "running" tool card; cleared the moment the
+   * canonical tool_use/tool_result messages arrive at item.completed.
+   */
+  toolStreamingBySession: Record<string, ToolStreamPayload | null>;
+  setToolStreaming: (sessionId: string, payload: ToolStreamPayload | null) => void;
+
+  /**
+   * Live model-reasoning text (chain-of-thought). Italic preview that gets
+   * replaced by the canonical `Reasoning: …` system message when complete.
+   */
+  reasoningStreamingBySession: Record<string, string>;
+  setReasoningStreaming: (sessionId: string, text: string) => void;
 
   // Live git status per project — populated by REST fetch on panel mount and
   // refreshed by `git:status-changed` WS events from the daemon's GitWatcher.
@@ -197,8 +218,68 @@ export type SessionStatus =
   | { status: null }
   | { status: 'compacting' | 'requesting'; compactResult?: 'success' | 'failed' | null; compactError?: string | null };
 
+export interface ToolStreamPayload {
+  toolName: string;
+  input: unknown;
+  output: string;
+  isError: boolean;
+}
+
 // Cap alert history so an unattended user doesn't grow it indefinitely.
 const MAX_ALERT_HISTORY = 200;
+
+// Dedup is strictly id-based for real content. The daemon emits canonical ids
+// on both the live WS path and the REST refresh path, so id equality is the
+// right check. The narrow fingerprint fallback below ONLY applies to system
+// messages whose ids are client- or daemon-synthesized stopgaps that can
+// legitimately collide on reconnect (`turn-error-…`, `send-error-…`,
+// `codex-event-error-…`, `codex:…:turn-error:…`). User/assistant/tool content
+// is never text-deduped — re-typing the same prompt or re-running the same
+// tool is a legitimate action that must not be silently dropped.
+//
+// Optimistic user pushes (id starts with `turn-`) get a different treatment:
+// the daemon emits a `session:message-rekeyed` event when reconcile assigns
+// the canonical id, and the frontend updates the existing message's id in
+// place. That way two real "yo"s sent in different turns never get falsely
+// collapsed by content matching.
+function isTransientErrorId(id: string): boolean {
+  if (!id) return false;
+  return (
+    id.startsWith('turn-error') ||
+    id.startsWith('send-error') ||
+    id.startsWith('codex-event-error') ||
+    id.includes(':turn-error:')
+  );
+}
+
+function normalizedText(text: string): string {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
+function transientErrorFingerprint(m: Message): string | null {
+  if (!isTransientErrorId(m.id)) return null;
+  if (m.kind === 'system') return `system:${normalizedText(m.text)}`;
+  return null;
+}
+
+function isDuplicateMessage(a: Message, b: Message): boolean {
+  if (a.id === b.id) return true;
+  // Narrow fallback for transient error/notice system messages only.
+  const fa = transientErrorFingerprint(a);
+  if (!fa) return false;
+  const fb = transientErrorFingerprint(b);
+  if (!fb) return false;
+  return fa === fb;
+}
+
+function appendDeduped(existing: Message[], incoming: Message[]): Message[] {
+  const out = [...existing];
+  for (const msg of incoming) {
+    if (out.some((seen) => isDuplicateMessage(seen, msg))) continue;
+    out.push(msg);
+  }
+  return out;
+}
 
 export const useAppStore = create<AppState>((set, get) => ({
   // Projects
@@ -419,13 +500,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       if (messages.length === 0) return s;
       const existing = s.messagesBySession[sessionId] ?? [];
-      const seen = new Set(existing.map((m) => m.id));
-      const additions = messages.filter((m) => !seen.has(m.id));
-      if (additions.length === 0) return s;
+      const merged = appendDeduped(existing, messages);
+      if (merged.length === existing.length) return s;
       return {
         messagesBySession: {
           ...s.messagesBySession,
-          [sessionId]: [...existing, ...additions],
+          [sessionId]: merged,
         },
       };
     }),
@@ -435,12 +515,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (existing.length === 0) {
         return { messagesBySession: { ...s.messagesBySession, [sessionId]: messages } };
       }
-      const byId = new Map<string, Message>();
-      for (const m of messages) byId.set(m.id, m);
-      // Existing-store entries take precedence — they include in-flight WS
-      // updates that may not have hit the JSONL yet.
-      for (const m of existing) byId.set(m.id, m);
-      const merged = [...byId.values()].sort((a, b) => a.ts - b.ts);
+      // Daemon emits canonical ids on both the live WS path and the REST
+      // refresh path (Codex parser produces matching `codex:...` ids,
+      // Claude SDK already does), so id-based dedup is correct. Existing
+      // store entries take precedence — they include any in-flight WS
+      // updates that may not yet be on disk.
+      const merged = appendDeduped(existing, messages).sort((a, b) => a.ts - b.ts);
       return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged } };
     }),
   clearMessages: (sessionId) =>
@@ -449,6 +529,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       const next = { ...s.messagesBySession };
       delete next[sessionId];
       return { messagesBySession: next };
+    }),
+  rekeyMessage: (sessionId, oldId, newId) =>
+    set((s) => {
+      if (oldId === newId) return s;
+      const list = s.messagesBySession[sessionId];
+      if (!list) return s;
+      const idx = list.findIndex((m) => m.id === oldId);
+      if (idx === -1) return s;
+      // If the canonical id is already in the list (e.g. REST sync raced
+      // ahead of the rekey event), drop the optimistic copy instead of
+      // collapsing two messages with the same id.
+      const canonicalIdx = list.findIndex((m) => m.id === newId);
+      let next: Message[];
+      if (canonicalIdx !== -1 && canonicalIdx !== idx) {
+        next = list.filter((_, i) => i !== idx);
+      } else {
+        next = [...list];
+        next[idx] = { ...next[idx], id: newId } as Message;
+      }
+      return {
+        messagesBySession: { ...s.messagesBySession, [sessionId]: next },
+      };
     }),
 
   streamingBySession: {},
@@ -464,6 +566,44 @@ export const useAppStore = create<AppState>((set, get) => ({
         next[sessionId] = text;
       }
       return { streamingBySession: next };
+    }),
+
+  toolStreamingBySession: {},
+  setToolStreaming: (sessionId, payload) =>
+    set((s) => {
+      const prev = s.toolStreamingBySession[sessionId] ?? null;
+      // Cheap structural equality — the daemon may emit identical snapshots
+      // (e.g. when item.updated fires for a non-output field change).
+      if (
+        prev?.toolName === payload?.toolName &&
+        prev?.output === payload?.output &&
+        prev?.isError === payload?.isError
+      ) {
+        return s;
+      }
+      const next = { ...s.toolStreamingBySession };
+      if (payload === null) {
+        if (!(sessionId in next)) return s;
+        delete next[sessionId];
+      } else {
+        next[sessionId] = payload;
+      }
+      return { toolStreamingBySession: next };
+    }),
+
+  reasoningStreamingBySession: {},
+  setReasoningStreaming: (sessionId, text) =>
+    set((s) => {
+      const prev = s.reasoningStreamingBySession[sessionId] ?? '';
+      if (prev === text) return s;
+      const next = { ...s.reasoningStreamingBySession };
+      if (text === '') {
+        if (!(sessionId in next)) return s;
+        delete next[sessionId];
+      } else {
+        next[sessionId] = text;
+      }
+      return { reasoningStreamingBySession: next };
     }),
 
   gitByProject: {},
