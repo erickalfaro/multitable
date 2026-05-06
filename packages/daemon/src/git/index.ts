@@ -218,3 +218,92 @@ export async function stash(projectPath: string, message?: string): Promise<void
 export async function stashPop(projectPath: string): Promise<void> {
   await git(projectPath).stash(['pop']);
 }
+
+// ─── Remote ops ───────────────────────────────────────────────────────────────
+
+export interface PushPullResult {
+  ok: true;
+  /** Human-readable summary line — the underlying tool's stdout/stderr already
+   *  includes the right metadata (commits pushed, files changed, etc.), so we
+   *  surface it to the UI as-is rather than parsing further. */
+  summary: string;
+}
+
+export async function fetchRemote(
+  projectPath: string,
+  remote?: string
+): Promise<PushPullResult> {
+  const args = remote ? [remote] : [];
+  const result = await git(projectPath).fetch(args);
+  // simple-git returns a FetchResult; flatten to a string. Empty fetches are
+  // common (already up-to-date) — surface a neutral message in that case.
+  const branches = (result.branches ?? []).map((b) => b.name).join(', ');
+  const updated = (result.updated ?? []).map((u) => u.name).join(', ');
+  const summary =
+    [
+      branches && `branches: ${branches}`,
+      updated && `updated: ${updated}`,
+    ]
+      .filter(Boolean)
+      .join(' · ') || 'Up to date';
+  return { ok: true, summary };
+}
+
+export async function pull(
+  projectPath: string,
+  remote?: string,
+  branch?: string
+): Promise<PushPullResult> {
+  // simple-git's pull(remote, branch) signature; both optional. With no args,
+  // it uses the upstream of the current branch.
+  const result = await (remote && branch
+    ? git(projectPath).pull(remote, branch)
+    : git(projectPath).pull());
+  const ins = result.summary.insertions ?? 0;
+  const del = result.summary.deletions ?? 0;
+  const changes = result.summary.changes ?? 0;
+  const fileLines = (result.files ?? []).length;
+  const summary =
+    fileLines === 0 && changes === 0
+      ? 'Already up to date'
+      : `${fileLines} file${fileLines === 1 ? '' : 's'} updated · +${ins} −${del}`;
+  return { ok: true, summary };
+}
+
+export async function push(
+  projectPath: string,
+  opts: { setUpstream?: boolean; remote?: string; branch?: string } = {}
+): Promise<PushPullResult> {
+  const args: string[] = [];
+  if (opts.setUpstream) args.push('--set-upstream');
+  if (opts.remote) args.push(opts.remote);
+  if (opts.branch) args.push(opts.branch);
+  // When no remote/branch given, push uses the current upstream.
+  const result = args.length > 0
+    ? await git(projectPath).push(args)
+    : await git(projectPath).push();
+  const pushed = (result.pushed ?? []).map((p) => p.alreadyUpdated ? `${p.local} (up to date)` : p.local).join(', ');
+  const summary = pushed || 'Pushed';
+  return { ok: true, summary };
+}
+
+export async function deleteBranch(
+  projectPath: string,
+  name: string,
+  force = false
+): Promise<void> {
+  const flag = force ? '-D' : '-d';
+  await git(projectPath).branch([flag, name]);
+}
+
+// Returns the staged diff (what `git diff --cached` shows) clipped to a
+// reasonable size. Used by the AI commit-message generator so the prompt
+// doesn't blow past the model's context on huge stagings.
+export async function getStagedDiffForAi(
+  projectPath: string,
+  maxBytes = 24_000
+): Promise<string> {
+  const diff = await getStagedDiff(projectPath);
+  if (diff.length <= maxBytes) return diff;
+  return diff.slice(0, maxBytes) + '\n\n[…diff truncated for AI generation…]';
+}

@@ -6,6 +6,7 @@ import {
   getStatusSummary,
   getDiff,
   getStagedDiff,
+  getStagedDiffForAi,
   getFileDiff,
   getStructuredLog,
   getBranches,
@@ -15,9 +16,14 @@ import {
   discardFiles,
   createBranch,
   switchBranch,
+  deleteBranch,
   stash,
   stashPop,
+  fetchRemote,
+  pull,
+  push,
 } from '../git/index.js';
+import { generateCommitMessage } from '../hooks/labeler.js';
 
 // Mounted at /api/projects/:projectId/git. Every handler resolves the project
 // path up front and short-circuits with a clear 400 if the directory isn't a
@@ -239,6 +245,102 @@ export function createGitRouter(): Router {
       res.json({ ok: true });
     } catch (err) {
       handleError(err, res, 'Stash pop failed');
+    }
+  });
+
+  // ── Remote ops ─────────────────────────────────────────────────────────────
+
+  router.post('/fetch', async (req, res) => {
+    const ctx = resolveProject(req, res);
+    if (!ctx) return;
+    const remote = typeof req.body?.remote === 'string' && req.body.remote.trim()
+      ? req.body.remote.trim()
+      : undefined;
+    try {
+      const result = await fetchRemote(ctx.path, remote);
+      res.json(result);
+    } catch (err) {
+      handleError(err, res, 'Fetch failed');
+    }
+  });
+
+  router.post('/pull', async (req, res) => {
+    const ctx = resolveProject(req, res);
+    if (!ctx) return;
+    const remote = typeof req.body?.remote === 'string' && req.body.remote.trim()
+      ? req.body.remote.trim()
+      : undefined;
+    const branch = typeof req.body?.branch === 'string' && req.body.branch.trim()
+      ? req.body.branch.trim()
+      : undefined;
+    try {
+      const result = await pull(ctx.path, remote, branch);
+      res.json(result);
+    } catch (err) {
+      handleError(err, res, 'Pull failed');
+    }
+  });
+
+  router.post('/push', async (req, res) => {
+    const ctx = resolveProject(req, res);
+    if (!ctx) return;
+    const setUpstream = req.body?.setUpstream === true;
+    const remote = typeof req.body?.remote === 'string' && req.body.remote.trim()
+      ? req.body.remote.trim()
+      : undefined;
+    const branch = typeof req.body?.branch === 'string' && req.body.branch.trim()
+      ? req.body.branch.trim()
+      : undefined;
+    try {
+      const result = await push(ctx.path, { setUpstream, remote, branch });
+      res.json(result);
+    } catch (err) {
+      handleError(err, res, 'Push failed');
+    }
+  });
+
+  router.delete('/branches/:name', async (req, res) => {
+    const ctx = resolveProject(req, res);
+    if (!ctx) return;
+    const name = (req.params as Record<string, string>).name?.trim();
+    if (!name) {
+      res.status(400).json({ error: 'Branch name is required' });
+      return;
+    }
+    const force = req.query.force === '1' || req.query.force === 'true';
+    try {
+      await deleteBranch(ctx.path, name, force);
+      res.json({ ok: true });
+    } catch (err) {
+      handleError(err, res, 'Branch delete failed');
+    }
+  });
+
+  // ── AI ────────────────────────────────────────────────────────────────────
+  //
+  // POST /api/projects/:projectId/git/ai-commit-message
+  //
+  // Returns a Conventional Commit message generated from the current staged
+  // diff using the Claude Haiku model (cheap, fast, single-shot). The UI
+  // surfaces this as a one-click "Generate" button next to the commit
+  // composer textarea so the user can review/edit before committing.
+  router.post('/ai-commit-message', async (req, res) => {
+    const ctx = resolveProject(req, res);
+    if (!ctx) return;
+    try {
+      const diff = await getStagedDiffForAi(ctx.path);
+      if (!diff.trim()) {
+        res.status(400).json({ error: 'Nothing staged to commit' });
+        return;
+      }
+      const result = await generateCommitMessage(diff);
+      if (!result.ok) {
+        res.status(502).json({ error: result.error });
+        return;
+      }
+      res.json({ message: result.message });
+    } catch (err) {
+      handleError(err, res, 'Failed to generate commit message');
     }
   });
 

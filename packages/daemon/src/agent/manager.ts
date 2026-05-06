@@ -236,13 +236,30 @@ export class AgentSessionManager extends EventEmitter {
     // the turn and surface a clear error. Catches silent hangs (TLS retry
     // loops, stuck subprocess, network drops) that would otherwise leave the
     // UI spinning forever.
-    const NO_PROGRESS_MS = 60_000;
+    //
+    // The iterator legitimately goes silent in two cases that aren't hangs:
+    //   1. canUseTool / onElicitation are awaiting a user decision — the
+    //      permission card / elicitation modal is up on the UI.
+    //   2. A tool is executing (long bash, npm install, build, tests). The
+    //      SDK only yields again when the tool completes and the tool_result
+    //      message comes back.
+    // Both can take many minutes. We handle (1) by re-arming whenever a
+    // permission/elicitation is pending instead of aborting, and (2) by
+    // budgeting 5 minutes per silent stretch instead of 60s.
+    const NO_PROGRESS_MS = 5 * 60_000;
     let stuckTimer: NodeJS.Timeout | null = null;
     let abortedDueToStuck = false;
     let sawAnyMessage = false;
     const armStuckTimer = () => {
       if (stuckTimer) clearTimeout(stuckTimer);
       stuckTimer = setTimeout(() => {
+        if (
+          this.permManager.hasPending(sessionId) ||
+          this.elicitManager.hasPending(sessionId)
+        ) {
+          armStuckTimer();
+          return;
+        }
         abortedDueToStuck = true;
         try {
           ctrl.abort();

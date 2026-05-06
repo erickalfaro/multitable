@@ -122,4 +122,11 @@ export class ElicitationManager extends EventEmitter {
   getAll(): ElicitationPrompt[] {
     return [...this.pending.values()].map((p) => p.prompt);
   }
+
+  hasPending(sessionId: string): boolean {
+    for (const p of this.pending.values()) {
+      if (p.prompt.sessionId === sessionId) return true;
+    }
+    return false;
+  }
 }

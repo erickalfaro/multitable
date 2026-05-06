@@ -11,6 +11,11 @@ export interface TagsResult {
   tags: string[];
 }
 
+export interface CommitMessageResult {
+  ok: true;
+  message: string;
+}
+
 export interface LabelError {
   ok: false;
   error: string;
@@ -145,6 +150,103 @@ function sanitizeTags(raw: string): string[] {
     if (tags.length >= 5) break;
   }
   return tags;
+}
+
+const COMMIT_MESSAGE_SYSTEM_PROMPT = [
+  'You write Conventional Commit messages for staged git diffs.',
+  'Read the diff and output ONE commit message, formatted as:',
+  '<type>(<optional scope>): <subject>',
+  '',
+  '<optional body explaining the why, wrapped at ~72 chars>',
+  '',
+  'Rules: subject is imperative mood (e.g. "add", "fix", "refactor"), max 72 chars, no trailing period.',
+  'Common types: feat, fix, refactor, docs, test, chore, perf, style, build, ci.',
+  'Omit the body when the change is trivial. Output the commit message and nothing else — no preamble, no markdown fences, no quotes.',
+].join(' ');
+
+export async function generateCommitMessage(
+  stagedDiff: string
+): Promise<CommitMessageResult | LabelError> {
+  const trimmed = stagedDiff.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'Nothing staged to commit' };
+  }
+
+  // Cap input again at the labeler boundary as a defense — keep us well under
+  // any argv ceiling on Linux/macOS regardless of what the caller passed.
+  const MAX_INPUT = 28_000;
+  const clipped =
+    trimmed.length > MAX_INPUT ? trimmed.slice(0, MAX_INPUT) + '\n[…truncated…]' : trimmed;
+  const prompt = `Staged diff:\n\n${clipped}\n\nCommit message:`;
+
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    let resolved = false;
+    const finish = (value: CommitMessageResult | LabelError) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(value);
+    };
+
+    const timeout = setTimeout(() => {
+      try {
+        child?.kill();
+      } catch {}
+      finish({ ok: false, error: `claude CLI timed out after ${TIMEOUT_MS / 1000}s` });
+    }, TIMEOUT_MS);
+
+    try {
+      child = spawn(
+        'claude',
+        [
+          '--model', 'claude-haiku-4-5',
+          '--system-prompt', COMMIT_MESSAGE_SYSTEM_PROMPT,
+          '--print', prompt,
+        ],
+        { cwd: os.tmpdir() }
+      );
+    } catch (err: any) {
+      clearTimeout(timeout);
+      finish({ ok: false, error: `Failed to spawn claude: ${err?.message || err}` });
+      return;
+    }
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout?.on('data', (d: Buffer) => {
+      stdout += d.toString();
+    });
+    child.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString();
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      // Strip wrapping code fences / quotes occasionally added by the model
+      // despite the prompt. Keep blank lines so a multi-paragraph body
+      // (subject + body) survives intact.
+      const cleaned = stdout
+        .trim()
+        .replace(/^```[a-z]*\n?/i, '')
+        .replace(/\n?```$/, '')
+        .replace(/^["']+|["']+$/g, '')
+        .trim();
+      if (cleaned) {
+        finish({ ok: true, message: cleaned });
+        return;
+      }
+      const reason = stderr.trim() || `claude exited with code ${code ?? 'null'} and no output`;
+      console.error('[commit-msg] empty stdout:', reason);
+      finish({ ok: false, error: reason });
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      console.error('[commit-msg] spawn error:', err);
+      finish({ ok: false, error: err.message || 'claude CLI failed to start' });
+    });
+  });
 }
 
 export async function generateSessionTags(
