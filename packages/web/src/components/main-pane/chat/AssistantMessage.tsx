@@ -57,7 +57,7 @@ const MD_COMPONENTS: Components = {
     );
   },
   p({ children }) {
-    return <p style={{ margin: '6px 0' }}>{children}</p>;
+    return <p style={{ margin: '0 0 6px' }}>{children}</p>;
   },
   blockquote({ children }) {
     return (
@@ -76,26 +76,26 @@ const MD_COMPONENTS: Components = {
   // Headings — real semantic levels with a sized hierarchy. h1 is no longer
   // remapped to h3; it renders as a true h1 with the new font size.
   h1: ({ children }) => (
-    <h1 style={{ fontSize: 17, fontWeight: 600, margin: '12px 0 6px' }}>{children}</h1>
+    <h1 style={{ fontSize: 17, fontWeight: 600, margin: '0 0 6px' }}>{children}</h1>
   ),
   h2: ({ children }) => (
-    <h2 style={{ fontSize: 15.5, fontWeight: 600, margin: '12px 0 6px' }}>{children}</h2>
+    <h2 style={{ fontSize: 15.5, fontWeight: 600, margin: '0 0 6px' }}>{children}</h2>
   ),
   h3: ({ children }) => (
-    <h3 style={{ fontSize: 14, fontWeight: 600, margin: '12px 0 6px' }}>{children}</h3>
+    <h3 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 6px' }}>{children}</h3>
   ),
   h4: ({ children }) => (
-    <h4 style={{ fontSize: 13, fontWeight: 600, margin: '12px 0 6px' }}>{children}</h4>
+    <h4 style={{ fontSize: 13, fontWeight: 600, margin: '0 0 6px' }}>{children}</h4>
   ),
   h5: ({ children }) => (
-    <h5 style={{ fontSize: 12.5, fontWeight: 600, margin: '12px 0 6px' }}>{children}</h5>
+    <h5 style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 6px' }}>{children}</h5>
   ),
   h6: ({ children }) => (
     <h6
       style={{
         fontSize: 12,
         fontWeight: 600,
-        margin: '12px 0 6px',
+        margin: '0 0 6px',
         color: 'var(--text-secondary)',
       }}
     >
@@ -186,7 +186,7 @@ const MD_COMPONENTS: Components = {
 // Memoized so unrelated parent re-renders don't re-parse the markdown.
 export const AssistantMessage = memo(function AssistantMessage({ text, costLabel, streaming }: Props) {
   return (
-    <div style={{ margin: '8px 0', color: 'var(--text-primary)' }}>
+    <div style={{ margin: 0, color: 'var(--text-primary)' }}>
       <div
         className="mt-chat-assistant"
         style={{

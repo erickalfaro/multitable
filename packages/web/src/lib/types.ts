@@ -257,7 +257,8 @@ export type Message =
       output: string;
       isError?: boolean;
     }
-  | { id: string; ts: number; kind: 'system'; text: string };
+  | { id: string; ts: number; kind: 'system'; text: string }
+  | { id: string; ts: number; kind: 'reasoning'; text: string };
 
 export interface GlobalConfig {
   theme: 'light' | 'dark' | 'system';

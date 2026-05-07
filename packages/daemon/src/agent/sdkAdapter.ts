@@ -33,12 +33,17 @@ interface SdkToolResultBlock {
   is_error?: boolean;
 }
 
+interface SdkThinkingBlock {
+  type: 'thinking';
+  thinking: string;
+}
+
 interface SdkAssistantMessage {
   type: 'assistant';
   message: {
     role: 'assistant';
     model?: string;
-    content: Array<SdkTextBlock | SdkToolUseBlock>;
+    content: Array<SdkTextBlock | SdkToolUseBlock | SdkThinkingBlock>;
     usage?: Usage;
   };
   session_id?: string;
@@ -206,8 +211,24 @@ export function sdkAssistantToMessages(msg: any, nowMs?: number): Message[] {
     let usageAttached = false;
     for (const block of content) {
       if (!block || typeof block !== 'object') continue;
-      const b = block as { type?: string; text?: unknown; id?: unknown; name?: unknown; input?: unknown };
-      if (b.type === 'text' && typeof b.text === 'string') {
+      const b = block as {
+        type?: string;
+        text?: unknown;
+        thinking?: unknown;
+        id?: unknown;
+        name?: unknown;
+        input?: unknown;
+      };
+      if (b.type === 'thinking' && typeof b.thinking === 'string') {
+        if (b.thinking.trim()) {
+          out.push({
+            id: `${parentUuid}-th${blockIdx++}`,
+            ts,
+            kind: 'reasoning',
+            text: b.thinking,
+          });
+        }
+      } else if (b.type === 'text' && typeof b.text === 'string') {
         if (b.text.trim()) {
           const attachUsage = !usageAttached && !!usage;
           out.push({

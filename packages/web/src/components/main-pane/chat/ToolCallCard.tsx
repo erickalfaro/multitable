@@ -82,7 +82,7 @@ export const ToolCallCard = memo(function ToolCallCard({ toolName, input, output
   return (
     <div
       style={{
-        margin: '6px 0',
+        margin: 0,
         // Recessed treatment: dashed faint outline + transparent background so
         // tool calls fall into the chat canvas. The user prompt is the only
         // chat surface that elevates; everything else lives flush with prose.

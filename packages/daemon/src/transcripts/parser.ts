@@ -29,7 +29,8 @@ export type Message =
       output: string;
       isError?: boolean;
     }
-  | { id: string; ts: number; kind: 'system'; text: string };
+  | { id: string; ts: number; kind: 'system'; text: string }
+  | { id: string; ts: number; kind: 'reasoning'; text: string };
 
 // Claude Code encodes the absolute project path by replacing every
 // non-alphanumeric character with "-", including the leading slash and any
@@ -170,6 +171,15 @@ export function parseTranscriptContent(content: string): Message[] {
               toolName: typeof block.name === 'string' ? block.name : '',
               input: block.input ?? {},
             });
+          } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
+            if (block.thinking.trim()) {
+              messages.push({
+                id: `${parentUuid}-th${blockIdx++}`,
+                ts,
+                kind: 'reasoning',
+                text: block.thinking,
+              });
+            }
           }
         }
         // Assistant turn had only tool_use blocks — attach usage to a

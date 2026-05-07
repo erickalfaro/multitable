@@ -555,7 +555,7 @@ export class CodexAdapter implements ProviderAdapter {
       case 'reasoning': {
         if (!item.text.trim()) return [];
         const id = codexCanonicalId(threadId, turnIndex, 'reason', this.nextSeq(s.id, 'reason'));
-        return [{ id, ts, kind: 'system', text: `Reasoning: ${item.text}` }];
+        return [{ id, ts, kind: 'reasoning', text: item.text }];
       }
       case 'command_execution': {
         const callId = codexCanonicalId(threadId, turnIndex, 'exec', this.nextSeq(s.id, 'exec'));

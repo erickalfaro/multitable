@@ -220,13 +220,14 @@ export function SessionChat({ sessionId, session }: Props) {
             streamingText={streamingText}
             toolStreaming={toolStreaming}
             reasoningStreaming={reasoningStreaming}
+            loaderVariant={session.loaderVariant ?? null}
+            active={session.state === 'running'}
           />
           <ChatInputCM
             processId={sessionId}
             projectId={session.projectId}
             state={session.state}
             attachmentKind="session"
-            loaderVariant={session.loaderVariant ?? null}
             agentProvider={session.agentProvider}
             active={session.state === 'running'}
           />

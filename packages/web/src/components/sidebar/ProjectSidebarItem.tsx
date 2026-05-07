@@ -311,7 +311,7 @@ export function ProjectSidebarItem({ project }: Props) {
       }}
     >
       {/* Project card body — structural group container; stays at radius-none so the
-          left project-color stripe and top accent rule run edge-to-edge. */}
+          top accent rule runs edge-to-edge. */}
       <div
         style={{
           position: 'relative',
@@ -319,7 +319,6 @@ export function ProjectSidebarItem({ project }: Props) {
           overflow: 'hidden',
           backgroundColor: 'transparent',
           borderTop: `1px solid ${focused ? color.stripe : 'transparent'}`,
-          borderLeft: `3px solid ${color.stripe}`,
           transition: 'border-color var(--dur-med) var(--ease-out)',
         }}
       >

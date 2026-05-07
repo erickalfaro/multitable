@@ -1,9 +1,7 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Send, Paperclip, X, Clock, Square } from 'lucide-react';
 
-import { getLoaderComponent } from '../../ui/loaders';
 import { AgentBadge } from '../../ui';
-import { getProjectColor } from '../../../lib/projectColor';
 
 // Stable empty array so the pending-sends selector doesn't churn on
 // unrelated store updates.
@@ -78,48 +76,10 @@ interface Props {
   state: ProcessState;
   attachmentKind: 'session' | 'terminal';
   placeholder?: string;
-  /** Per-session loader variant; selects which dot-matrix animation renders. */
-  loaderVariant?: string | null;
   /** Provider that owns this session — drives the small `claude`/`codex` chip. */
   agentProvider?: AgentProvider;
   /** Whether the agent is currently doing work (turn in flight). */
   active?: boolean;
-}
-
-interface AgentAvatarProps {
-  projectId: string;
-  loaderVariant?: string | null;
-  active: boolean;
-}
-
-/**
- * Inline mini-component that sits flush left of the textbox, replacing the
- * old `>` prefix. Renders the per-session dot-matrix loader tinted with the
- * project color stripe; animates while the agent is active and falls to
- * `dmx-static-dim` when idle.
- */
-function AgentAvatar({ projectId, loaderVariant, active }: AgentAvatarProps) {
-  const Loader = useMemo(() => getLoaderComponent(loaderVariant), [loaderVariant]);
-  const color = projectId ? getProjectColor(projectId, false).stripe : '#4169E1';
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        alignSelf: 'center',
-        flexShrink: 0,
-      }}
-    >
-      <Loader
-        size={22}
-        dotSize={3}
-        color={color}
-        animated={active}
-        className={active ? undefined : 'dmx-static-dim'}
-        ariaLabel="Agent"
-      />
-    </span>
-  );
 }
 
 // Detect a language hint from an arbitrary clipboard blob. Cheap heuristics
@@ -159,7 +119,6 @@ export const ChatInputCM = memo(function ChatInputCM({
   state,
   attachmentKind,
   placeholder: placeholderText,
-  loaderVariant,
   agentProvider,
   active = false,
 }: Props) {
@@ -721,11 +680,6 @@ export const ChatInputCM = memo(function ChatInputCM({
           <Paperclip size={13} />
         </button>
 
-        <AgentAvatar
-          projectId={projectId}
-          loaderVariant={loaderVariant}
-          active={active}
-        />
         {agentProvider && (
           <AgentBadge
             provider={agentProvider}

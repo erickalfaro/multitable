@@ -11,7 +11,8 @@ export type AgentMessageOut =
   | { kind: 'tool_use'; toolUseId: string; toolName: string; input: unknown; ts: number }
   | { kind: 'tool_result'; toolUseId: string; output: string; isError?: boolean; ts: number }
   | { kind: 'user'; text: string; ts: number }
-  | { kind: 'system'; text: string; ts: number };
+  | { kind: 'system'; text: string; ts: number }
+  | { kind: 'reasoning'; text: string; ts: number };
 
 export interface AgentSession {
   // === identity ===

@@ -43,6 +43,19 @@
   --selection-bg: transparent;
   --selection-border: #ff8a00;
 
+  /* Timeline node colors — one hue per agent action family. Dim, low-saturation
+     so the rail reads at a glance without screaming. */
+  --node-text:       #b8b8c4;
+  --node-thinking:   #8b7fb3;
+  --node-fs-read:    #5a9bb0;
+  --node-fs-write:   #c08a4f;
+  --node-shell:      #6fa86a;
+  --node-web:        #6788c4;
+  --node-subagent:   #b07a9f;
+  --node-mcp:        #9c8a5e;
+  --node-todo:       #7a7a87;
+  --node-permission: #ff8a00;
+
   /* Radii — manifesto: structural seams sharp, primitives snug, containers soft, circles pill.
      Tier semantics:
        --radius-none : structural seams (panel borders, status bar, dividers)
@@ -126,6 +139,19 @@
 
   --selection-bg: transparent;
   --selection-border: #ff8a00;
+
+  /* Timeline node colors — light-theme counterparts. Saturated a touch more so
+     they read on the warm cream canvas. */
+  --node-text:       #4a4538;
+  --node-thinking:   #6e5fa0;
+  --node-fs-read:    #2f7388;
+  --node-fs-write:   #9e6a2c;
+  --node-shell:      #3f8c4a;
+  --node-web:        #3e62b0;
+  --node-subagent:   #8f5d80;
+  --node-mcp:        #7a663b;
+  --node-todo:       #7a7468;
+  --node-permission: #c46a00;
 
   --shadow-sm: none;
   --shadow-md: none;
@@ -302,6 +328,12 @@ select:focus-visible,
 
 .mt-blink {
   animation: mt-blink 1s steps(2) infinite;
+}
+
+/* ---------- Turn timeline rail ---------- */
+@keyframes mt-rail-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 0.25; }
 }
 
 /* ---------- Dashboard responsive padding ---------- */
