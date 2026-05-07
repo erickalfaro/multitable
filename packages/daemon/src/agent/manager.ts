@@ -187,6 +187,16 @@ export class AgentSessionManager extends EventEmitter {
       );
     }
     s.mode = mode;
+    // Some adapters cache provider state that's tied to mode (Codex caches a
+    // Thread with a fixed sandboxMode; Copilot will likely cache a Session
+    // with fixed system prompt). Reset the adapter cache so the NEXT turn
+    // picks up the new mode. ClaudeAdapter's reset is a no-op for this case
+    // since Claude assembles options per-turn — safe to call uniformly.
+    try {
+      adapter?.reset?.(s);
+    } catch (err) {
+      console.error('[agent] adapter.reset on mode change failed:', err);
+    }
     try {
       updateSession(sessionId, { mode });
     } catch (err) {

@@ -1,5 +1,5 @@
 import type { Thread, ThreadEvent, ThreadItem } from '@openai/codex-sdk';
-import type { AgentSession } from '../types.js';
+import type { AgentSession, SessionMode } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
 import type {
   ProviderAdapter,
@@ -7,6 +7,31 @@ import type {
   AdapterCallbacks,
   ToolDeltaPayload,
 } from './types.js';
+
+// Translate provider-agnostic SessionMode → Codex sandbox knobs. Codex has no
+// per-call permission callback (stdin is closed after the prompt is written),
+// so the only way to constrain its behavior is via the spawn-time sandbox.
+//
+//   default    → workspace-write (normal operation)
+//   plan       → read-only (agent reads + reasons, can't mutate; user resumes
+//                with workspace-write to execute the plan)
+//   read-only  → read-only (no mutations)
+//   accept-edits / auto / chat → not advertised in capabilities.modes for
+//                                Codex; the manager's setMode rejects them.
+function modeToCodexSandbox(mode: SessionMode): 'read-only' | 'workspace-write' | 'danger-full-access' {
+  switch (mode) {
+    case 'plan':
+    case 'read-only':
+      return 'read-only';
+    case 'auto':
+      return 'danger-full-access';
+    case 'default':
+    case 'accept-edits':
+    case 'chat':
+    default:
+      return 'workspace-write';
+  }
+}
 import {
   countCodexTurns,
   parseCodexThread,
@@ -96,7 +121,11 @@ export class CodexAdapter implements ProviderAdapter {
     resumeThread: (id: string, options?: Record<string, unknown>) => Thread;
   } | null = null;
   private codexLoad: Promise<CodexAdapter['codex']> | null = null;
-  private threads = new Map<string, Thread>();
+  // The cache holds the Thread + the mode it was created with. If the user
+  // switches mode mid-conversation (e.g. plan → default), getThread sees the
+  // mismatch and rebuilds with the new sandboxMode. We can't mutate options
+  // on an existing Thread — Codex's options are spawn-time only.
+  private threads = new Map<string, { thread: Thread; mode: SessionMode }>();
   private turnStates = new Map<string, TurnState>();
 
   reset(s: AgentSession): void {
@@ -296,11 +325,14 @@ export class CodexAdapter implements ProviderAdapter {
 
   private async getThread(s: AgentSession): Promise<Thread> {
     const existing = this.threads.get(s.id);
-    if (existing) return existing;
+    // Cache hit only if the mode hasn't changed since the Thread was built.
+    // Codex options are immutable post-spawn; we have to rebuild on mode flip.
+    if (existing && existing.mode === s.mode) return existing.thread;
     const codex = await this.getClient();
+    const sandboxMode = modeToCodexSandbox(s.mode);
     const opts: Record<string, unknown> = {
       workingDirectory: s.workingDir,
-      sandboxMode: 'workspace-write' as const,
+      sandboxMode,
       approvalPolicy: 'never' as const,
       skipGitRepoCheck: true,
     };
@@ -313,7 +345,7 @@ export class CodexAdapter implements ProviderAdapter {
     const thread = s.agentSessionId
       ? codex.resumeThread(s.agentSessionId, opts)
       : codex.startThread(opts);
-    this.threads.set(s.id, thread);
+    this.threads.set(s.id, { thread, mode: s.mode });
     return thread;
   }
 
@@ -370,12 +402,12 @@ export class CodexAdapter implements ProviderAdapter {
         // tool_use/tool_result/system message we're about to push takes over
         // rendering. Doing this BEFORE the message push prevents a one-frame
         // duplicate (live preview + final card both visible).
-        if (
+        const isToolItem =
           event.item.type === 'command_execution' ||
           event.item.type === 'file_change' ||
           event.item.type === 'mcp_tool_call' ||
-          event.item.type === 'web_search'
-        ) {
+          event.item.type === 'web_search';
+        if (isToolItem) {
           cb.emitToolDelta(null);
         } else if (event.item.type === 'reasoning') {
           cb.emitReasoningDelta('');
@@ -390,6 +422,10 @@ export class CodexAdapter implements ProviderAdapter {
             cb.emitToolEvent(messages);
           }
         }
+        // Bump tool count once per completed tool execution. Without this,
+        // the cost panel's "tools used" counter stayed at 0 for Codex
+        // sessions even after running shell commands / patches / mcp calls.
+        if (isToolItem) cb.incrementToolCount();
         cb.setCurrentTool(null);
         cb.bumpActivity();
         cb.emitStateSnapshot();
@@ -455,6 +491,21 @@ export class CodexAdapter implements ProviderAdapter {
 
   private updateAssistantDelta(item: ThreadItem, cb: AdapterCallbacks): void {
     if (item.type !== 'agent_message') return;
+    // NOTE: Codex CLI 0.128.0 does NOT emit `item.started` or `item.updated`
+    // for `agent_message` items via `--experimental-json` — agent text goes
+    // straight from invocation to `item.completed` with the full final text.
+    // This means assistant-text streaming is effectively NOT AVAILABLE for
+    // Codex sessions today; the loader animates while waiting and the full
+    // response lands when ready. Verified directly against the CLI.
+    //
+    // Reasoning blocks (`item.type === 'reasoning'`) and tool output
+    // (`command_execution.aggregated_output`) DO still stream — those are
+    // handled by updateReasoningDelta and updateToolDelta respectively, so
+    // long-running tool work is still visible incrementally.
+    //
+    // If a future Codex version restores streaming, this method already
+    // forwards each item.text (cumulative) to the shared assistant-delta
+    // channel — no additional code change needed.
     cb.emitAssistantDelta(item.text);
     cb.bumpActivity();
   }
