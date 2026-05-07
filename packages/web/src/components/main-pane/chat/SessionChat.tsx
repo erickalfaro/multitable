@@ -51,13 +51,32 @@ export function SessionChat({ sessionId, session }: Props) {
   // appending — ensures stale messages don't linger after "Start New".
   useEffect(() => {
     const key = `${sessionId}:${agentSessionId ?? ''}`;
-    if (lastLoadedKeyRef.current === key) return;
+    const previousKey = lastLoadedKeyRef.current;
+    if (previousKey === key) return;
     lastLoadedKeyRef.current = key;
 
     if (!agentSessionId) {
       clearMessages(sessionId);
       return;
     }
+
+    // First-turn transition: same session id, agentSessionId just went from
+    // empty to its first value. The Claude SDK assigned a session id mid-turn
+    // and the daemon broadcast it — but the store ALREADY has the optimistic
+    // user message + any streamed assistant content from WS events. Pulling
+    // the JSONL now would re-introduce the canonical user message alongside
+    // the optimistic copy (different ids → id-based dedup misses) — that's
+    // the long-standing user-message-doubling bug.
+    //
+    // The WS path has us covered for first-turn content; we only need to
+    // refetch when the user actually navigates between sessions (different
+    // sessionId) or when a Claude resume forks the session id (rare; the
+    // legacy claudeSessionIdHistory path), neither of which match this
+    // "previous key was sessionId-with-no-agent-id" pattern.
+    const isFirstTurnAgentIdAssignment =
+      previousKey === `${sessionId}:` && agentSessionId !== '';
+    if (isFirstTurnAgentIdAssignment) return;
+
     setLoading(true);
     api.sessions
       .messages(sessionId)

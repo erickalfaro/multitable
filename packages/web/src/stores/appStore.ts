@@ -296,6 +296,21 @@ function appendDeduped(existing: Message[], incoming: Message[]): Message[] {
   return out;
 }
 
+// Strict id-based dedup. Used as a final safety pass in mergeMessages so any
+// historical corruption (a previous buggy merge that left two entries with
+// the same id) self-heals on the next sync rather than producing React
+// "duplicate key" warnings indefinitely. Keeps the FIRST occurrence.
+function dedupById(messages: Message[]): Message[] {
+  const seen = new Set<string>();
+  const out: Message[] = [];
+  for (const m of messages) {
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    out.push(m);
+  }
+  return out;
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   // Projects
   projects: [],
@@ -543,15 +558,75 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const existing = s.messagesBySession[sessionId] ?? [];
       if (existing.length === 0) {
-        return { messagesBySession: { ...s.messagesBySession, [sessionId]: messages } };
+        // Even on a cold merge, dedup by id — defensive against any
+        // upstream parser that might emit two records with the same id.
+        return {
+          messagesBySession: { ...s.messagesBySession, [sessionId]: dedupById(messages) },
+        };
       }
-      // Daemon emits canonical ids on both the live WS path and the REST
-      // refresh path (Codex parser produces matching `codex:...` ids,
-      // Claude SDK already does), so id-based dedup is correct. Existing
-      // store entries take precedence — they include any in-flight WS
-      // updates that may not yet be on disk.
-      const merged = appendDeduped(existing, messages).sort((a, b) => a.ts - b.ts);
-      return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged } };
+
+      // === Optimistic → canonical reconciliation =================
+      //
+      // The daemon pushes user messages with optimistic ids `turn-<ts>-<rand>`
+      // for instant render. The on-disk JSONL/rollout has canonical uuids for
+      // the same logical messages. When a REST sync later returns the JSONL,
+      // id-based dedup misses and the chat shows two copies.
+      //
+      // The matching MUST be order-preserving: if you sent "hey" as turn 1
+      // AND as turn 4, the FIRST canonical "hey" must pair with the FIRST
+      // optimistic "hey" (chronological). A naive `Map<text, index>` (which
+      // we tried first) lets later same-text optimistics overwrite earlier
+      // ones, causing cross-pairing and duplicate-key React warnings.
+      //
+      // Strategy:
+      //   1. Build a FIFO queue of optimistic indices per normalized text.
+      //   2. Walk incoming; for each canonical user message, shift one index
+      //      off its text queue and mark that optimistic for removal.
+      //   3. Filter the existing array to drop paired optimistics. Their
+      //      canonical replacements ride in on `incoming` and get added by
+      //      appendDeduped naturally.
+      //   4. Final safety pass: dedup by id one more time so any historical
+      //      corruption in `existing` (from prior buggy merges) self-heals.
+      const norm = (t: string) => t.trim().replace(/\s+/g, ' ');
+      const existingIdsSet = new Set(existing.map((m) => m.id));
+      const optByText = new Map<string, number[]>();
+      for (let i = 0; i < existing.length; i++) {
+        const m = existing[i];
+        if (m.kind === 'user' && m.id.startsWith('turn-')) {
+          const key = norm(m.text);
+          let q = optByText.get(key);
+          if (!q) {
+            q = [];
+            optByText.set(key, q);
+          }
+          q.push(i);
+        }
+      }
+
+      const optimisticToRemove = new Set<number>();
+      if (optByText.size > 0) {
+        for (const incoming of messages) {
+          if (incoming.kind !== 'user') continue;
+          if (incoming.id.startsWith('turn-')) continue;
+          // Canonical already in store (WS path beat REST) — id-dedup will
+          // suppress incoming; don't disturb any optimistic.
+          if (existingIdsSet.has(incoming.id)) continue;
+          const queue = optByText.get(norm(incoming.text));
+          if (!queue || queue.length === 0) continue;
+          const idx = queue.shift()!; // chronological pairing
+          optimisticToRemove.add(idx);
+        }
+      }
+
+      const filteredExisting =
+        optimisticToRemove.size > 0
+          ? existing.filter((_, i) => !optimisticToRemove.has(i))
+          : existing;
+
+      const appended = appendDeduped(filteredExisting, messages).sort((a, b) => a.ts - b.ts);
+      const finalList = dedupById(appended);
+
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: finalList } };
     }),
   clearMessages: (sessionId) =>
     set((s) => {
