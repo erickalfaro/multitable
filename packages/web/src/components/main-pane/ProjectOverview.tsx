@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
-import { api } from '../../lib/api';
+import { api, stopProcessByType } from '../../lib/api';
 import {
   Settings,
   Bot,
@@ -79,7 +79,7 @@ function ProcessTile({
   };
   const handleStop = (e: React.MouseEvent) => {
     e.stopPropagation();
-    api.processes.stop(process.id).catch(() => toast.error('Failed to stop'));
+    stopProcessByType(process).catch(() => toast.error('Failed to stop'));
   };
   const handleRestart = (e: React.MouseEvent) => {
     e.stopPropagation();

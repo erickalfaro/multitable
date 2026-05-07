@@ -25,6 +25,7 @@ import { useIsMobile } from './lib/useIsMobile';
 import { ConnectionOverlay } from './components/ConnectionOverlay';
 import { NotificationCenter } from './components/notifications/NotificationCenter';
 import { ElicitationModalHost } from './components/elicitation/ElicitationModal';
+import { DevLogPanel } from './components/dev-log/DevLogPanel';
 import type { Session } from './lib/types';
 
 // Slow safety-net poll for sessions that are mid-turn. The primary path is
@@ -596,6 +597,25 @@ function App() {
           live.setReasoningStreaming(sessionId, '');
         }
       }),
+      // session:idle — universal "agent loop done, ready for next user turn"
+      // signal. Distinct from turn-complete in that it carries the outcome
+      // (completed / aborted / watchdog / error) so the composer can react
+      // appropriately (focus on completed, show retry on watchdog, etc.).
+      wsClient.on('session:idle', (msg: any) => {
+        const sessionId = msg.processId;
+        const outcome = msg.payload?.outcome ?? 'completed';
+        if (typeof sessionId !== 'string') return;
+        useAppStore.getState().setSessionIdle(sessionId, outcome);
+      }),
+      // session:mode-changed — broadcast when the operating mode flips.
+      // Update store so the mode badge re-renders without polling.
+      wsClient.on('session:mode-changed', (msg: any) => {
+        const { sessionId, mode } = msg.payload || {};
+        if (typeof sessionId !== 'string' || typeof mode !== 'string') return;
+        const session = useAppStore.getState().sessions[sessionId];
+        if (!session) return;
+        useAppStore.getState().upsertSession({ ...session, mode } as Session);
+      }),
       wsClient.on('session:state-updated', (msg: any) => {
         // The daemon's AgentSessionManager broadcasts a snapshot of cost,
         // tokens, currentTool, etc. on every SDK `result` and on each tool
@@ -648,6 +668,19 @@ function App() {
       unsubPersistSelection();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Global keybinding: Ctrl/Cmd+Shift+L toggles the Dev Log panel.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        const { devLogOpen, setDevLogOpen } = useAppStore.getState();
+        setDevLogOpen(!devLogOpen);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   return (
@@ -732,6 +765,7 @@ function App() {
       <NotificationCenter />
       <ElicitationModalHost />
       <ConnectionOverlay />
+      <DevLogPanel />
       <Toaster
         position="top-right"
         toastOptions={{

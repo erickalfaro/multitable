@@ -51,6 +51,9 @@ export function initDb(): void {
   try {
     db.exec("ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT '[]'");
   } catch {}
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN mode TEXT DEFAULT 'default'");
+  } catch {}
 
   // Sessions no longer use a PTY (they go through the Claude/Codex SDK). The
   // pre-SDK PTY scrollback column accumulated stale BLOBs that ballooned
@@ -241,6 +244,7 @@ export interface SessionRow {
   claude_session_id: string | null;
   claude_session_id_history: string | null;
   tags: string | null;
+  mode: string | null;
   scratchpad: string;
   created_at: number;
   last_active_at: number | null;
@@ -270,6 +274,7 @@ export interface SessionRecord {
   claudeSessionId: string | null;
   claudeSessionIdHistory: string[];
   tags: string[];
+  mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
   scratchpad: string;
   createdAt: number;
   lastActiveAt: number | null;
@@ -293,6 +298,24 @@ function parseStringArray(raw: string | null): string[] {
 
 function parseClaudeSessionIdHistory(raw: string | null): string[] {
   return parseStringArray(raw);
+}
+
+const VALID_SESSION_MODES = new Set([
+  'default',
+  'plan',
+  'accept-edits',
+  'auto',
+  'chat',
+  'read-only',
+]);
+
+function parseSessionMode(
+  raw: string | null,
+): 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only' {
+  if (raw && VALID_SESSION_MODES.has(raw)) {
+    return raw as 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
+  }
+  return 'default';
 }
 
 function rowToSession(row: SessionRow): SessionRecord {
@@ -324,6 +347,7 @@ function rowToSession(row: SessionRow): SessionRecord {
     claudeSessionId: row.claude_session_id,
     claudeSessionIdHistory: parseClaudeSessionIdHistory(row.claude_session_id_history),
     tags: parseStringArray(row.tags),
+    mode: parseSessionMode(row.mode),
     scratchpad: row.scratchpad || '',
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
@@ -449,6 +473,7 @@ export function updateSession(id: string, data: Partial<{
   claudeSessionId: string | null;
   claudeSessionIdHistory: string[];
   tags: string[];
+  mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
   scratchpad: string;
   lastActiveAt: number;
 }>): SessionRecord | null {
@@ -472,6 +497,7 @@ export function updateSession(id: string, data: Partial<{
     claudeSessionId: 'claude_session_id',
     scratchpad: 'scratchpad',
     lastActiveAt: 'last_active_at',
+    mode: 'mode',
   };
 
   for (const [key, col] of Object.entries(fieldMap)) {

@@ -1,6 +1,35 @@
 export type ProcessType = 'session' | 'terminal' | 'command';
 export type ProcessState = 'running' | 'idle' | 'stopped' | 'errored';
-export type AgentProvider = 'claude' | 'codex';
+export type AgentProvider = 'claude' | 'codex' | 'copilot';
+
+// Provider-agnostic operating mode. Each adapter translates these to its own
+// native primitive (Claude permissionMode, Codex sandboxMode, Copilot system
+// prompt + onPreToolUse). UI gates which modes appear via ProviderCapabilities.
+export type SessionMode =
+  | 'default'
+  | 'plan'
+  | 'accept-edits'
+  | 'auto'
+  | 'chat'
+  | 'read-only';
+
+// Mirrors daemon's ProviderCapabilities — what the adapter can do, used by the
+// React layer to gate UI without provider-name branching.
+export interface ProviderCapabilities {
+  costUsd: boolean;
+  planMode: 'native' | 'simulated' | 'none';
+  perCallApproval: 'callback' | 'sandbox' | 'callback+kind';
+  userQuestion: 'tool' | 'callback' | 'unsupported';
+  elicitation: boolean;
+  subagents: 'manual' | 'auto' | 'none';
+  midTurnInput: boolean;
+  byok: boolean;
+  hardSandbox: boolean;
+  hooks: 'rich' | 'six' | 'none';
+  streamingDeltaSemantics: 'additive' | 'cumulative';
+  modelSwitchScope: 'per-turn' | 'per-thread' | 'per-session';
+  modes: SessionMode[];
+}
 
 export interface ProcessConfig {
   autostart: boolean;
@@ -57,6 +86,12 @@ export interface Session extends ManagedProcess {
   // user accepted the provider default. Sent on every turn so the daemon
   // pins the same model across resumes.
   model: string | null;
+  // Operating mode (default / plan / accept-edits / etc.). Persisted; takes
+  // effect on the next turn.
+  mode: SessionMode;
+  // Adapter-declared capability bag. UI gates features on this rather than
+  // branching on provider name. Null until the daemon attaches it.
+  capabilities?: ProviderCapabilities | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
   // Legacy alias of agentSessionId — the daemon still emits both during the

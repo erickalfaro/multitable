@@ -40,7 +40,14 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
       // Sessions no longer spawn a PTY; state lives in the AgentSessionManager.
       // pid is always null for sessions now.
       const agent = agentManager.get(s.id);
-      return { ...s, state: agent?.state ?? 'stopped', pid: null };
+      const capabilities = agentManager.getCapabilities(s.id);
+      return {
+        ...s,
+        state: agent?.state ?? 'stopped',
+        pid: null,
+        mode: agent?.mode ?? s.mode ?? 'default',
+        capabilities,
+      };
     });
     res.json(enriched);
   });
@@ -50,7 +57,14 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     const agent = agentManager.get(session.id);
-    res.json({ ...session, state: agent?.state ?? 'stopped', pid: null });
+    const capabilities = agentManager.getCapabilities(session.id);
+    res.json({
+      ...session,
+      state: agent?.state ?? 'stopped',
+      pid: null,
+      mode: agent?.mode ?? session.mode ?? 'default',
+      capabilities,
+    });
   });
 
   // POST /api/sessions
@@ -99,6 +113,7 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
         workingDir: session.workingDirectory || '',
         provider: session.agentProvider,
         model: session.model,
+        mode: session.mode,
         agentSessionId: session.agentSessionId ?? null,
         agentSessionIdHistory: session.agentSessionIdHistory ?? [],
         claudeSessionId: session.claudeSessionId ?? null,
@@ -314,6 +329,31 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
     if (!session) return res.status(404).json({ error: 'Session not found' });
     agentManager.abortTurn(req.params.id);
     res.json({ ok: true });
+  });
+
+  // POST /api/sessions/:id/mode
+  //
+  // Set the operating mode for the session (default / plan / accept-edits /
+  // auto / chat / read-only). Takes effect on the NEXT turn — the adapter
+  // assembles SDK options from session.mode at runTurn time. Validated against
+  // the current provider's declared capabilities.modes; rejects modes the
+  // provider doesn't implement.
+  router.post('/:id/mode', (req: Request, res: Response) => {
+    const session = getSessionById(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    const mode = req.body?.mode;
+    const VALID = ['default', 'plan', 'accept-edits', 'auto', 'chat', 'read-only'];
+    if (typeof mode !== 'string' || !VALID.includes(mode)) {
+      return res.status(400).json({
+        error: `Invalid mode. Must be one of: ${VALID.join(', ')}`,
+      });
+    }
+    try {
+      agentManager.setMode(req.params.id, mode as 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only');
+      res.json({ ok: true, mode });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // POST /api/sessions/:id/reset

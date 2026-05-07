@@ -1,6 +1,9 @@
 import type { ProcessState } from '../types.js';
+import type { SessionMode } from './providers/types.js';
 
 export type AgentProvider = 'claude' | 'codex';
+
+export type { SessionMode };
 
 // What we emit on the WS for the session view.
 export type AgentMessageOut =
@@ -21,6 +24,10 @@ export interface AgentSession {
   // turn (Claude `query()` options.model, Codex `Thread` options.model). Null
   // means "let the provider use its own default".
   model: string | null;
+  // Operating mode for this session. Translates to provider-specific knobs
+  // (Claude permissionMode, Codex sandboxMode, etc.) inside the adapter.
+  // Defaults to 'default'. Persisted across daemon restarts.
+  mode: SessionMode;
   // === provider link ===
   agentSessionId: string | null; // mirrored to DB; Claude session id or Codex thread id
   agentSessionIdHistory: string[];

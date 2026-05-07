@@ -12,6 +12,7 @@ import type {
   GitLogEntry,
   GitBranchList,
 } from './types';
+import { devLog } from './devLog';
 
 const BASE = '';  // same origin
 
@@ -26,35 +27,89 @@ async function failed(res: Response): Promise<never> {
   throw new Error(detail || `${res.status} ${res.statusText}`);
 }
 
+async function logged<T>(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  init: RequestInit,
+  parse: (res: Response) => Promise<T>,
+): Promise<T> {
+  const start = performance.now();
+  const url = BASE + path;
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (err) {
+    const dur = performance.now() - start;
+    devLog.add({
+      category: 'api',
+      level: 'error',
+      label: `${method} ${path}`,
+      detail: `network error: ${err instanceof Error ? err.message : String(err)}`,
+      durationMs: Math.round(dur),
+    });
+    throw err;
+  }
+  const dur = Math.round(performance.now() - start);
+  if (!res.ok) {
+    // Tee the body so we can both log it and bubble the parsed error up.
+    let detail = '';
+    try {
+      const text = await res.clone().text();
+      detail = text;
+    } catch {
+      // ignore
+    }
+    devLog.add({
+      category: 'api',
+      level: 'error',
+      label: `${method} ${path} → ${res.status}`,
+      detail,
+      durationMs: dur,
+    });
+    await failed(res);
+  }
+  devLog.add({
+    category: 'api',
+    label: `${method} ${path} → ${res.status}`,
+    durationMs: dur,
+  });
+  return parse(res);
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(BASE + path);
-  if (!res.ok) await failed(res);
-  return res.json();
+  return logged<T>('GET', path, {}, (r) => r.json());
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(BASE + path, {
-    method: 'POST',
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) await failed(res);
-  return res.json();
+  return logged<T>(
+    'POST',
+    path,
+    {
+      method: 'POST',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    },
+    (r) => r.json(),
+  );
 }
 
 async function put<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(BASE + path, {
-    method: 'PUT',
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) await failed(res);
-  return res.json();
+  return logged<T>(
+    'PUT',
+    path,
+    {
+      method: 'PUT',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    },
+    (r) => r.json(),
+  );
 }
 
 async function del(path: string): Promise<void> {
-  const res = await fetch(BASE + path, { method: 'DELETE' });
-  if (!res.ok) await failed(res);
+  await logged<void>('DELETE', path, { method: 'DELETE' }, async () => {
+    return undefined as void;
+  });
 }
 
 export const api = {
@@ -91,6 +146,9 @@ export const api = {
     update: (id: string, data: Partial<Session>) => put<Session>(`/api/sessions/${id}`, data),
     delete: (id: string) => del(`/api/sessions/${id}`),
     reset: (id: string) => post<{ ok: boolean; session: Session }>(`/api/sessions/${id}/reset`),
+    setMode: (id: string, mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only') =>
+      post<{ ok: boolean; mode: string }>(`/api/sessions/${id}/mode`, { mode }),
+    stop: (id: string) => post<{ ok: boolean }>(`/api/sessions/${id}/stop`),
     renameAi: (id: string) => post<{ session: Session; name: string }>(`/api/sessions/${id}/rename-ai`),
     diff: (id: string) => get<{ diff: string }>(`/api/sessions/${id}/diff`),
     cost: (id: string) => get<{
@@ -260,3 +318,14 @@ export const api = {
       ),
   },
 };
+
+// Route a stop request to the correct backend endpoint based on process type.
+// Sessions (agent SDK turns) use /api/sessions/:id/stop, which calls
+// agentManager.abortTurn — they do NOT have a PTY to kill. Commands and
+// terminals are PTY processes and use /api/processes/:id/stop. Hitting the
+// PTY route for a session id returns 404 ("Process not found"), which is the
+// bug behind the Stop-button errors.
+export function stopProcessByType(p: { id: string; type: 'session' | 'command' | 'terminal' }) {
+  if (p.type === 'session') return api.sessions.stop(p.id);
+  return api.processes.stop(p.id);
+}

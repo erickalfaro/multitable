@@ -76,6 +76,8 @@ interface AppState {
   projectOverviewOpen: boolean;
   contextMenu: { type: string; id: string; x: number; y: number } | null;
   mobileDrawerOpen: boolean;
+  devLogOpen: boolean;
+  setDevLogOpen: (open: boolean) => void;
   setSelectedProcess: (id: string | null) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setActiveTheme: (id: string) => void;
@@ -142,6 +144,19 @@ interface AppState {
    */
   reasoningStreamingBySession: Record<string, string>;
   setReasoningStreaming: (sessionId: string, text: string) => void;
+
+  /**
+   * Last "agent loop done" outcome per session, keyed by sessionId. Mirrors
+   * the daemon's `session:idle` WS event. Components like the chat composer
+   * read this to decide whether to focus the input (clean completion), show a
+   * retry hint (watchdog timeout), or stay quiet (user-initiated abort).
+   * `null` means no idle event has been observed yet (or session is mid-turn).
+   */
+  idleBySession: Record<string, 'completed' | 'aborted' | 'watchdog' | 'error' | null>;
+  setSessionIdle: (
+    sessionId: string,
+    outcome: 'completed' | 'aborted' | 'watchdog' | 'error',
+  ) => void;
 
   // Live git status per project — populated by REST fetch on panel mount and
   // refreshed by `git:status-changed` WS events from the daemon's GitWatcher.
@@ -419,6 +434,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   projectOverviewOpen: false,
   contextMenu: null,
   mobileDrawerOpen: false,
+  devLogOpen: (() => {
+    try {
+      return localStorage.getItem('mt:devLogOpen') === '1';
+    } catch {
+      return false;
+    }
+  })(),
+  setDevLogOpen: (open) => {
+    try {
+      localStorage.setItem('mt:devLogOpen', open ? '1' : '0');
+    } catch {
+      // ignore
+    }
+    set({ devLogOpen: open });
+  },
   setSelectedProcess: (id) =>
     set((s) => {
       if (id === null) return { selectedProcessId: null };
@@ -605,6 +635,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return { reasoningStreamingBySession: next };
     }),
+
+  idleBySession: {},
+  setSessionIdle: (sessionId, outcome) =>
+    set((s) => ({ idleBySession: { ...s.idleBySession, [sessionId]: outcome } })),
 
   gitByProject: {},
   setGitStatus: (projectId, status) =>

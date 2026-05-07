@@ -332,6 +332,35 @@ export function createServer(
     broadcastForProcess(sessionId, 'session:turn-complete', {});
   });
 
+  // session:idle — universal "agent loop is done, you can type again" signal.
+  // Distinct from turn-complete: idle ALSO carries the outcome so the UI can
+  // tailor its post-turn UX (e.g. show a "retry" affordance after watchdog
+  // abort, suppress chime on user-initiated abort, focus the composer on
+  // clean completion).
+  agentManager.on(
+    'idle',
+    ({
+      sessionId,
+      state,
+      outcome,
+    }: {
+      sessionId: string;
+      state: string;
+      outcome: 'completed' | 'aborted' | 'watchdog' | 'error';
+    }) => {
+      broadcastForProcess(sessionId, 'session:idle', { state, outcome });
+    },
+  );
+
+  // Mode change (plan / accept-edits / etc.) — broadcast so all clients show
+  // the new mode badge without polling.
+  agentManager.on(
+    'mode-changed',
+    ({ sessionId, mode }: { sessionId: string; mode: string }) => {
+      broadcast('session:mode-changed', { sessionId, mode });
+    },
+  );
+
   // Daemon just diffed in-memory s.messages against its on-disk JSONL and
   // broadcast any items the live event stream missed. Frontend uses this as
   // the canonical "now is the right moment to REST-sync" tick.

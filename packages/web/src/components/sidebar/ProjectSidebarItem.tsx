@@ -6,7 +6,7 @@ import { SidebarItem } from './SidebarItem';
 import { AddProcessModal } from '../modals/AddProcessModal';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuItem } from '../context-menu/ContextMenu';
-import { api } from '../../lib/api';
+import { api, stopProcessByType } from '../../lib/api';
 import { terminalManager } from '../../lib/terminalManager';
 import toast from 'react-hot-toast';
 import type { ManagedProcess, Project } from '../../lib/types';
@@ -103,13 +103,21 @@ export function ProjectSidebarItem({ project }: Props) {
   const getSessionMenuItems = (process: ManagedProcess): MenuItem[] => {
     const isRunning = process.state === 'running';
     return [
-      {
-        label: isRunning ? 'Stop' : 'Start',
-        action: () => {
-          if (isRunning) api.processes.stop(process.id).catch(() => toast.error('Failed to stop'));
-          else api.processes.start(process.id).catch(() => toast.error('Failed to start'));
-        },
-      },
+      // Sessions auto-start on the first turn (sending a message IS starting),
+      // so the Start path doesn't apply — only show Stop while a turn is in
+      // flight. Stop here means "abort the in-flight SDK turn" via
+      // /api/sessions/:id/stop, NOT the PTY route.
+      ...(isRunning
+        ? [
+            {
+              label: 'Stop',
+              action: () =>
+                stopProcessByType(process as Parameters<typeof stopProcessByType>[0]).catch(() =>
+                  toast.error('Failed to stop'),
+                ),
+            } as MenuItem,
+          ]
+        : []),
       {
         label: 'Clear output',
         action: () => api.processes.clearScrollback(process.id).catch(() => toast.error('Failed to clear')),

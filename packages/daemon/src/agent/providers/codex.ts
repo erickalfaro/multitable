@@ -1,7 +1,12 @@
 import type { Thread, ThreadEvent, ThreadItem } from '@openai/codex-sdk';
 import type { AgentSession } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
-import type { ProviderAdapter, AdapterCallbacks, ToolDeltaPayload } from './types.js';
+import type {
+  ProviderAdapter,
+  ProviderCapabilities,
+  AdapterCallbacks,
+  ToolDeltaPayload,
+} from './types.js';
 import {
   countCodexTurns,
   parseCodexThread,
@@ -51,6 +56,40 @@ const RECONCILE_DELAY_MS = 250;
 
 export class CodexAdapter implements ProviderAdapter {
   readonly name = 'codex' as const;
+
+  readonly capabilities: ProviderCapabilities = {
+    // Codex SDK does not surface per-turn cost in USD — by design, codex
+    // pricing is contract-specific. The UI hides the dollar row.
+    costUsd: false,
+    // Plan mode is TUI-only in Codex; we approximate via sandboxMode swap
+    // (read-only thread → resume workspace-write) but the wiring lives in
+    // the manager today, not here. Mark as 'simulated' so UI gates accordingly.
+    planMode: 'simulated',
+    // Sandbox enum, no per-call host approval — stdin closes after the
+    // prompt and Codex exposes no callback.
+    perCallApproval: 'sandbox',
+    // No agent-side Q&A mechanism — all interaction goes through the
+    // sandbox flags + the message stream itself.
+    userQuestion: 'unsupported',
+    // No MCP elicitation flow exposed by the SDK.
+    elicitation: false,
+    // Codex events lack agent_id / parent_item_id — see GitHub #20979.
+    subagents: 'none',
+    // stdin closed after prompt = no mid-turn input.
+    midTurnInput: false,
+    byok: false,
+    // Codex binary enforces the actual sandbox at the OS level.
+    hardSandbox: true,
+    // No lifecycle hooks at the SDK level — only the event stream.
+    hooks: 'none',
+    // item.updated.item.text is cumulative — must REPLACE buffer.
+    streamingDeltaSemantics: 'cumulative',
+    modelSwitchScope: 'per-thread',
+    // Read-only and default we can simulate via sandboxMode. Plan is also
+    // simulated. Other modes (chat, accept-edits, auto) don't map cleanly to
+    // the codex sandbox enum — leave them out so the UI doesn't show them.
+    modes: ['default', 'plan', 'read-only'],
+  };
 
   private codex: {
     startThread: (options?: Record<string, unknown>) => Thread;

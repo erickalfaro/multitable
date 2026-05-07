@@ -1,8 +1,8 @@
 import React from 'react';
 import { useProcess } from '../../hooks/useProcess';
 import { useAppStore } from '../../stores/appStore';
-import { api } from '../../lib/api';
-import { Square, Palette, Settings, Bell } from 'lucide-react';
+import { api, stopProcessByType } from '../../lib/api';
+import { Square, Palette, Settings, Bell, Terminal as TerminalIcon } from 'lucide-react';
 import { StatusDot } from '../sidebar/StatusDot';
 import { BUILTIN_THEMES } from '../../lib/themes';
 import { IconButton } from '../ui';
@@ -75,6 +75,8 @@ export function StatusBar() {
     setActiveTheme,
     setGlobalSettingsOpen,
     setNotificationCenterOpen,
+    devLogOpen,
+    setDevLogOpen,
   } = useAppStore();
   const process = useProcess(selectedProcessId);
   const totalUnread = useAppStore((s) =>
@@ -151,8 +153,12 @@ export function StatusBar() {
             <IconButton
               size="sm"
               variant="danger"
-              label="Stop process"
-              onClick={() => api.processes.stop(process.id)}
+              label={process.type === 'session' ? 'Stop turn' : 'Stop process'}
+              onClick={() => {
+                stopProcessByType(process).catch((err) => {
+                  console.error('[status-bar] stop failed:', err);
+                });
+              }}
             >
               <Square size={11} />
             </IconButton>
@@ -252,6 +258,29 @@ export function StatusBar() {
             {totalUnread > 99 ? '99+' : totalUnread}
           </span>
         )}
+      </button>
+
+      <button
+        onClick={() => setDevLogOpen(!devLogOpen)}
+        title="Dev Log (Ctrl+Shift+L)"
+        style={{
+          ...ghostBtnStyle,
+          color: devLogOpen ? 'var(--accent-amber)' : 'var(--text-muted)',
+          backgroundColor: devLogOpen ? 'var(--bg-hover)' : 'transparent',
+        }}
+        onMouseEnter={(e) => {
+          if (devLogOpen) return;
+          (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
+          (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--bg-hover)';
+        }}
+        onMouseLeave={(e) => {
+          if (devLogOpen) return;
+          (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)';
+          (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+        }}
+      >
+        <TerminalIcon size={12} />
+        <span>Logs</span>
       </button>
 
       <IconButton size="sm" onClick={() => setGlobalSettingsOpen(true)} label="Customize themes">

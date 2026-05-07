@@ -16,11 +16,13 @@ interface Props {
 const LABEL: Record<AgentProvider, string> = {
   claude: 'claude',
   codex: 'codex',
+  copilot: 'copilot',
 };
 
 const GLYPH: Record<AgentProvider, string> = {
   claude: 'C',
   codex: 'X',
+  copilot: 'G',
 };
 
 // Provider-distinct hue. Subtle in monochrome themes; the tint distinguishes
@@ -31,6 +33,11 @@ function tintFor(provider: AgentProvider): string {
     case 'claude':
       return 'var(--accent-amber)';
     case 'codex':
+      return 'var(--text-secondary)';
+    case 'copilot':
+      // Subtle blue, distinct from amber/grey, matches GitHub's brand hint.
+      return 'var(--accent-blue, #6384ff)';
+    default:
       return 'var(--text-secondary)';
   }
 }

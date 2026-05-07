@@ -67,6 +67,38 @@ export interface AdapterCallbacks {
   // This is the SOTA pattern for optimistic-UI reconciliation — the same
   // shape Linear/Figma/Slack use for client-temp-id → server-canonical-id.
   emitMessageRekey(oldId: string, newId: string): void;
+  // Surface a unified alert envelope (toast / chime / NotificationCenter).
+  // Adapters call this for provider-side notifications, errors, etc. that
+  // don't fit the message stream — e.g. rate-limit, auth, compaction.
+  emitAlert(input: {
+    category:
+      | 'turn'
+      | 'tool'
+      | 'permission'
+      | 'elicitation'
+      | 'rate-limit'
+      | 'auth'
+      | 'task'
+      | 'compaction'
+      | 'sync'
+      | 'budget'
+      | 'status';
+    severity: 'info' | 'success' | 'warning' | 'error' | 'attention';
+    title: string;
+    body?: string;
+    needsAttention?: boolean;
+    persistent?: boolean;
+    ttlMs?: number;
+    metadata?: Record<string, unknown>;
+  }): void;
+  // Update s.toolCount and s.activeSubagents counters (subagent lifecycle).
+  incrementToolCount(): void;
+  incrementSubagents(delta: 1 | -1): void;
+  // Mark session as "needs attention" via SDK Notification hook.
+  emitNotification(payload: unknown): void;
+  // Session-end signal from the SDK (SessionEnd hook fired). Distinct from
+  // turn-complete: the agent itself is done, not just the current turn.
+  emitSessionEnded(): void;
 }
 
 export interface ToolDeltaPayload {
@@ -76,11 +108,88 @@ export interface ToolDeltaPayload {
   isError: boolean;
 }
 
-// Adapter contract. Each provider (claude, codex, gemini, ...) implements this.
-// The manager picks an adapter by AgentSession.provider and calls runTurn for
-// each user turn. reset() is called when /clear nukes the conversation.
+// === SessionMode ===========================================================
+//
+// Provider-agnostic operating mode for a session. Each provider translates
+// these to its native primitives:
+//   - Claude   → permissionMode + system prompt
+//   - Codex    → sandboxMode + (system prompt at session level not exposed)
+//   - Copilot  → systemMessage + onPreToolUse shaping
+//
+// Adapters declare which modes they support via ProviderCapabilities.modes.
+// The UI hides modes the current provider can't honor.
+
+export type SessionMode =
+  | 'default'      // normal: tools execute, prompts on demand
+  | 'plan'         // read-only research: produce a plan, no edits
+  | 'accept-edits' // auto-approve all tool calls
+  | 'auto'         // bypass all permissions (advanced)
+  | 'chat'         // conversation only, no tool execution
+  | 'read-only';   // no mutations, but tools other than write run
+
+// === ProviderCapabilities ==================================================
+//
+// What the adapter can and cannot do. The manager exposes this to the UI so
+// rendering stays provider-agnostic — no `provider === 'claude'` branches in
+// React code.
+
+export interface ProviderCapabilities {
+  // Cost surface: true = USD column shown; false = hidden (Codex).
+  costUsd: boolean;
+  // Plan-mode flavor: 'native' = first-class (Claude permissionMode='plan');
+  // 'simulated' = host-side workaround; 'none' = no plan-mode toggle in UI.
+  planMode: 'native' | 'simulated' | 'none';
+  // Per-call host approval mechanism — affects PermissionManager wiring.
+  perCallApproval: 'callback' | 'sandbox' | 'callback+kind';
+  // How user-question-from-agent is delivered.
+  userQuestion: 'tool' | 'callback' | 'unsupported';
+  // MCP elicitation forms / URL flow supported.
+  elicitation: boolean;
+  // Subagent model.
+  subagents: 'manual' | 'auto' | 'none';
+  // Can host inject input mid-stream / steer the agent.
+  midTurnInput: boolean;
+  // Bring-your-own-key (per-session provider override).
+  byok: boolean;
+  // OS-level sandbox (vs soft permission gating).
+  hardSandbox: boolean;
+  // Lifecycle hook richness.
+  hooks: 'rich' | 'six' | 'none';
+  // Streaming text delta semantics — affects the StreamBuffer reducer.
+  streamingDeltaSemantics: 'additive' | 'cumulative';
+  // When the model id can be changed.
+  modelSwitchScope: 'per-turn' | 'per-thread' | 'per-session';
+  // Modes the adapter actually implements. UI hides others.
+  modes: SessionMode[];
+}
+
+// === ProviderAdapter =======================================================
+//
+// Adapter contract. Each provider (claude, codex, copilot, …) implements
+// this. The manager picks an adapter by AgentSession.provider and dispatches
+// uniformly:
+//   manager.sendTurn → adapter.runTurn
+//   manager.abortTurn → adapter.abortTurn (optional override; default just
+//                       uses the AbortController from the in-flight turn)
+//   manager.resetSession → adapter.reset
+//   manager.remove → adapter.destroy
+//
+// Adapters know NOTHING about WS, the store, REST routes, or the DB. They
+// speak only this interface upward and the SDK API downward.
+
 export interface ProviderAdapter {
-  readonly name: 'claude' | 'codex';
+  readonly name: 'claude' | 'codex' | 'copilot';
+  readonly capabilities: ProviderCapabilities;
+
+  // Drive one user turn. The adapter must respect `ctrl` for cancellation.
+  // Runs to completion (success or error); throws on error so the manager
+  // can surface a turn-error event.
   runTurn(s: AgentSession, text: string, ctrl: AbortController, cb: AdapterCallbacks): Promise<void>;
+
+  // Optional: clean up per-session adapter caches. Called from /reset.
   reset?(s: AgentSession): void;
+
+  // Optional: tear down per-session resources entirely. Called from session
+  // delete. For Copilot this will eventually call session.disconnect().
+  destroy?(s: AgentSession): void | Promise<void>;
 }

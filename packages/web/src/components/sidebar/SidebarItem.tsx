@@ -3,7 +3,7 @@ import { StatusDot } from './StatusDot';
 import { SessionStatusLoader } from './SessionStatusLoader';
 import { Bell, Square } from 'lucide-react';
 import type { ManagedProcess, Session } from '../../lib/types';
-import { api } from '../../lib/api';
+import { api, stopProcessByType } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
 import { IconButton, AgentBadge } from '../ui';
 import { relativeTime } from '../../lib/relativeTime';
@@ -236,7 +236,7 @@ export function SidebarItem({
                   label="Stop"
                   onClick={(e) => {
                     e.stopPropagation();
-                    api.processes.stop(process.id);
+                    stopProcessByType(process).catch(() => {/* swallow */});
                   }}
                 >
                   <Square size={11} />

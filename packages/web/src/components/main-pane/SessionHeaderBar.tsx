@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { PanelBottom, Copy, Check, Pencil, Sparkles, Menu } from 'lucide-react';
 import { StatusDot } from '../sidebar/StatusDot';
 import { AttachButton } from './AttachButton';
+import { ModeBadge } from './ModeBadge';
 import type { Session } from '../../lib/types';
 import { IconButton, Spinner, AgentBadge } from '../ui';
 import { api } from '../../lib/api';
@@ -352,6 +353,7 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
       {/* Bottom row — chips */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
         <AgentBadge provider={provider} size="chip" />
+        <ModeBadge session={session} />
         {agentSessionId && (
           <span
             onClick={handleCopySessionId}

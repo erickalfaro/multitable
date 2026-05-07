@@ -152,6 +152,7 @@ async function main() {
         workingDir: session.workingDirectory || project.path,
         provider: session.agentProvider,
         model: session.model,
+        mode: session.mode,
         agentSessionId: session.agentSessionId ?? null,
         agentSessionIdHistory: session.agentSessionIdHistory ?? [],
         claudeSessionId: session.claudeSessionId ?? null,

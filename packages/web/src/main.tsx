@@ -7,6 +7,9 @@ import ReactDOM from 'react-dom/client';
 import '@fontsource-variable/jetbrains-mono';
 import App from './App';
 import './styles/globals.css';
+import { installDevLogCapture } from './lib/devLogCapture';
+
+installDevLogCapture();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
