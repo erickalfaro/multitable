@@ -31,7 +31,12 @@ import type { Session } from './lib/types';
 // Slow safety-net poll for sessions that are mid-turn. The primary path is
 // event-driven (turn-complete, ws-reconnected, session:reconciled, focus,
 // visibility); this just covers a daemon hang where no events ever arrive.
-const RUNNING_SAFETY_POLL_MS = 15_000;
+//
+// 60s is well below the daemon's 5-minute no-progress watchdog (NO_PROGRESS_MS)
+// and well above the 250ms reconcile delay codex uses. Previous value (15s)
+// generated wasteful REST traffic during normal turns AND blocked the event
+// loop on slow JSONL parses (observed 4.6s response on a busy daemon).
+const RUNNING_SAFETY_POLL_MS = 60_000;
 
 function App() {
   const store = useAppStore();

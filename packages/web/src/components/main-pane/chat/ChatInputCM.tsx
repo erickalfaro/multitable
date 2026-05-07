@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Send, Paperclip, X, Clock } from 'lucide-react';
+import { Send, Paperclip, X, Clock, Square } from 'lucide-react';
 
 import { getLoaderComponent } from '../../ui/loaders';
 import { AgentBadge } from '../../ui';
@@ -325,11 +325,26 @@ export const ChatInputCM = memo(function ChatInputCM({
 
       // If a turn is in flight, queue the message client-side. SessionChat
       // drains the queue when the daemon flips state back to 'stopped'.
+      //
+      // Race-safety: `session.state === 'running'` lags the actual send by
+      // ~70ms (the daemon must round-trip a `process-state-changed` event
+      // before the store updates). If the user clicks Send twice in quick
+      // succession, the second send sees state still 'stopped' and goes
+      // through directly — the daemon then errors with "turn already in
+      // flight" 10s later. Also queue if the queue ALREADY has a head OR
+      // state isn't an idle terminal — that catches the in-flight gap.
       const live = useAppStore.getState();
       const session = live.sessions[processId];
-      if (session?.state === 'running') {
+      const queueHasHead = !!live.pendingSendsBySession?.[processId]?.length;
+      const isIdle = session?.state === 'stopped' && !queueHasHead;
+      if (!isIdle) {
         live.enqueueSend(processId, text);
       } else {
+        // Optimistically flip the local state to 'running' so a follow-up
+        // doSend in the same render frame sees in-flight and queues. The
+        // daemon's process-state-changed event will overwrite this shortly
+        // (idempotent — same value).
+        live.updateProcessState(processId, 'running');
         wsClient.sendTurn(processId, text);
       }
       view.dispatch({
@@ -734,36 +749,78 @@ export const ChatInputCM = memo(function ChatInputCM({
           }}
         />
 
-        <button
-          onClick={() => onSendRef.current()}
-          disabled={!canSend}
-          onMouseEnter={() => setSendHover(true)}
-          onMouseLeave={() => setSendHover(false)}
-          title={
-            !canSend
-              ? 'Type a message'
-              : queueing
-                ? 'Queue message (Enter)'
-                : 'Send (Enter)'
-          }
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 28,
-            height: 28,
-            borderRadius: 'var(--radius-snug)',
-            border: 'none',
-            backgroundColor: sendHover && canSend ? 'var(--bg-hover)' : 'transparent',
-            color: canSend ? 'var(--accent-amber)' : 'var(--text-faint)',
-            cursor: canSend ? 'pointer' : 'not-allowed',
-            flexShrink: 0,
-            alignSelf: 'center',
-            transition: 'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
-          }}
-        >
-          <Send size={13} />
-        </button>
+        {active ? (
+          // Agent is mid-turn → the button at the send slot becomes Stop.
+          // Click aborts the in-flight turn via /api/sessions/:id/stop, which
+          // calls agentManager.abortTurn → ctrl.abort() → the SDK iterator
+          // unwinds, finally clears streaming state, daemon emits session:idle
+          // with outcome='aborted'. The chat shows a small "Turn cancelled."
+          // system note (NOT an error) and the session goes back to stopped.
+          <button
+            type="button"
+            onClick={() => {
+              api.sessions.stop(processId).catch((err) => {
+                console.error('[chat-input] stop failed:', err);
+                toast.error('Failed to stop turn');
+              });
+            }}
+            onMouseEnter={() => setSendHover(true)}
+            onMouseLeave={() => setSendHover(false)}
+            title="Stop (interrupt the agent)"
+            aria-label="Stop turn"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 28,
+              height: 28,
+              borderRadius: 'var(--radius-snug)',
+              border: 'none',
+              backgroundColor: sendHover ? 'var(--bg-hover)' : 'transparent',
+              color: 'var(--status-error, #ef4444)',
+              cursor: 'pointer',
+              flexShrink: 0,
+              alignSelf: 'center',
+              transition:
+                'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+            }}
+          >
+            <Square size={12} fill="currentColor" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSendRef.current()}
+            disabled={!canSend}
+            onMouseEnter={() => setSendHover(true)}
+            onMouseLeave={() => setSendHover(false)}
+            title={
+              !canSend
+                ? 'Type a message'
+                : queueing
+                  ? 'Queue message (Enter)'
+                  : 'Send (Enter)'
+            }
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 28,
+              height: 28,
+              borderRadius: 'var(--radius-snug)',
+              border: 'none',
+              backgroundColor: sendHover && canSend ? 'var(--bg-hover)' : 'transparent',
+              color: canSend ? 'var(--accent-amber)' : 'var(--text-faint)',
+              cursor: canSend ? 'pointer' : 'not-allowed',
+              flexShrink: 0,
+              alignSelf: 'center',
+              transition:
+                'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+            }}
+          >
+            <Send size={13} />
+          </button>
+        )}
       </div>
 
       {state === 'errored' && (

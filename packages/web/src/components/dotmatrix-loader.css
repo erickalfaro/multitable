@@ -866,23 +866,8 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .dmx-dot,
-  .dmx-ripple,
-  .dmx-ripple-echo,
-  .dmx-center-origin-ripple,
-  .dmx-collapse,
-  .dmx-hover-ripple,
-  .dmx-path,
-  .dmx-diagonal-alt-sweep,
-  .dmx-spiral-snake,
-  .dmx-diagonal-snake,
-  .dmx-outer-snake,
-  .dmx-middle-snake,
-  .dmx-square9-bit,
-  .dmx-square6-col-snake,
-  .dmx-circular2-ring {
-    animation: none !important;
-    transition: none !important;
-  }
-}
+/* Loader animations intentionally run regardless of `prefers-reduced-motion`.
+   See dotmatrix-hooks.ts for rationale — these are MultiTable's primary
+   "agent is working" indicator and need to be visible during turns. The
+   previous `@media (prefers-reduced-motion: reduce)` block that disabled
+   every dmx-* animation has been removed. */

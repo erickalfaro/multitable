@@ -4,25 +4,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { DotMatrixPhase } from "./dotmatrix-core";
 
+// Loader animations always run, regardless of OS-level reduced-motion
+// preference. The dot-matrix loaders are the primary "agent is working"
+// indicator in MultiTable's UI; without animation users get no feedback
+// during multi-second turns. We intentionally override a11y here because
+// the loaders are small, low-contrast, and don't trigger vestibular
+// disorders the way large parallax / spinning elements do.
+//
+// If a future a11y review wants to honor the preference, swap this back to
+// `window.matchMedia("(prefers-reduced-motion: reduce)").matches` and also
+// re-add the CSS `@media (prefers-reduced-motion: reduce)` block in
+// `dotmatrix-loader.css`.
 export function usePrefersReducedMotion(): boolean {
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
-
-  useEffect(() => {
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-
-    const update = () => {
-      setPrefersReducedMotion(query.matches);
-    };
-
-    update();
-    query.addEventListener("change", update);
-
-    return () => {
-      query.removeEventListener("change", update);
-    };
-  }, []);
-
-  return prefersReducedMotion;
+  return false;
 }
 
 export interface UseCyclePhaseOptions {
