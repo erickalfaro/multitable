@@ -2,6 +2,7 @@ import React, { memo } from 'react';
 import { Streamdown, type Components } from 'streamdown';
 import 'streamdown/styles.css';
 import { CodeBlock } from './CodeBlock';
+import { StreamingContext } from './StreamingContext';
 
 interface Props {
   text: string;
@@ -195,9 +196,11 @@ export const AssistantMessage = memo(function AssistantMessage({ text, costLabel
           maxWidth: '100%',
         }}
       >
-        <Streamdown components={MD_COMPONENTS} parseIncompleteMarkdown>
-          {streaming ? `${text}▍` : text}
-        </Streamdown>
+        <StreamingContext.Provider value={!!streaming}>
+          <Streamdown components={MD_COMPONENTS} parseIncompleteMarkdown>
+            {streaming ? `${text}▍` : text}
+          </Streamdown>
+        </StreamingContext.Provider>
       </div>
       {costLabel && (
         <div

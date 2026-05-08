@@ -3,6 +3,7 @@ import { Copy, Check } from 'lucide-react';
 import { getHighlighter, normalizeLang, pickShikiTheme } from '../../../lib/shiki';
 import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
+import { useIsStreaming } from './StreamingContext';
 
 interface Props {
   code: string;
@@ -64,8 +65,16 @@ export const CodeBlock = memo(function CodeBlock({ code, lang }: Props) {
   const activeThemeId = useAppStore((s) => s.activeThemeId);
   const customThemes = useAppStore((s) => s.customThemes);
   const mountedRef = useRef(true);
+  // While the surrounding assistant message is streaming, skip shiki entirely
+  // and render the code as plain themed monospace. Async highlight on every
+  // mutating `code` prop races (stale highlights flash, fallback <pre> blinks
+  // as setHtml lands one frame behind). When the canonical message lands the
+  // streaming bubble unmounts; the canonical bubble mounts with
+  // `streaming === false` and shiki runs once, atomically.
+  const isStreaming = useIsStreaming();
 
   useEffect(() => {
+    if (isStreaming) return; // freeze: don't run shiki while text is mutating
     mountedRef.current = true;
     const all = [...BUILTIN_THEMES, ...customThemes];
     const active = all.find((t) => t.id === activeThemeId);
@@ -92,7 +101,7 @@ export const CodeBlock = memo(function CodeBlock({ code, lang }: Props) {
     return () => {
       mountedRef.current = false;
     };
-  }, [code, lang, activeThemeId, customThemes]);
+  }, [code, lang, activeThemeId, customThemes, isStreaming]);
 
   // No frame and no left marker — the tinted background alone separates code
   // from surrounding prose. Padding lives on the inner pre / .mt-shiki pre.
@@ -106,13 +115,19 @@ export const CodeBlock = memo(function CodeBlock({ code, lang }: Props) {
     margin: '6px 0',
   };
 
+  // Force the plain-pre branch while streaming, even if `html` was set on
+  // a prior render (e.g. component reused across a stream→canonical
+  // transition before unmount). Atomically swaps to highlighted on the
+  // first render after streaming ends.
+  const showHtml = !isStreaming && html;
+
   return (
     <div
       style={wrapperStyle}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      {html ? (
+      {showHtml ? (
         <div
           className="mt-scroll mt-shiki"
           style={{ overflowX: 'auto' }}

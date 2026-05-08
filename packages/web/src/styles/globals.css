@@ -242,6 +242,21 @@ body {
   background: transparent;
 }
 
+/* ---------- Chat streaming smoothness ----------
+ * Each turn block gets layout/paint containment so growth or markdown
+ * reflow inside it cannot trigger relayout of historical turns above. The
+ * chat scroller separately disables the browser's automatic scroll-anchor
+ * heuristic — we drive stickiness ourselves via ResizeObserver in
+ * ChatScroller.tsx so the behavior is consistent across browsers (Safari
+ * has no overflow-anchor) and never fights our own scroll adjustments.
+ */
+.mt-turn-block {
+  contain: layout paint;
+}
+.mt-chat-scroller {
+  overflow-anchor: none;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

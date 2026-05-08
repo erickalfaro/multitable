@@ -9,6 +9,7 @@ import { SessionDetailPanel } from '../SessionDetailPanel';
 import { ProcessBanner } from '../ProcessBanner';
 import { PermissionBar } from '../../permission/PermissionBar';
 import { MessageList } from './MessageList';
+import { ChatScroller } from './ChatScroller';
 import { ChatInputCM } from './ChatInputCM';
 
 // Stable empty-array reference so the selector below doesn't hand a fresh
@@ -212,17 +213,19 @@ export function SessionChat({ sessionId, session }: Props) {
             position: 'relative',
           }}
         >
-          <MessageList
-            messages={messages}
-            loading={loading}
-            emptyHint={emptyHint}
-            projectId={session.projectId}
-            streamingText={streamingText}
-            toolStreaming={toolStreaming}
-            reasoningStreaming={reasoningStreaming}
-            loaderVariant={session.loaderVariant ?? null}
-            active={session.state === 'running'}
-          />
+          <ChatScroller>
+            <MessageList
+              messages={messages}
+              loading={loading}
+              emptyHint={emptyHint}
+              projectId={session.projectId}
+              streamingText={streamingText}
+              toolStreaming={toolStreaming}
+              reasoningStreaming={reasoningStreaming}
+              loaderVariant={session.loaderVariant ?? null}
+              active={session.state === 'running'}
+            />
+          </ChatScroller>
           <ChatInputCM
             processId={sessionId}
             projectId={session.projectId}

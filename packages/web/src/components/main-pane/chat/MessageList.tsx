@@ -1,5 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import React, { useMemo } from 'react';
 import type { Message } from '../../../lib/types';
 import type { ToolStreamPayload } from '../../../stores/appStore';
 import { UserMessage } from './UserMessage';
@@ -39,11 +38,12 @@ function indexResults(messages: Message[]) {
 function renderTurnCard(
   m: TurnMessage,
   resultsByUseId: Map<string, { output: string; isError: boolean }>,
+  streaming: boolean,
 ): React.ReactNode {
   if (m.kind === 'reasoning') return <ReasoningCard text={m.text} />;
   if (m.kind === 'assistant') {
     if (!m.text) return null;
-    return <AssistantMessage text={m.text} costLabel={null} />;
+    return <AssistantMessage text={m.text} costLabel={null} streaming={streaming} />;
   }
   if (m.kind === 'tool_use') {
     const r = resultsByUseId.get(m.toolUseId);
@@ -71,44 +71,18 @@ export function MessageList({
   loaderVariant,
   active = false,
 }: Props) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [atBottom, setAtBottom] = useState(true);
   const resultsByUseId = useMemo(() => indexResults(messages), [messages]);
   const blocks = useMemo<ChatBlock[]>(() => groupIntoBlocks(messages), [messages]);
 
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    if (atBottom) el.scrollTop = el.scrollHeight;
-  }, [messages, streamingText, toolStreaming, reasoningStreaming, atBottom]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const threshold = 80;
-      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setAtBottom(distance < threshold);
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, []);
-
-  const scrollToBottom = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    setAtBottom(true);
-  };
-
   // Streaming previews are virtual TurnMessages. We give them stable synthetic
-  // ids so React doesn't churn while text accumulates.
+  // ids so React's reconciler keeps the same component instances mounted as
+  // text accumulates — only the leaf AssistantMessage's `text` prop changes.
   const streamingMessages: TurnMessage[] = useMemo(() => {
     const out: TurnMessage[] = [];
     if (reasoningStreaming) {
       out.push({
         id: '__reasoning_stream__',
-        ts: Date.now(),
+        ts: 0,
         kind: 'reasoning',
         text: reasoningStreaming,
       });
@@ -116,7 +90,7 @@ export function MessageList({
     if (toolStreaming) {
       out.push({
         id: '__tool_stream__',
-        ts: Date.now(),
+        ts: 0,
         kind: 'tool_use',
         parentId: '__tool_stream_parent__',
         toolUseId: '__tool_stream__',
@@ -127,7 +101,7 @@ export function MessageList({
     if (streamingText) {
       out.push({
         id: '__assistant_stream__',
-        ts: Date.now(),
+        ts: 0,
         kind: 'assistant',
         text: streamingText,
         model: '',
@@ -183,105 +157,76 @@ export function MessageList({
     <LoaderNode loaderVariant={loaderVariant} projectId={projectId} active={active} />
   );
 
-  return (
-    <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-      <div
-        ref={scrollRef}
-        className="mt-scroll"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          overflowY: 'auto',
-          padding: '12px 14px 16px',
-        }}
-      >
-        {renderableEmpty && !loading && emptyHint}
+  // The IDs of the streaming preview messages — passed to renderTurnCard so
+  // it knows which AssistantMessage to mark as `streaming` (drives the
+  // blinking caret + the StreamingContext signal that freezes shiki). Stable
+  // refs across renders since they are module-level constants.
+  const isStreamingMessage = (id: string): boolean =>
+    id === '__assistant_stream__' || id === '__reasoning_stream__';
 
-        {renderBlocks.map((block, bi) => {
-          if (block.kind === 'user') {
-            return (
-              <UserMessage
-                key={block.message.id}
-                text={block.message.text}
-              />
-            );
-          }
-          if (block.kind === 'system') {
-            return (
-              <div
-                key={block.message.id}
-                style={{
-                  margin: '8px 0',
-                  fontSize: 11.5,
-                  color: 'var(--text-muted)',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                  whiteSpace: 'pre-wrap',
-                  opacity: 0.75,
-                }}
-              >
-                {block.message.text}
-              </div>
-            );
-          }
-          // Turn block — when this is the last block, extend its rail line
-          // down so it visually flows into the TrailingLoader below.
-          const isLastBlock = bi === renderBlocks.length - 1;
+  return (
+    <>
+      {renderableEmpty && !loading && emptyHint}
+
+      {renderBlocks.map((block, bi) => {
+        if (block.kind === 'user') {
           return (
+            <UserMessage
+              key={block.message.id}
+              text={block.message.text}
+            />
+          );
+        }
+        if (block.kind === 'system') {
+          return (
+            <div
+              key={block.message.id}
+              style={{
+                margin: '8px 0',
+                fontSize: 11.5,
+                color: 'var(--text-muted)',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                whiteSpace: 'pre-wrap',
+                opacity: 0.75,
+              }}
+            >
+              {block.message.text}
+            </div>
+          );
+        }
+        // Turn block — when this is the last block, extend its rail line
+        // down so it visually flows into the TrailingLoader below.
+        const isLastBlock = bi === renderBlocks.length - 1;
+        return (
+          <div key={`turn-${block.messages[0].id}`} className="mt-turn-block">
             <TurnRow
-              key={`turn-${block.messages[0].id}`}
               messages={block.messages}
               resultsByUseId={resultsForRender}
               extendLineDown={isLastBlock}
             >
               {block.messages.map((m) => (
                 <React.Fragment key={m.id}>
-                  {renderTurnCard(m, resultsForRender)}
+                  {renderTurnCard(m, resultsForRender, isStreamingMessage(m.id))}
                 </React.Fragment>
               ))}
             </TurnRow>
-          );
-        })}
-
-        {/* The loader avatar is rendered exactly ONCE here, in a stable
-            position. Keeping it mounted across block transitions prevents
-            the dot-matrix animation from resetting every time the active
-            turn moves between blocks (standalone → synthetic → real). */}
-        <TrailingLoader connected={!renderableEmpty && renderBlocks[renderBlocks.length - 1]?.kind === 'turn'}>
-          {loaderNode}
-        </TrailingLoader>
-
-        {loading && renderableEmpty && (
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: 20, textAlign: 'center' }}>
-            Loading conversation…
           </div>
-        )}
-      </div>
+        );
+      })}
 
-      {!atBottom && !renderableEmpty && (
-        <button
-          onClick={scrollToBottom}
-          style={{
-            position: 'absolute',
-            bottom: 14,
-            right: 16,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '3px 10px',
-            fontSize: 10.5,
-            borderRadius: 'var(--radius-snug)',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--accent-amber)',
-            color: 'var(--accent-amber)',
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-            textTransform: 'uppercase',
-            letterSpacing: '0.08em',
-          }}
-        >
-          <ChevronDown size={11} /> Jump to latest
-        </button>
+      {/* The loader avatar is rendered exactly ONCE here, in a stable
+          position. Keeping it mounted across block transitions prevents
+          the dot-matrix animation from resetting every time the active
+          turn moves between blocks (standalone → synthetic → real). */}
+      <TrailingLoader connected={!renderableEmpty && renderBlocks[renderBlocks.length - 1]?.kind === 'turn'}>
+        {loaderNode}
+      </TrailingLoader>
+
+      {loading && renderableEmpty && (
+        <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+          Loading conversation…
+        </div>
       )}
-    </div>
+    </>
   );
 }

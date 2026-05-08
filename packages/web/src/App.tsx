@@ -16,6 +16,8 @@ import { IconButton } from './components/ui';
 import { useAppStore } from './stores/appStore';
 import { wsClient } from './lib/ws';
 import { api } from './lib/api';
+import { createRafBatch } from './lib/rafBatch';
+import type { ToolStreamPayload } from './stores/appStore';
 import { playPermissionChime, playAttentionChime, playDoneChime } from './lib/sound';
 import { handleSessionAlert } from './lib/notify';
 import { updateTabBadge } from './lib/tabBadge';
@@ -360,6 +362,25 @@ function App() {
       }
     };
 
+    // Frame-batch the streaming WS handlers. Codex emits 4–10 deltas per
+    // frame on a fast connection; calling Zustand setters that often busts
+    // every selector subscriber and causes a render cycle per delta. The
+    // batcher coalesces all deltas that arrive within one animation frame
+    // into a single store update per (session, stream-kind), so the chat
+    // re-renders at most once per displayed frame regardless of WS rate.
+    // Latest-wins is correct here because the daemon emits cumulative text
+    // (see manager-side StreamBuffer), so dropping intermediate values is
+    // lossless visually.
+    const assistantDeltaBatch = createRafBatch<string>((sid, text) =>
+      useAppStore.getState().setStreamingText(sid, text),
+    );
+    const reasoningDeltaBatch = createRafBatch<string>((sid, text) =>
+      useAppStore.getState().setReasoningStreaming(sid, text),
+    );
+    const toolDeltaBatch = createRafBatch<ToolStreamPayload | null>((sid, payload) =>
+      useAppStore.getState().setToolStreaming(sid, payload),
+    );
+
     const offs = [
       // Re-fetch all data when WS reconnects (e.g. after server restart)
       wsClient.on('ws:reconnected', () => {
@@ -434,18 +455,44 @@ function App() {
       wsClient.on('session:assistant-message', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
         const messages = msg.payload?.messages;
-        if (pid && Array.isArray(messages) && messages.length > 0) {
-          store.appendMessages(pid, messages);
-          // Final canonical message arrived — drop any in-flight streaming
-          // partial so the UI doesn't render the same text twice for a beat.
-          store.setStreamingText(pid, '');
-        }
+        if (!pid || !Array.isArray(messages) || messages.length === 0) return;
+        // End-of-stream swap. Subtle ordering bug we previously hit:
+        //
+        // The daemon emits assistant-message + turn-complete in the same WS
+        // burst. WS handlers fire synchronously in arrival order, so in the
+        // same JS task we run:
+        //   1. assistant-message  (this handler)
+        //   2. turn-complete #1   (state → 'stopped' → loader pales)
+        //   3. turn-complete #2   (clears tool/reasoning streaming state)
+        //
+        // If we deferred the canonical-append via requestAnimationFrame,
+        // React would commit step 2/3 in the current frame (with the
+        // streaming bubble cleared but the canonical not yet added) — the
+        // assistant slot vanishes for one frame, the loader pops up, then
+        // rAF fires and the canonical lands and the loader pops back down.
+        // That's the visible up-and-down jump.
+        //
+        // Microtask defer fixes it: the canonical-append + streamingText
+        // clear runs at the END of the current task (after all sibling WS
+        // handlers) but BEFORE React commits the batch. So the single
+        // committed render has both `streamingText=''` AND canonical
+        // present — clean swap, no gap, no loader shift.
+        //
+        // flushNow first so the queued rAF delta lands in the same React
+        // batch — the streaming bubble's last-visible text matches the
+        // canonical text it's about to be replaced by.
+        assistantDeltaBatch.flushNow();
+        queueMicrotask(() => {
+          const s = useAppStore.getState();
+          s.appendMessages(pid, messages);
+          s.setStreamingText(pid, '');
+        });
       }),
       wsClient.on('session:assistant-delta', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
         const text = msg.payload?.text;
         if (pid && typeof text === 'string') {
-          store.setStreamingText(pid, text);
+          assistantDeltaBatch.set(pid, text);
         }
       }),
       wsClient.on('session:tool-delta', (msg: any) => {
@@ -453,7 +500,7 @@ function App() {
         const payload = msg.payload?.payload ?? null;
         if (!pid) return;
         if (payload === null) {
-          store.setToolStreaming(pid, null);
+          toolDeltaBatch.set(pid, null);
           return;
         }
         if (
@@ -461,7 +508,7 @@ function App() {
           typeof payload.toolName === 'string' &&
           typeof payload.output === 'string'
         ) {
-          store.setToolStreaming(pid, {
+          toolDeltaBatch.set(pid, {
             toolName: payload.toolName,
             input: payload.input,
             output: payload.output,
@@ -473,7 +520,7 @@ function App() {
         const pid = msg.processId || msg.payload?.processId;
         const text = msg.payload?.text;
         if (pid && typeof text === 'string') {
-          store.setReasoningStreaming(pid, text);
+          reasoningDeltaBatch.set(pid, text);
         }
       }),
       wsClient.on('git:status-changed', (msg: any) => {
@@ -506,7 +553,10 @@ function App() {
         // The daemon already pushes a canonical "Turn failed: ..." system
         // message and broadcasts it via session:tool-event, so don't append a
         // second copy here — that would put two error bubbles in the chat.
-        if (pid) store.setStreamingText(pid, '');
+        if (pid) {
+          assistantDeltaBatch.remove(pid);
+          store.setStreamingText(pid, '');
+        }
       }),
       wsClient.on('session:reconciled', (msg: any) => {
         // Daemon just confirmed disk == in-memory after a turn. Pull the
@@ -591,13 +641,21 @@ function App() {
       }),
       // Clear stale tool-progress when a turn completes — the SDK doesn't send a
       // "tool stopped" event so we infer it from turn boundaries.
+      //
+      // We deliberately do NOT clear streamingText here. The
+      // `session:assistant-message` handler owns that clear via a microtask
+      // so the canonical message lands in the same render as the clear —
+      // otherwise the streaming bubble vanishes one frame before canonical
+      // arrives, and the loader visibly bounces (see assistant-message
+      // handler comment). For turns that end without an assistant-message
+      // (aborts, errors, tool-only turns) the `session:idle` handler clears
+      // streamingText below.
       wsClient.on('session:turn-complete', (msg: any) => {
         const sessionId = msg.processId;
         if (typeof sessionId === 'string') {
           const live = useAppStore.getState();
           live.setToolProgress(sessionId, null);
           live.setSessionStatus(sessionId, { status: null });
-          live.setStreamingText(sessionId, '');
           live.setToolStreaming(sessionId, null);
           live.setReasoningStreaming(sessionId, '');
         }
@@ -610,7 +668,16 @@ function App() {
         const sessionId = msg.processId;
         const outcome = msg.payload?.outcome ?? 'completed';
         if (typeof sessionId !== 'string') return;
-        useAppStore.getState().setSessionIdle(sessionId, outcome);
+        const live = useAppStore.getState();
+        live.setSessionIdle(sessionId, outcome);
+        // Belt-and-braces: if the turn ended WITHOUT a final assistant
+        // message (aborts, errors, tool-only turns), the streaming text
+        // wasn't cleared by the assistant-message microtask. Drop any
+        // residual partial here so a stale bubble doesn't linger.
+        if (outcome !== 'completed') {
+          assistantDeltaBatch.remove(sessionId);
+          live.setStreamingText(sessionId, '');
+        }
       }),
       // session:mode-changed — broadcast when the operating mode flips.
       // Update store so the mode badge re-renders without polling.
@@ -666,6 +733,9 @@ function App() {
 
     return () => {
       offs.forEach(off => off());
+      assistantDeltaBatch.cancel();
+      reasoningDeltaBatch.cancel();
+      toolDeltaBatch.cancel();
       window.clearInterval(syncTimer);
       document.removeEventListener('visibilitychange', syncOnVisible);
       window.removeEventListener('focus', syncOnFocus);

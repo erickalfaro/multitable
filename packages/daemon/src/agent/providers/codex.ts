@@ -207,6 +207,25 @@ export class CodexAdapter implements ProviderAdapter {
 
     const threadId = await this.ensureThreadId(s);
 
+    // Persist the threadId on the session as soon as we know it. We do NOT
+    // rely on the `thread/started` notification for this because (a) its
+    // params shape is `{ thread: Thread }` with no top-level `threadId`, so
+    // our dispatcher (which routes by `params.threadId`) drops it, and
+    // (b) it fires during the thread/start RPC — before we've even
+    // subscribed for this thread, so it'd be unroutable anyway. Without
+    // this, `s.agentSessionId` stays null, the DB column stays null, and on
+    // page refresh the daemon can't find the rollout file to hydrate from
+    // disk → empty chat.
+    if (threadId !== s.agentSessionId) {
+      const previous = s.agentSessionId;
+      const nextHistory =
+        previous && !s.agentSessionIdHistory.includes(previous)
+          ? [...s.agentSessionIdHistory, previous]
+          : s.agentSessionIdHistory;
+      cb.onSessionIdAssigned(threadId, nextHistory);
+      cb.emitStateSnapshot();
+    }
+
     // Determine turnIndex from disk so live ids match what parseCodexThread
     // will later compute. New thread → 0; resumed thread → existing count.
     let turnIndex = 0;

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { AgentSession, SendTurnInput, AlertSeverity, SessionMode } from './types.js';
 import type { ProcessState } from '../types.js';
-import { parseCodexThread } from '../transcripts/codexParser.js';
+import { parseCodexThread, listCodexThreads } from '../transcripts/codexParser.js';
 import type { PermissionManager } from '../hooks/permissionManager.js';
 import type { ElicitationManager } from '../hooks/elicitationManager.js';
 import { createAlert } from './alerts.js';
@@ -141,15 +141,77 @@ export class AgentSessionManager extends EventEmitter {
     };
     this.sessions.set(session.id, session);
     // Codex hydration from on-disk JSONL — codex CLI is the source of truth.
-    if (session.provider === 'codex' && session.agentSessionId) {
-      try {
-        const hydrated = parseCodexThread(session.agentSessionId);
-        if (hydrated.length > 0) session.messages = hydrated;
-      } catch (err) {
-        console.error('[agent] codex hydration failed for', session.id, err);
+    if (session.provider === 'codex') {
+      // Recovery path: codex sessions created during the brief window where
+      // the new app-server adapter wasn't persisting `agentSessionId` ended
+      // up with null thread ids in the DB. The conversation IS still on disk
+      // (codex app-server writes rollouts regardless), but we need a way to
+      // locate the right rollout file. If a single rollout matches the
+      // session's cwd + multitable's originator and isn't already claimed
+      // by another session row, adopt it now and persist for next boot.
+      if (!session.agentSessionId && session.workingDir) {
+        const adopted = this.tryAdoptOrphanedCodexRollout(session);
+        if (adopted) {
+          session.agentSessionId = adopted;
+          session.agentSessionIdHistory = [];
+          session.claudeSessionId = adopted;
+          session.claudeSessionIdHistory = [];
+          try {
+            updateSession(session.id, {
+              agentSessionId: adopted,
+              agentSessionIdHistory: [],
+              claudeSessionId: adopted,
+              claudeSessionIdHistory: [],
+            });
+          } catch (err) {
+            console.error('[agent] failed to persist adopted codex thread:', err);
+          }
+        }
+      }
+      if (session.agentSessionId) {
+        try {
+          const hydrated = parseCodexThread(session.agentSessionId);
+          if (hydrated.length > 0) session.messages = hydrated;
+        } catch (err) {
+          console.error('[agent] codex hydration failed for', session.id, err);
+        }
       }
     }
     return session;
+  }
+
+  /**
+   * Find a rollout file for a codex session whose `agentSessionId` is null.
+   * Returns the threadId to adopt, or null if there's no unambiguous match.
+   * Conservative: only adopts when exactly ONE rollout matches the session's
+   * cwd + multitable's originator and isn't already claimed by another
+   * session row in this manager (claim = same threadId in agentSessionId).
+   */
+  private tryAdoptOrphanedCodexRollout(session: AgentSession): string | null {
+    try {
+      const candidates = listCodexThreads({ cwd: session.workingDir }).filter(
+        (h) => h.originator === 'multitable-daemon',
+      );
+      if (candidates.length === 0) return null;
+      const claimed = new Set<string>();
+      for (const other of this.sessions.values()) {
+        if (other.id === session.id) continue;
+        if (other.agentSessionId) claimed.add(other.agentSessionId);
+        for (const id of other.agentSessionIdHistory) claimed.add(id);
+      }
+      const unclaimed = candidates.filter((h) => !claimed.has(h.threadId));
+      // Single-match rule: if there's exactly one unclaimed rollout for this
+      // cwd, take it. If multiple, we can't disambiguate safely — skip.
+      if (unclaimed.length !== 1) return null;
+      console.info('[agent] adopting orphaned codex rollout', {
+        sessionId: session.id,
+        threadId: unclaimed[0].threadId,
+      });
+      return unclaimed[0].threadId;
+    } catch (err) {
+      console.error('[agent] orphan-rollout adoption failed:', err);
+      return null;
+    }
   }
 
   get(id: string): AgentSession | undefined {
