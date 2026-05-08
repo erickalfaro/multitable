@@ -1,7 +1,8 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { Send, Paperclip, X, Clock, Square } from 'lucide-react';
+import { ArrowUp, Paperclip, X, Clock, Square, Maximize2 } from 'lucide-react';
 
 import { AgentBadge } from '../../ui';
+import { ExpandedComposer, type ImageAttachment } from './ExpandedComposer';
 
 // Stable empty array so the pending-sends selector doesn't churn on
 // unrelated store updates.
@@ -132,6 +133,49 @@ export const ChatInputCM = memo(function ChatInputCM({
   // inline styles throughout; Tailwind hover utilities aren't wired here.
   const [attachHover, setAttachHover] = useState(false);
   const [sendHover, setSendHover] = useState(false);
+  const [expandHover, setExpandHover] = useState(false);
+  const [focused, setFocused] = useState(false);
+
+  // Image attachments registry — populated alongside the existing
+  // upload+quoted-path injection. The Preview tab in ExpandedComposer reads
+  // this to render Obsidian-style inline thumbnails for paths it finds in the
+  // markdown source. Sent text is unchanged (still the quoted path).
+  const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
+  const attachmentsRef = useRef<ImageAttachment[]>(imageAttachments);
+  attachmentsRef.current = imageAttachments;
+
+  // Expand-to-modal state. While true, ExpandedComposer renders its own CM
+  // editor; the inline editor stays mounted (and visible behind the modal
+  // backdrop) so its DOM/state are preserved. Sync direction is one-way on
+  // close: modal → inline.
+  const [expanded, setExpanded] = useState(false);
+
+  const addImageAttachment = useCallback((att: ImageAttachment) => {
+    setImageAttachments((prev) => [...prev, att]);
+  }, []);
+
+  const removeImageAttachment = useCallback((path: string) => {
+    setImageAttachments((prev) => {
+      const target = prev.find((a) => a.path === path);
+      if (target) URL.revokeObjectURL(target.blobUrl);
+      return prev.filter((a) => a.path !== path);
+    });
+  }, []);
+
+  const clearImageAttachments = useCallback(() => {
+    setImageAttachments((prev) => {
+      prev.forEach((a) => URL.revokeObjectURL(a.blobUrl));
+      return [];
+    });
+  }, []);
+
+  // Revoke any leftover blob URLs on unmount so we don't leak when the user
+  // navigates away mid-draft.
+  useEffect(() => {
+    return () => {
+      attachmentsRef.current.forEach((a) => URL.revokeObjectURL(a.blobUrl));
+    };
+  }, []);
   // Sessions are SDK-driven: 'stopped'/'idle' means "ready to start a new turn",
   // 'running' means a turn is in flight (we client-side queue more sends),
   // 'errored' means the last turn failed. Keep the editor usable so the user
@@ -279,6 +323,7 @@ export const ChatInputCM = memo(function ChatInputCM({
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: '' },
         });
+        clearImageAttachments();
         return true;
       }
 
@@ -309,6 +354,9 @@ export const ChatInputCM = memo(function ChatInputCM({
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: '' },
       });
+      // The text was sent (or queued); the registry references that text and
+      // is no longer useful. Revoke blob URLs to free memory.
+      clearImageAttachments();
       return true;
     };
     onSendRef.current = doSend;
@@ -316,6 +364,10 @@ export const ChatInputCM = memo(function ChatInputCM({
     const uploadFile = async (file: File) => {
       if (!file.type.startsWith('image/')) return false;
       const id = toast.loading(`Uploading ${file.name || 'image'}…`);
+      // Capture a blob URL immediately so the Preview tab can show a thumbnail
+      // even while the upload is in flight. We register it after the upload
+      // succeeds so the path → blobUrl mapping is always valid.
+      const blobUrl = URL.createObjectURL(file);
       try {
         const res = await uploadAttachment(attachmentKind, processId, file);
         const injected = quotePath(res.path) + ' ';
@@ -324,8 +376,10 @@ export const ChatInputCM = memo(function ChatInputCM({
           view.dispatch(view.state.replaceSelection(injected));
           view.focus();
         }
+        addImageAttachment({ path: res.path, filename: res.filename, blobUrl });
         toast.success(`Attached ${res.filename}`, { id });
       } catch (err: any) {
+        URL.revokeObjectURL(blobUrl);
         toast.error(`Upload failed: ${err?.message ?? err}`, { id });
       }
       return true;
@@ -403,11 +457,16 @@ export const ChatInputCM = memo(function ChatInputCM({
       // detail panel so the keyboard + chat take the full viewport. Desktop
       // is unaffected — the panel is stable enough alongside a wide composer.
       focus: () => {
+        setFocused(true);
         if (typeof window !== 'undefined' && window.innerWidth < 768) {
           if (useAppStore.getState().detailPanelOpen) {
             useAppStore.getState().setDetailPanelOpen(false);
           }
         }
+        return false;
+      },
+      blur: () => {
+        setFocused(false);
         return false;
       },
     });
@@ -555,6 +614,7 @@ export const ChatInputCM = memo(function ChatInputCM({
       for (const f of files) {
         if (!f.type.startsWith('image/')) continue;
         const id = toast.loading(`Uploading ${f.name}…`);
+        const blobUrl = URL.createObjectURL(f);
         try {
           const res = await uploadAttachment(attachmentKind, processId, f);
           const view = viewRef.current;
@@ -562,8 +622,10 @@ export const ChatInputCM = memo(function ChatInputCM({
             view.dispatch(view.state.replaceSelection(quotePath(res.path) + ' '));
             view.focus();
           }
+          addImageAttachment({ path: res.path, filename: res.filename, blobUrl });
           toast.success(`Attached ${res.filename}`, { id });
         } catch (err: any) {
+          URL.revokeObjectURL(blobUrl);
           toast.error(`Upload failed: ${err?.message ?? err}`, { id });
         }
       }
@@ -581,129 +643,168 @@ export const ChatInputCM = memo(function ChatInputCM({
   return (
     <div
       style={{
-        padding: '10px 14px 14px',
+        padding: '8px 12px 12px',
         backgroundColor: 'var(--bg-sidebar)',
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
       }}
     >
-      {pendingSends.length > 0 && (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 4,
-            marginBottom: 6,
-          }}
-        >
-          {pendingSends.map((text, i) => (
-            <div
-              key={i}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '4px 8px',
-                fontSize: 11.5,
-                color: 'var(--text-secondary)',
-                backgroundColor: 'var(--bg-elevated)',
-                border: '1px dashed var(--border-strong)',
-                borderRadius: 'var(--radius-snug)',
-              }}
-            >
-              <Clock size={11} style={{ color: 'var(--accent-amber)', flexShrink: 0 }} />
-              <span
-                style={{
-                  flex: 1,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontFamily: 'inherit',
-                }}
-                title={text}
-              >
-                {text}
-              </span>
-              <button
-                onClick={() => removePendingSend(processId, i)}
-                title="Remove from queue"
-                aria-label="Remove queued message"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 18,
-                  height: 18,
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                }}
-              >
-                <X size={11} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          gap: 8,
+          flexDirection: 'column',
+          gap: 6,
+          padding: '8px 10px',
+          backgroundColor: 'var(--bg-elevated)',
+          border: `1px solid ${focused ? 'var(--border-strong)' : 'var(--border)'}`,
+          borderRadius: 'var(--radius-composer)',
+          boxShadow: 'var(--shadow-composer)',
+          transition:
+            'border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
         }}
       >
-        <button
-          onClick={onAttachClick}
-          disabled={disabled}
-          title="Attach image"
-          onMouseEnter={() => setAttachHover(true)}
-          onMouseLeave={() => setAttachHover(false)}
+        {pendingSends.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+            }}
+          >
+            {pendingSends.map((text, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 8px',
+                  fontSize: 11.5,
+                  color: 'var(--text-secondary)',
+                  backgroundColor: 'var(--bg-sidebar)',
+                  border: '1px dashed var(--border-strong)',
+                  borderRadius: 'var(--radius-snug)',
+                }}
+              >
+                <Clock size={11} style={{ color: 'var(--accent-amber)', flexShrink: 0 }} />
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    fontFamily: 'inherit',
+                  }}
+                  title={text}
+                >
+                  {text}
+                </span>
+                <button
+                  onClick={() => removePendingSend(processId, i)}
+                  title="Remove from queue"
+                  aria-label="Remove queued message"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 18,
+                    height: 18,
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                  }}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div
           style={{
-            display: 'inline-flex',
+            display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            width: 26,
-            height: 26,
-            borderRadius: 'var(--radius-snug)',
-            border: 'none',
-            background: attachHover && !disabled ? 'var(--bg-hover)' : 'transparent',
-            color: 'var(--text-muted)',
-            cursor: disabled ? 'not-allowed' : 'pointer',
-            flexShrink: 0,
-            alignSelf: 'center',
-            transition: 'background-color var(--dur-fast) var(--ease-out)',
+            gap: 8,
           }}
         >
-          <Paperclip size={13} />
-        </button>
+          <button
+            onClick={onAttachClick}
+            disabled={disabled}
+            title="Attach image"
+            onMouseEnter={() => setAttachHover(true)}
+            onMouseLeave={() => setAttachHover(false)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 26,
+              height: 26,
+              borderRadius: 'var(--radius-snug)',
+              border: 'none',
+              background: attachHover && !disabled ? 'var(--bg-hover)' : 'transparent',
+              color: 'var(--text-muted)',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              flexShrink: 0,
+              alignSelf: 'center',
+              transition: 'background-color var(--dur-fast) var(--ease-out)',
+            }}
+          >
+            <Paperclip size={13} />
+          </button>
 
-        {agentProvider && (
-          <AgentBadge
-            provider={agentProvider}
-            size="chip"
-            style={{ alignSelf: 'center', flexShrink: 0 }}
+          <button
+            onClick={() => setExpanded(true)}
+            disabled={disabled}
+            title="Expand composer"
+            aria-label="Expand composer"
+            onMouseEnter={() => setExpandHover(true)}
+            onMouseLeave={() => setExpandHover(false)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 26,
+              height: 26,
+              borderRadius: 'var(--radius-snug)',
+              border: 'none',
+              background: expandHover && !disabled ? 'var(--bg-hover)' : 'transparent',
+              color: 'var(--text-muted)',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              flexShrink: 0,
+              alignSelf: 'center',
+              transition: 'background-color var(--dur-fast) var(--ease-out)',
+            }}
+          >
+            <Maximize2 size={12} />
+          </button>
+
+          {agentProvider && (
+            <AgentBadge
+              provider={agentProvider}
+              size="chip"
+              style={{ alignSelf: 'center', flexShrink: 0 }}
+            />
+          )}
+
+          <div
+            ref={containerRef}
+            className="mt-cm-composer"
+            style={{
+              flex: 1,
+              minHeight: 26,
+              maxHeight: '40vh',
+              overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'stretch',
+              alignSelf: 'stretch',
+              opacity: disabled ? 0.55 : 1,
+            }}
           />
-        )}
 
-        <div
-          ref={containerRef}
-          className="mt-cm-composer"
-          style={{
-            flex: 1,
-            minHeight: 26,
-            maxHeight: '40vh',
-            overflow: 'hidden',
-            display: 'flex',
-            alignItems: 'stretch',
-            alignSelf: 'stretch',
-            opacity: disabled ? 0.55 : 1,
-          }}
-        />
-
-        {active ? (
+          {active ? (
           // Agent is mid-turn → the button at the send slot becomes Stop.
           // Click aborts the in-flight turn via /api/sessions/:id/stop, which
           // calls agentManager.abortTurn → ctrl.abort() → the SDK iterator
@@ -762,19 +863,28 @@ export const ChatInputCM = memo(function ChatInputCM({
               width: 28,
               height: 28,
               borderRadius: 'var(--radius-snug)',
-              border: 'none',
-              backgroundColor: sendHover && canSend ? 'var(--bg-hover)' : 'transparent',
-              color: canSend ? 'var(--accent-amber)' : 'var(--text-faint)',
+              border: canSend ? 'none' : '1px solid var(--border)',
+              // Filled affordance: when there's text to send the button reads
+              // as a primary action (light pill on dark, dark pill on light).
+              // When idle, falls back to a hairline outline so it doesn't
+              // dominate the empty state.
+              backgroundColor: canSend
+                ? sendHover
+                  ? 'var(--text-secondary)'
+                  : 'var(--text-primary)'
+                : 'transparent',
+              color: canSend ? 'var(--bg-elevated)' : 'var(--text-faint)',
               cursor: canSend ? 'pointer' : 'not-allowed',
               flexShrink: 0,
               alignSelf: 'center',
               transition:
-                'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+                'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
             }}
           >
-            <Send size={13} />
+            <ArrowUp size={15} strokeWidth={2.4} />
           </button>
         )}
+        </div>
       </div>
 
       {state === 'errored' && (
@@ -790,6 +900,58 @@ export const ChatInputCM = memo(function ChatInputCM({
         >
           Last turn failed. Send a new message to retry.
         </div>
+      )}
+
+      {expanded && (
+        <ExpandedComposer
+          processId={processId}
+          projectId={projectId}
+          attachmentKind={attachmentKind}
+          initialText={viewRef.current?.state.doc.toString() ?? ''}
+          imageAttachments={imageAttachments}
+          active={active}
+          state={state}
+          agentProvider={agentProvider}
+          onAddAttachment={addImageAttachment}
+          onRemoveAttachment={removeImageAttachment}
+          onClose={(finalText) => {
+            // Sync the modal's text back into the inline editor on close.
+            // The user expects no work loss when they pop in/out of expanded
+            // mode; the inline buffer is the canonical draft once collapsed.
+            const view = viewRef.current;
+            if (view) {
+              view.dispatch({
+                changes: { from: 0, to: view.state.doc.length, insert: finalText },
+              });
+            }
+            setExpanded(false);
+          }}
+          onSend={(text) => {
+            // Send pipeline mirrors inline doSend: queue if a turn is in
+            // flight, otherwise dispatch via wsClient. We DO NOT route through
+            // the inline CM — its content is irrelevant once the modal sends.
+            const live = useAppStore.getState();
+            const session = live.sessions[processId];
+            const queueHasHead = !!live.pendingSendsBySession?.[processId]?.length;
+            const isIdle = session?.state === 'stopped' && !queueHasHead;
+            if (!isIdle) {
+              live.enqueueSend(processId, text);
+            } else {
+              live.updateProcessState(processId, 'running');
+              wsClient.sendTurn(processId, text);
+            }
+            // Clear the inline editor so the user doesn't see stale text after
+            // the modal closes. Attachments belong to the just-sent message.
+            const view = viewRef.current;
+            if (view) {
+              view.dispatch({
+                changes: { from: 0, to: view.state.doc.length, insert: '' },
+              });
+            }
+            clearImageAttachments();
+            setExpanded(false);
+          }}
+        />
       )}
     </div>
   );

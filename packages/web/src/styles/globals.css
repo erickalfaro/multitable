@@ -91,6 +91,18 @@
     0 10px 24px rgba(0, 0, 0, 0.65),
     0 2px 6px rgba(0, 0, 0, 0.45);
 
+  /* Second deliberate exception: the chat composer reads as a floating card
+     above the chat tray. Subtle two-stop drop shadow — the close-in stop
+     pins the edge, the wider stop separates it from the surface. */
+  --shadow-composer:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 10px 28px rgba(0, 0, 0, 0.45);
+
+  /* Soft container radius for the composer card — sits between --radius-soft
+     (4px, content cards) and --radius-pill. Manifesto exception scoped to a
+     single component; do not reuse for general containers. */
+  --radius-composer: 10px;
+
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-snap: cubic-bezier(0.22, 1, 0.36, 1);
@@ -164,6 +176,11 @@
   --shadow-elevated-message:
     0 6px 16px rgba(40, 30, 18, 0.18),
     0 1px 3px rgba(40, 30, 18, 0.12);
+
+  /* Composer floating shadow — softer on the cream canvas. */
+  --shadow-composer:
+    0 1px 2px rgba(40, 30, 18, 0.10),
+    0 8px 22px rgba(40, 30, 18, 0.14);
 
   color-scheme: light;
 }
@@ -447,6 +464,12 @@ select:focus-visible,
   caret-color: var(--accent-amber);
   min-height: 20px;
   font-family: inherit;
+}
+/* Expanded variant — taller scroller to fit the modal's 60vh+ canvas. The
+   double-class selector wins specificity against .mt-cm-composer alone. */
+.mt-cm-composer.mt-cm-composer-expanded .cm-scroller {
+  max-height: 70vh;
+  min-height: 60vh;
 }
 
 /* ---------- CodeMirror autocomplete popup ---------- */
