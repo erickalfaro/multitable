@@ -13,7 +13,7 @@ const RAIL_X       = 5;  // x of the dot/line center within the gutter
 const DOT_SIZE     = 7;  // dot diameter
 const DOT_TOP      = 9;  // y center of dot from row top — aligns with cards' first text line
 const ROW_GAP      = 8;  // breathing room between rows (padding-bottom)
-const TURN_GAP_END = 14; // gap below the entire turn before the next user prompt
+export const TURN_GAP_END = 14; // gap below the entire turn before the next user prompt
 const LOADER_PX    = 18; // loader avatar diameter — circular node housing the loader
 
 interface DotProps {
@@ -51,9 +51,11 @@ function Dot({ message, pending, isError }: DotProps) {
 function RailLine({
   fromTop,
   toBottom,
+  opacity = 1,
 }: {
   fromTop: number;
   toBottom: number | string;
+  opacity?: number;
 }) {
   return (
     <div
@@ -66,6 +68,8 @@ function RailLine({
         width: 1,
         background: 'var(--border-strong)',
         zIndex: 1,
+        opacity,
+        transition: 'opacity var(--dur-med) var(--ease-out)',
       }}
     />
   );
@@ -78,11 +82,18 @@ interface TurnRowProps {
       of the row — used so the rail visually flows into a TrailingLoader
       rendered as a sibling below. */
   extendLineDown?: boolean;
+  /** Optional id → React-key map. When a canonical message that replaced a
+      streaming preview is rendered, this lets the row keep the React key the
+      preview was using, so React reuses the existing inner row instance
+      instead of unmounting and re-mounting. Without this propagation the
+      outer <div key={m.id}> here would be the actual mount/unmount boundary,
+      defeating MessageList's swap-anchor logic. */
+  keyOverrides?: Map<string, string>;
   /** One ReactNode per `messages` entry, in matching order. */
   children: React.ReactNode;
 }
 
-export function TurnRow({ messages, resultsByUseId, extendLineDown, children }: TurnRowProps) {
+export function TurnRow({ messages, resultsByUseId, extendLineDown, keyOverrides, children }: TurnRowProps) {
   const childArr = React.Children.toArray(children);
   const showLine = messages.length > 1 || (messages.length >= 1 && extendLineDown);
 
@@ -98,9 +109,10 @@ export function TurnRow({ messages, resultsByUseId, extendLineDown, children }: 
           pending = !r;
           isError = !!r?.isError;
         }
+        const rowKey = keyOverrides?.get(m.id) ?? m.id;
         return (
           <div
-            key={m.id}
+            key={rowKey}
             style={{
               position: 'relative',
               paddingBottom: i === messages.length - 1 && !extendLineDown ? 0 : ROW_GAP,
@@ -135,6 +147,17 @@ interface TrailingLoaderProps {
  * turn block as a tail) prevents React from unmounting / remounting the
  * dot-matrix loader on every block transition, which would reset its
  * animation state.
+ *
+ * Layout invariance: `marginTop: -TURN_GAP_END` is constant regardless of
+ * `connected`. When the previous block is a TurnRow (connected), its own
+ * `marginBottom: TURN_GAP_END` is exactly cancelled here so the rail line
+ * flows continuously into the loader. When the previous block is a user /
+ * system block (disconnected), the upstream renderer is responsible for
+ * adding `paddingBottom: TURN_GAP_END` so the visible gap stays correct —
+ * see MessageList.tsx, which wraps the last user / system block. The result:
+ * the loader's screen y-position is identical before and after the first
+ * delta of a turn lands, so the loader never visibly jumps as streaming
+ * begins; only the rail line above it cross-fades into view.
  */
 export function TrailingLoader({ children, connected }: TrailingLoaderProps) {
   return (
@@ -142,15 +165,15 @@ export function TrailingLoader({ children, connected }: TrailingLoaderProps) {
       style={{
         position: 'relative',
         minHeight: LOADER_PX,
-        // Pull up to close the gap left by the previous TurnRow's
-        // marginBottom — the rail line should appear continuous.
-        marginTop: connected ? -TURN_GAP_END : 0,
+        marginTop: -TURN_GAP_END,
         marginBottom: TURN_GAP_END,
       }}
     >
-      {connected && (
-        <RailLine fromTop={0} toBottom={`calc(100% - ${DOT_TOP}px)`} />
-      )}
+      <RailLine
+        fromTop={0}
+        toBottom={`calc(100% - ${DOT_TOP}px)`}
+        opacity={connected ? 1 : 0}
+      />
       <span
         aria-hidden
         style={{

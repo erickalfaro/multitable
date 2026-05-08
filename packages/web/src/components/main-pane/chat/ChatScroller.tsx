@@ -106,27 +106,27 @@ export function ChatScroller({ children, className, style }: Props) {
   }, [isStuck]);
 
   // Auto-track: when content height changes, snap to bottom if the user is
-  // already there. This is what makes streaming feel locked to the latest
-  // text without doing a layout pass per chunk — ResizeObserver coalesces
-  // multiple growths into a single notification per animation frame.
+  // already there. ResizeObserver fires synchronously after layout and BEFORE
+  // the browser paints, so writing `scrollTop` here lands in the SAME paint
+  // as the layout change that fired it. The previous version deferred the
+  // snap into a `requestAnimationFrame`, which split each delta across two
+  // frames: frame N painted the new content with the OLD scrollTop (loader
+  // visually drifted Δ pixels below the viewport bottom), then frame N+1
+  // applied the snap and the loader jumped back. Repeated 30+ times a second
+  // during streaming, that two-frame wobble was the perceived jitter — the
+  // loader appearing to "chase" the stream rather than sit on top of it.
+  // Coalescing is unnecessary because ResizeObserver itself batches into one
+  // callback per layout pass, and `rafBatch` already coalesces store writes
+  // to one update per animation frame upstream.
   useEffect(() => {
     const scroller = scrollRef.current;
     const content = contentRef.current;
     if (!scroller || !content) return;
-    let pending = false;
     const ro = new ResizeObserver(() => {
-      if (pending) return;
-      pending = true;
-      requestAnimationFrame(() => {
-        pending = false;
-        if (!scrollRef.current) return;
-        if (!atBottomRef.current) return;
-        // Direct assignment, not scrollTo({behavior:'smooth'}): smooth
-        // animation lags behind content during fast streams. Instant-snap
-        // 60 times/sec produces a continuous tracking effect.
-        programmaticUntilRef.current = performance.now() + 50;
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      });
+      if (!scrollRef.current) return;
+      if (!atBottomRef.current) return;
+      programmaticUntilRef.current = performance.now() + 50;
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     });
     ro.observe(content);
     return () => ro.disconnect();

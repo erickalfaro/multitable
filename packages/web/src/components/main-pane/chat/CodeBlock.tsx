@@ -1,9 +1,18 @@
-import React, { memo, useEffect, useState, useRef } from 'react';
+import React, { memo, useEffect, useMemo, useState, useRef } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { getHighlighter, normalizeLang, pickShikiTheme } from '../../../lib/shiki';
 import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
 import { useIsStreaming } from './StreamingContext';
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 interface Props {
   code: string;
@@ -121,32 +130,29 @@ export const CodeBlock = memo(function CodeBlock({ code, lang }: Props) {
   // first render after streaming ends.
   const showHtml = !isStreaming && html;
 
+  // Both modes resolve to a string of HTML rendered into the SAME inner
+  // <div className="mt-scroll mt-shiki">. The element type, className, and
+  // box geometry are identical between modes — only the inner glyphs
+  // differ — so when shiki resolves async there is no element remount and
+  // no padding change to visibly reflow the surrounding chat.
+  // (The `.mt-shiki pre` rule in globals.css gives the inner pre its
+  // 10px 16px padding in both cases.)
+  const innerHtml = useMemo(() => {
+    if (showHtml) return html as string;
+    return `<pre style="color:var(--text-primary);white-space:pre;">${escapeHtml(code)}</pre>`;
+  }, [showHtml, html, code]);
+
   return (
     <div
       style={wrapperStyle}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      {showHtml ? (
-        <div
-          className="mt-scroll mt-shiki"
-          style={{ overflowX: 'auto' }}
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      ) : (
-        <pre
-          className="mt-scroll"
-          style={{
-            margin: 0,
-            padding: '10px 16px',
-            color: 'var(--text-primary)',
-            whiteSpace: 'pre',
-            overflowX: 'auto',
-          }}
-        >
-          {code}
-        </pre>
-      )}
+      <div
+        className="mt-scroll mt-shiki"
+        style={{ overflowX: 'auto' }}
+        dangerouslySetInnerHTML={{ __html: innerHtml }}
+      />
       <CopyButton text={code} visible={hover} />
     </div>
   );
