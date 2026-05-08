@@ -192,4 +192,8 @@ export interface ProviderAdapter {
   // Optional: tear down per-session resources entirely. Called from session
   // delete. For Copilot this will eventually call session.disconnect().
   destroy?(s: AgentSession): void | Promise<void>;
+
+  // Optional: tear down daemon-wide adapter resources (long-lived child
+  // processes, singleton clients). Called from the daemon's SIGTERM handler.
+  shutdown?(): void | Promise<void>;
 }

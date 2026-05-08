@@ -562,6 +562,20 @@ export class AgentSessionManager extends EventEmitter {
     this.sessions.delete(sessionId);
   }
 
+  /**
+   * Daemon-shutdown hook. Tears down every adapter's long-lived resources
+   * (e.g. the codex app-server child). Idempotent.
+   */
+  async shutdown(): Promise<void> {
+    for (const adapter of Object.values(this.adapters)) {
+      try {
+        await adapter.shutdown?.();
+      } catch (err) {
+        console.error('[agent] adapter.shutdown failed:', err);
+      }
+    }
+  }
+
   resetSession(sessionId: string): void {
     this.abortTurn(sessionId);
     const s = this.sessions.get(sessionId);

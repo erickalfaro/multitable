@@ -214,6 +214,7 @@ async function main() {
     fileWatcher.unwatchAll();
     gitWatcher.unwatchAll();
     manager.destroy();
+    void agentManager.shutdown();
     serverInstance.closeAllClients();
     void tgBridge.stop();
     server.close(() => process.exit(0));

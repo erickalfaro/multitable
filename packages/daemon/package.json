@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.119",
-    "@openai/codex-sdk": "^0.128.0",
     "better-sqlite3": "^11.5.0",
     "chokidar": "^3.6.0",
     "env-paths": "^2.0.0",

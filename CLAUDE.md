@@ -54,7 +54,7 @@ Two SDKs are wired today and authenticate independently.
 - `ANTHROPIC_API_KEY` env var (preferred for daemons), or
 - `~/.claude/auth.json` (populated by `claude login`).
 
-**Codex SDK** is a thin subprocess wrapper around `codex exec --experimental-json` (see `node_modules/@openai/codex-sdk/dist/index.js`). It inherits `process.env` and reads the codex CLI's own auth (`~/.codex/auth.json`, populated by `codex login`).
+**Codex** speaks JSON-RPC over stdio against a long-lived `codex app-server` child process (one per daemon, lazy-spawned on first Codex use). The child inherits `process.env` and reads the codex CLI's own auth (`~/.codex/auth.json`, populated by `codex login`). The `@openai/codex-sdk` dependency was removed — see `agent/providers/codex-app-server/` for the transport + client and `agent/providers/codex-protocol/` for the generated TS bindings (regenerate via `codex app-server generate-ts`; pinned codex-cli version lives in `_codex-cli-version.ts`).
 
 If credentials are missing, the first turn fails. Surface via the `session:turn-error` toast.
 
@@ -62,8 +62,10 @@ If credentials are missing, the first turn fails. Surface via the `session:turn-
 
 `AgentSession.provider` is `'claude' | 'codex'` (extensible). Each provider has an adapter under `packages/daemon/src/agent/providers/`:
 
-- `types.ts` — `ProviderAdapter` contract: `runTurn(s, text, ctrl, callbacks)` and optional `reset(s)`. `AdapterCallbacks` are the manager-owned hooks an adapter calls into.
-- `codex.ts` — `CodexAdapter`: wraps `@openai/codex-sdk`. Owns the per-session `Thread` cache.
+- `types.ts` — `ProviderAdapter` contract: `runTurn(s, text, ctrl, callbacks)`, optional `reset(s)`, optional `destroy(s)` (per-session), optional `shutdown()` (daemon-wide). `AdapterCallbacks` are the manager-owned hooks an adapter calls into.
+- `codex.ts` — `CodexAdapter`: drives `codex app-server` via JSON-RPC. Owns a per-session `{threadId, mode}` cache that the `setMode` flow blows away on mode flip (Codex options are immutable post-thread-start).
+- `codex-app-server/` — `CodexAppServerTransport` (line-delimited JSON-RPC over child stdio) + `CodexAppServerClient` (singleton with per-thread notification fan-out, auto-deny ServerRequest handlers, lazy spawn, crash-respawn watchdog).
+- `codex-protocol/` — generated TS bindings for the `codex app-server` protocol. Regenerate via `codex app-server generate-ts --out packages/daemon/src/agent/providers/codex-protocol/` and bump `_codex-cli-version.ts`.
 - Claude logic still lives inline in `agent/manager.ts` (its handlers are tightly coupled to permission/elicitation/hook plumbing). Treat the manager as the de-facto Claude adapter.
 - `index.ts` — re-exports.
 
@@ -71,8 +73,8 @@ To add a new provider: drop a `<provider>.ts` adapter under `agent/providers/`, 
 
 ### Codex specifics
 
-- **Approval policy is hardcoded to `'never'`** in `CodexAdapter.getThread`. The Codex SDK closes child stdin after writing the prompt and exposes no host-side approval callback, so any other policy will hang or auto-fail. Tool gating happens via `sandboxMode: 'workspace-write'` + `additionalDirectories` + `networkAccessEnabled`. `PermissionManager` stays Claude-only by design.
-- **Streaming response previews.** Codex emits `agent_message` item updates through `runStreamed()`. The adapter forwards each updated item text over the shared `session:assistant-delta` WS path, then keeps `item.completed` as the canonical final message.
+- **Approval policy is hardcoded to `'never'`** on every `thread/start` and `thread/resume` request. Tool gating happens via the spawn-time `sandbox` enum (`read-only` / `workspace-write` / `danger-full-access`). The client also auto-denies any approval ServerRequests defensively. `PermissionManager` stays Claude-only by design.
+- **Streaming response previews.** Codex emits per-chunk `item/agentMessage/delta` notifications (`streamingDeltaSemantics: 'additive'`); the adapter accumulates per-item buffers and forwards cumulative text over `session:assistant-delta`. `item/completed` carries the canonical final message. `item/reasoning/textDelta` and `item/commandExecution/outputDelta` follow the same pattern for reasoning + tool output.
 - **No USD cost field on `Usage`.** Token counts populate; the dollar row is hidden in the cost UI for Codex sessions.
 - **Thread persistence** is owned by the codex CLI under `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<thread_id>.jsonl`. `transcripts/codexParser.ts` reads these into the same `Message[]` shape the Claude JSONL parser produces. `AgentSessionManager.register` hydrates `s.messages` from disk on startup; `/api/sessions/:id/messages` re-hydrates if the in-memory cache is empty.
 - **Past Codex threads** are listed via `GET /api/transcripts/codex` and resumed via `POST /api/transcripts/codex/:threadId/resume`. The AddAgentModal renders them as a separate section under "Or resume a Codex thread".
