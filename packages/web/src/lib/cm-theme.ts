@@ -31,8 +31,6 @@ export function buildCmTheme(isDark: boolean): Extension {
         backgroundColor: 'transparent',
         color: text,
         fontSize: '13.5px',
-        fontFamily:
-          '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
       },
       '&.cm-editor.cm-focused': {
         outline: 'none',
@@ -44,10 +42,11 @@ export function buildCmTheme(isDark: boolean): Extension {
       },
       '.cm-content': {
         padding: '8px 2px',
-        caretColor: accent,
+        lineHeight: '1.5',
       },
       '.cm-line': {
         padding: '0',
+        lineHeight: '1.5',
       },
       '.cm-cursor, .cm-dropCursor': {
         borderLeftColor: accent,

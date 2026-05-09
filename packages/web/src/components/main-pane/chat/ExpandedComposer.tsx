@@ -1,13 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Paperclip, Square, X } from 'lucide-react';
+import { Check, Paperclip, X } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Streamdown } from 'streamdown';
 import 'streamdown/styles.css';
 
 import { Modal } from '../../ui/Modal';
-import { ModeBadge } from '../ModeBadge';
-import { api } from '../../../lib/api';
-import type { ProcessState } from '../../../lib/types';
 import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
 import { buildCmTheme } from '../../../lib/cm-theme';
@@ -76,12 +73,13 @@ interface Props {
   attachmentKind: 'session' | 'terminal';
   initialText: string;
   imageAttachments: ImageAttachment[];
-  active: boolean;
-  state: ProcessState;
   onAddAttachment: (a: ImageAttachment) => void;
   onRemoveAttachment: (path: string) => void;
+  // The expanded composer is a drafting surface only. All exits — Accept
+  // button, Esc, click-outside — funnel through onClose with the current
+  // editor text; the inline composer remains the only path that actually
+  // dispatches a turn to the LLM.
   onClose: (finalText: string) => void;
-  onSend: (text: string) => void;
 }
 
 // Rewrite quoted/unquoted attachment paths in the markdown source as
@@ -111,19 +109,15 @@ export function ExpandedComposer({
   attachmentKind,
   initialText,
   imageAttachments,
-  active,
-  state,
   onAddAttachment,
   onRemoveAttachment,
   onClose,
-  onSend,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [tab, setTab] = useState<'edit' | 'preview'>('edit');
   const [text, setText] = useState(initialText);
-  const [hasText, setHasText] = useState(initialText.trim().length > 0);
-  const [sendHover, setSendHover] = useState(false);
+  const [acceptHover, setAcceptHover] = useState(false);
   const [attachHover, setAttachHover] = useState(false);
 
   const projectIdRef = useRef(projectId);
@@ -131,7 +125,6 @@ export function ExpandedComposer({
 
   const activeThemeId = useAppStore((s) => s.activeThemeId);
   const customThemes = useAppStore((s) => s.customThemes);
-  const session = useAppStore((s) => s.sessions[processId]);
   const themeCompartment = useRef(new Compartment());
 
   const pickTheme = useCallback(() => {
@@ -142,19 +135,10 @@ export function ExpandedComposer({
 
   // Refs over props so the once-mount CM closures see fresh callbacks without
   // forcing a re-mount (which would lose CM internal state, focus, undo).
-  const onSendRef = useRef(onSend);
-  onSendRef.current = onSend;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const addAttRef = useRef(onAddAttachment);
   addAttRef.current = onAddAttachment;
-
-  const handleSend = useCallback(() => {
-    const view = viewRef.current;
-    const t = (view ? view.state.doc.toString() : text).trim();
-    if (!t) return;
-    onSendRef.current(t);
-  }, [text]);
 
   const handleClose = useCallback(() => {
     const view = viewRef.current;
@@ -188,19 +172,6 @@ export function ExpandedComposer({
       }
       return true;
     };
-
-    const composerKeymap = keymap.of([
-      // Modal composer is intentionally newline-friendly: Enter inserts a
-      // newline (default behavior), Cmd/Ctrl+Enter sends. The expanded view
-      // is for drafting longer prose where Enter-to-send would be hostile.
-      {
-        key: 'Mod-Enter',
-        run: () => {
-          handleSend();
-          return true;
-        },
-      },
-    ]);
 
     const domHandlers = EditorView.domEventHandlers({
       paste: (event, view) => {
@@ -247,9 +218,7 @@ export function ExpandedComposer({
 
     const updateListener = EditorView.updateListener.of((vu) => {
       if (vu.docChanged) {
-        const next = vu.state.doc.toString();
-        setText(next);
-        setHasText(next.trim().length > 0);
+        setText(vu.state.doc.toString());
       }
     });
 
@@ -279,9 +248,8 @@ export function ExpandedComposer({
         maxRenderedOptions: 40,
         icons: true,
       }),
-      placeholder('Draft your message — Cmd/Ctrl+Enter to send'),
+      placeholder('Draft your message — Esc or Accept to save back to the composer'),
       keymap.of([...closeBracketsKeymap, ...completionKeymap]),
-      composerKeymap,
       keymap.of([...searchKeymap, ...historyKeymap, ...defaultKeymap, indentWithTab]),
       domHandlers,
       updateListener,
@@ -296,7 +264,19 @@ export function ExpandedComposer({
     view.focus();
     view.dispatch({ selection: { anchor: initialText.length } });
 
+    // Remeasure once JetBrains Mono Variable finishes loading — see the
+    // matching comment in ChatInputCM. Without this the caret floats at
+    // fallback-font positions for the first few seconds of the modal.
+    let cancelled = false;
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (cancelled) return;
+        if (viewRef.current === view) view.requestMeasure();
+      });
+    }
+
     return () => {
+      cancelled = true;
       view.destroy();
       viewRef.current = null;
     };
@@ -322,15 +302,8 @@ export function ExpandedComposer({
       <TabButton active={tab === 'preview'} onClick={() => setTab('preview')}>
         Preview
       </TabButton>
-      {session && (
-        <div style={{ marginLeft: 12 }}>
-          <ModeBadge session={session} placement="bottom" />
-        </div>
-      )}
     </div>
   );
-
-  const canSend = hasText && !active;
 
   const onAttachClick = () => {
     const input = document.createElement('input');
@@ -387,66 +360,33 @@ export function ExpandedComposer({
       >
         <Paperclip size={14} />
       </button>
-      {active ? (
-        <button
-          type="button"
-          onClick={() => {
-            api.sessions.stop(processId).catch((err) => {
-              console.error('[expanded-composer] stop failed:', err);
-              toast.error('Failed to stop turn');
-            });
-          }}
-          title="Stop (interrupt the agent)"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '6px 12px',
-            borderRadius: 'var(--radius-snug)',
-            border: '1px solid var(--border-strong)',
-            background: 'transparent',
-            color: 'var(--status-error, #ef4444)',
-            cursor: 'pointer',
-            fontSize: 12,
-            fontFamily: 'inherit',
-          }}
-        >
-          <Square size={11} fill="currentColor" />
-          Stop
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={handleSend}
-          disabled={!canSend}
-          onMouseEnter={() => setSendHover(true)}
-          onMouseLeave={() => setSendHover(false)}
-          title={canSend ? 'Send (Cmd/Ctrl+Enter)' : 'Type a message'}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '6px 14px',
-            borderRadius: 'var(--radius-snug)',
-            border: canSend ? 'none' : '1px solid var(--border)',
-            background: canSend
-              ? sendHover
-                ? 'var(--text-secondary)'
-                : 'var(--text-primary)'
-              : 'transparent',
-            color: canSend ? 'var(--bg-elevated)' : 'var(--text-faint)',
-            cursor: canSend ? 'pointer' : 'not-allowed',
-            fontSize: 12,
-            fontWeight: 500,
-            fontFamily: 'inherit',
-            transition:
-              'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
-          }}
-        >
-          {state === 'running' ? 'Queue' : 'Send'}
-          <ArrowUp size={13} strokeWidth={2.4} />
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={handleClose}
+        onMouseEnter={() => setAcceptHover(true)}
+        onMouseLeave={() => setAcceptHover(false)}
+        title="Accept draft (Esc)"
+        aria-label="Accept draft"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 14px',
+          borderRadius: 'var(--radius-snug)',
+          border: 'none',
+          background: acceptHover ? 'var(--text-secondary)' : 'var(--text-primary)',
+          color: 'var(--bg-elevated)',
+          cursor: 'pointer',
+          fontSize: 12,
+          fontWeight: 500,
+          fontFamily: 'inherit',
+          transition:
+            'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+        }}
+      >
+        Accept
+        <Check size={13} strokeWidth={2.4} />
+      </button>
     </>
   );
 

@@ -461,8 +461,7 @@ select:focus-visible,
   font-family: inherit;
 }
 .mt-cm-composer .cm-content {
-  caret-color: var(--accent-amber);
-  min-height: 20px;
+  min-height: 1.5em;
   font-family: inherit;
 }
 /* Expanded variant — taller scroller to fit the modal's 60vh+ canvas. The

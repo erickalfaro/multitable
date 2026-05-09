@@ -560,6 +560,26 @@ export const ChatInputCM = memo(function ChatInputCM({
     // Focus on mount so the composer feels immediately actionable.
     view.focus();
 
+    // CM measures glyph widths at mount with whatever font is currently
+    // resolved. JetBrains Mono Variable (self-hosted via @fontsource) loads
+    // asynchronously, so the first paint uses a fallback font and the cursor
+    // lands at fallback-metric positions. Once the real font arrives glyphs
+    // shift but CM doesn't recompute — leaving a visibly misaligned caret
+    // for the first few seconds of a session. Force a remeasure when fonts
+    // are ready; guard against unmount.
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      let cancelled = false;
+      document.fonts.ready.then(() => {
+        if (cancelled) return;
+        if (viewRef.current === view) view.requestMeasure();
+      });
+      return () => {
+        cancelled = true;
+        view.destroy();
+        viewRef.current = null;
+      };
+    }
+
     return () => {
       view.destroy();
       viewRef.current = null;
@@ -918,45 +938,20 @@ export const ChatInputCM = memo(function ChatInputCM({
           attachmentKind={attachmentKind}
           initialText={viewRef.current?.state.doc.toString() ?? ''}
           imageAttachments={imageAttachments}
-          active={active}
-          state={state}
           onAddAttachment={addImageAttachment}
           onRemoveAttachment={removeImageAttachment}
           onClose={(finalText) => {
-            // Sync the modal's text back into the inline editor on close.
-            // The user expects no work loss when they pop in/out of expanded
-            // mode; the inline buffer is the canonical draft once collapsed.
+            // Sync the modal's text back into the inline editor on close
+            // (Accept button, Esc, or click-outside all land here). The
+            // expanded composer is a drafting surface only — the user must
+            // come back to the inline composer to actually send the turn.
             const view = viewRef.current;
             if (view) {
               view.dispatch({
                 changes: { from: 0, to: view.state.doc.length, insert: finalText },
               });
+              view.focus();
             }
-            setExpanded(false);
-          }}
-          onSend={(text) => {
-            // Send pipeline mirrors inline doSend: queue if a turn is in
-            // flight, otherwise dispatch via wsClient. We DO NOT route through
-            // the inline CM — its content is irrelevant once the modal sends.
-            const live = useAppStore.getState();
-            const session = live.sessions[processId];
-            const queueHasHead = !!live.pendingSendsBySession?.[processId]?.length;
-            const isIdle = session?.state === 'stopped' && !queueHasHead;
-            if (!isIdle) {
-              live.enqueueSend(processId, text);
-            } else {
-              live.updateProcessState(processId, 'running');
-              wsClient.sendTurn(processId, text);
-            }
-            // Clear the inline editor so the user doesn't see stale text after
-            // the modal closes. Attachments belong to the just-sent message.
-            const view = viewRef.current;
-            if (view) {
-              view.dispatch({
-                changes: { from: 0, to: view.state.doc.length, insert: '' },
-              });
-            }
-            clearImageAttachments();
             setExpanded(false);
           }}
         />
