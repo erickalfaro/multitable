@@ -46,7 +46,7 @@ export function Sidebar() {
           aria-label="MultiTable"
           style={{
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-start',
             gap: 12,
             padding: '14px 14px 8px',
             userSelect: 'none',
@@ -54,12 +54,12 @@ export function Sidebar() {
           }}
         >
           <LogoArt />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 10 }}>
             <span
               style={{
                 fontSize: 18,
                 fontWeight: 700,
-                color: 'var(--accent-amber)',
+                color: 'white',
                 letterSpacing: '-0.02em',
                 lineHeight: 1,
               }}

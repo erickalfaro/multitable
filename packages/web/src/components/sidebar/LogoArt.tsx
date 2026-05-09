@@ -78,7 +78,7 @@ export function LogoArt() {
 
   const preStyle: React.CSSProperties = {
     margin: 0,
-    fontFamily: 'inherit',
+    fontFamily: 'monospace',
     fontSize: 10,
     lineHeight: 1.1,
     letterSpacing: 0,
