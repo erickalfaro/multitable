@@ -403,7 +403,39 @@ export function createProjectsRouter(
         agentProvider: provider,
         model: modelId,
       });
-      res.status(201).json(session);
+      // Register in the agent manager so the next session:send doesn't race
+      // the DB write, and so capabilities are available for the response.
+      agentManager.register({
+        id: session.id,
+        projectId: session.projectId,
+        name: session.name,
+        workingDir: session.workingDirectory || '',
+        provider: session.agentProvider,
+        model: session.model,
+        mode: session.mode,
+        agentSessionId: session.agentSessionId ?? null,
+        agentSessionIdHistory: session.agentSessionIdHistory ?? [],
+        claudeSessionId: session.claudeSessionId ?? null,
+        claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
+      });
+      // Mint the provider-side session id eagerly so the transcript file
+      // exists and resume works the moment the user clicks Start. Errors are
+      // logged inside; the new id arrives at the UI via the `session-updated`
+      // WS event when it lands.
+      void agentManager.provisionSession(session.id);
+      // Enrich the response so the web store has `capabilities` immediately —
+      // the ModeBadge dropdown self-hides when modes.length <= 1, and would
+      // stay hidden on a freshly created session if we returned the bare DB
+      // row. Mirrors the GET /api/sessions/:id shape.
+      const agent = agentManager.get(session.id);
+      const capabilities = agentManager.getCapabilities(session.id);
+      res.status(201).json({
+        ...session,
+        state: agent?.state ?? 'stopped',
+        pid: null,
+        mode: agent?.mode ?? session.mode ?? 'default',
+        capabilities,
+      });
     } catch (err) {
       res.status(500).json({ error: 'Failed to create session' });
     }

@@ -2,8 +2,6 @@ import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import type { ElicitationPrompt } from '../types.js';
 
-const TIMEOUT_MS = 110000;
-
 export type ElicitAction = 'accept' | 'decline' | 'cancel';
 
 export interface ElicitResponseContent {
@@ -30,7 +28,6 @@ interface SdkRequest {
 interface Pending {
   prompt: ElicitationPrompt;
   resolve: (r: ElicitResolution) => void;
-  timer: NodeJS.Timeout;
   abortCleanup?: () => void;
 }
 
@@ -63,21 +60,12 @@ export class ElicitationManager extends EventEmitter {
       displayName: request.displayName,
       description: request.description,
       createdAt: Date.now(),
-      timeoutMs: TIMEOUT_MS,
     };
 
     return new Promise<ElicitResolution>((resolve) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        this.emit('elicitation:expired', id);
-        // No response in time → decline so the MCP server isn't left hanging.
-        resolve({ action: 'decline' });
-      }, TIMEOUT_MS);
-
       const onAbort = () => {
         const p = this.pending.get(id);
         if (!p) return;
-        clearTimeout(p.timer);
         this.pending.delete(id);
         this.emit('elicitation:resolved', id);
         resolve({ action: 'cancel' });
@@ -85,7 +73,7 @@ export class ElicitationManager extends EventEmitter {
       signal.addEventListener('abort', onAbort);
       const abortCleanup = () => signal.removeEventListener('abort', onAbort);
 
-      this.pending.set(id, { prompt, resolve, timer, abortCleanup });
+      this.pending.set(id, { prompt, resolve, abortCleanup });
       this.emit('elicitation:prompt', prompt);
     });
   }
@@ -97,7 +85,6 @@ export class ElicitationManager extends EventEmitter {
   respond(id: string, action: ElicitAction, content?: ElicitResponseContent): void {
     const p = this.pending.get(id);
     if (!p) return;
-    clearTimeout(p.timer);
     p.abortCleanup?.();
     this.pending.delete(id);
     this.emit('elicitation:resolved', id);
@@ -110,7 +97,6 @@ export class ElicitationManager extends EventEmitter {
   clearForSession(sessionId: string): void {
     for (const [id, p] of this.pending) {
       if (p.prompt.sessionId === sessionId) {
-        clearTimeout(p.timer);
         p.abortCleanup?.();
         this.pending.delete(id);
         this.emit('elicitation:resolved', id);

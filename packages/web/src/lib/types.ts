@@ -159,7 +159,6 @@ export interface PermissionPrompt {
   toolName: string;
   toolInput: Record<string, unknown>;
   createdAt: number;
-  timeoutMs: number;
   kind?: 'permission' | 'ask-question';
   questions?: AskQuestion[];
   // Phase 5 SDK extras (optional). The existing UI doesn't render these
@@ -221,7 +220,6 @@ export interface ElicitationPrompt {
   displayName?: string;
   description?: string;
   createdAt: number;
-  timeoutMs: number;
 }
 
 export interface WsMessage {

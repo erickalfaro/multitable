@@ -179,6 +179,29 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   /**
+   * Mint a fresh codex thread without running a turn. Called at session
+   * creation time so the rollout file exists on disk before the user's first
+   * prompt. We deliberately do NOT populate `this.threads` here — if the user
+   * flips mode before sending, ensureThreadId() will resume this same threadId
+   * with the new sandbox via resumeThread(), which is exactly the right
+   * behavior. Caching now would force a wasted createThread later.
+   */
+  async provisionSession(
+    s: AgentSession,
+    _ctrl: AbortController,
+    cb: AdapterCallbacks,
+  ): Promise<void> {
+    if (s.agentSessionId) return;
+    const sandbox = modeToCodexSandbox(s.mode);
+    const threadId = await this.client.createThread({
+      cwd: s.workingDir,
+      sandbox,
+      model: s.model ?? null,
+    });
+    cb.onSessionIdAssigned(threadId, s.agentSessionIdHistory);
+  }
+
+  /**
    * Daemon shutdown hook. Closes the underlying app-server child.
    */
   shutdown(): void {

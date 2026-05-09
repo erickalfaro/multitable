@@ -26,6 +26,7 @@ import { createProvidersRouter } from './api/providers.js';
 import type { TelegramBridge } from './notifications/telegramBridge.js';
 import type { GitWatcher } from './git/watcher.js';
 import { getSessionById } from './db/store.js';
+import { daemonLog, type DaemonLogEntry } from './devLog.js';
 
 export interface ServerInstance {
   app: express.Application;
@@ -229,6 +230,12 @@ export function createServer(
 
   manager.on('exit', ({ processId, exitCode, signal }: { processId: string; exitCode: number; signal: number }) => {
     broadcast('process-exited', { processId, exitCode, signal });
+  });
+
+  // ─── Wire daemonLog events ──────────────────────────────────────────────────
+  // Mirrors any daemon-side log entry into the web DevLog panel via WS.
+  daemonLog.on('log', (entry: DaemonLogEntry) => {
+    broadcast('daemon-log', entry);
   });
 
   // ─── Wire permission events ─────────────────────────────────────────────────

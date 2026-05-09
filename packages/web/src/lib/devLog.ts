@@ -8,6 +8,12 @@ export type LogCategory =
   | 'ws-conn'
   | 'ws-pty'
   | 'api'
+  | 'timer'
+  | 'watchdog'
+  | 'permission'
+  | 'elicitation'
+  | 'codex'
+  | 'agent'
   | 'error'
   | 'warn'
   | 'info';

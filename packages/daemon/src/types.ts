@@ -74,7 +74,6 @@ export interface ElicitationPrompt {
   displayName?: string;
   description?: string;
   createdAt: number;
-  timeoutMs: number;
 }
 
 export interface PermissionPrompt {
@@ -84,7 +83,6 @@ export interface PermissionPrompt {
   toolName: string;
   toolInput: Record<string, any>;
   createdAt: number;
-  timeoutMs: number;
   // When set, this prompt is a structured AskUserQuestion payload rather
   // than a generic tool-permission gate. The frontend should render a
   // question UI instead of an Allow/Deny card.

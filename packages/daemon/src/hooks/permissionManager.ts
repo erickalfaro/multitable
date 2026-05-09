@@ -4,8 +4,6 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Response } from 'express';
 import type { PermissionPrompt, AskQuestion } from '../types.js';
 
-const TIMEOUT_MS = 110000;
-
 // Tools that are always approved without prompting the user
 const AUTO_DEFER_TOOLS = new Set([
   'Read',
@@ -81,7 +79,6 @@ interface PendingPermission {
   // resolvers can pile onto a single prompt the same way HTTP responders do
   // (e.g. the same tool retried mid-turn).
   sdkResolvers: Array<{ resolve: SdkResolver; abortCleanup?: () => void }>;
-  timer: NodeJS.Timeout;
   sessionId: string;
   dedupKey: string;
 }
@@ -309,7 +306,6 @@ export class PermissionManager extends EventEmitter {
       toolName: tool_name,
       toolInput: input,
       createdAt: Date.now(),
-      timeoutMs: TIMEOUT_MS,
       ...(isAskQuestion
         ? {
             kind: 'ask-question' as const,
@@ -318,15 +314,10 @@ export class PermissionManager extends EventEmitter {
         : { kind: 'permission' as const }),
     };
 
-    const timer = setTimeout(() => {
-      this.expire(id);
-    }, TIMEOUT_MS);
-
     this.pending.set(id, {
       prompt,
       responders: [{ res, eventName }],
       sdkResolvers: [],
-      timer,
       sessionId,
       dedupKey,
     });
@@ -340,7 +331,6 @@ export class PermissionManager extends EventEmitter {
     const entry = this.pending.get(id);
     if (!entry) return;
 
-    clearTimeout(entry.timer);
     this.pending.delete(id);
 
     if (decision === 'always-allow') {
@@ -378,7 +368,6 @@ export class PermissionManager extends EventEmitter {
       return;
     }
 
-    clearTimeout(entry.timer);
     this.pending.delete(id);
 
     const body = buildAskQuestionResponse(entry.prompt, answers);
@@ -407,18 +396,6 @@ export class PermissionManager extends EventEmitter {
     this.emit('permission:resolved', id);
   }
 
-  private expire(id: string): void {
-    const entry = this.pending.get(id);
-    if (!entry) return;
-
-    this.pending.delete(id);
-    // On timeout, auto-approve to not block Claude
-    sendAll(entry, (eventName) => buildAllowBody(eventName));
-    resolveAllSdk(entry, { kind: 'allow', updatedInput: entry.prompt.toolInput });
-
-    this.emit('permission:expired', id);
-  }
-
   getPending(): PermissionPrompt[] {
     return Array.from(this.pending.values()).map(e => e.prompt);
   }
@@ -437,7 +414,6 @@ export class PermissionManager extends EventEmitter {
   clearForSession(sessionId: string): void {
     for (const [id, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
-        clearTimeout(entry.timer);
         sendAll(entry, (eventName) => buildAllowBody(eventName));
         // SDK side: deny pending Promises with a descriptive message so the
         // SDK's tool call fails cleanly rather than silently allowing after
@@ -525,7 +501,6 @@ export class PermissionManager extends EventEmitter {
       toolName,
       toolInput: input,
       createdAt: Date.now(),
-      timeoutMs: TIMEOUT_MS,
       ...(isAskQuestion
         ? {
             kind: 'ask-question' as const,
@@ -538,15 +513,10 @@ export class PermissionManager extends EventEmitter {
       ...(extras?.blockedPath ? { blockedPath: extras.blockedPath } : {}),
     };
 
-    const timer = setTimeout(() => {
-      this.expire(id);
-    }, TIMEOUT_MS);
-
     const entry: PendingPermission = {
       prompt,
       responders: [],
       sdkResolvers: [],
-      timer,
       sessionId,
       dedupKey,
     };
@@ -577,7 +547,6 @@ export class PermissionManager extends EventEmitter {
       resolve({ behavior: 'deny', message: 'Cancelled' });
       if (entry.sdkResolvers.length === 0 && entry.responders.length === 0) {
         if (this.pending.get(entry.prompt.id) === entry) {
-          clearTimeout(entry.timer);
           this.pending.delete(entry.prompt.id);
           this.emit('permission:resolved', entry.prompt.id);
         }

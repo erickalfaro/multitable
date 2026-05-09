@@ -119,6 +119,11 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
         claudeSessionId: session.claudeSessionId ?? null,
         claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
       });
+      // Mint the provider-side session id eagerly so the transcript file
+      // exists and resume works the moment the user clicks Start. Errors are
+      // logged inside; we don't await — the UI gets the new id via the
+      // `session-updated` WS broadcast when it lands.
+      void agentManager.provisionSession(session.id);
       res.status(201).json(session);
     } catch (err) {
       res.status(500).json({ error: 'Failed to create session' });

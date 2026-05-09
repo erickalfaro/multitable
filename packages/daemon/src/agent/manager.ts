@@ -9,6 +9,7 @@ import { updateSession, insertCostRecord, getSessionById } from '../db/store.js'
 import { detectOptions } from '../hooks/optionDetector.js';
 import { CodexAdapter } from './providers/codex.js';
 import { ClaudeAdapter } from './providers/claude.js';
+import { trackedTimeout, type TrackedTimer } from '../devLog.js';
 import type {
   AdapterCallbacks,
   ProviderAdapter,
@@ -268,6 +269,58 @@ export class AgentSessionManager extends EventEmitter {
   }
 
   /**
+   * Mint a provider-side session id without running a turn. Called by the
+   * session-creation route right after register() so the on-disk transcript
+   * file exists and the chat is "live" the moment the user clicks Start.
+   *
+   * Fire-and-forget from the caller's perspective — errors are logged, never
+   * thrown. The new id arrives at the UI via the existing `session-updated`
+   * WS event when onSessionIdAssigned fires.
+   */
+  async provisionSession(sessionId: string): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    if (s.agentSessionId) return;
+    const adapter = this.adapters[s.provider];
+    if (!adapter?.provisionSession) return;
+
+    // Reuse the standard callback bag so onSessionIdAssigned takes the same
+    // DB-persist + WS-broadcast path as a real turn. Other callbacks should
+    // never fire during provisioning — wrap them in a Proxy that warns if an
+    // adapter accidentally pushes messages / usage / a turn-result here.
+    const baseCb = this.makeAdapterCallbacks(sessionId);
+    const allowed = new Set(['onSessionIdAssigned']);
+    const cb: AdapterCallbacks = new Proxy(baseCb, {
+      get: (target, prop, receiver) => {
+        const fn = Reflect.get(target, prop, receiver);
+        if (typeof fn !== 'function') return fn;
+        if (allowed.has(String(prop))) return fn;
+        return (...args: unknown[]) => {
+          console.warn(
+            `[agent] adapter.provisionSession called ${String(prop)}() — ignored`,
+            { sessionId, provider: s.provider },
+          );
+          // Defensive: do not invoke the real callback. The contract is that
+          // provisioning stays side-effect-free aside from id assignment.
+          void args;
+          return undefined as unknown;
+        };
+      },
+    });
+
+    const ctrl = new AbortController();
+    try {
+      await adapter.provisionSession(s, ctrl, cb);
+    } catch (err) {
+      console.error('[agent] provisionSession failed', {
+        sessionId,
+        provider: s.provider,
+        error: err instanceof Error ? err.stack ?? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * Drive one user turn through the configured adapter. Serialized per session.
    */
   async sendTurn({ sessionId, text }: SendTurnInput): Promise<void> {
@@ -315,28 +368,38 @@ export class AgentSessionManager extends EventEmitter {
     // legitimate quiet windows are (1) waiting on a permission prompt and
     // (2) running a long tool. We re-arm whenever a permission is pending so
     // the user can take their time without tripping the watchdog, and we
-    // budget 5 minutes per quiet stretch otherwise.
-    const NO_PROGRESS_MS = 5 * 60_000;
-    let stuckTimer: NodeJS.Timeout | null = null;
+    // budget this per quiet stretch otherwise. Logged via trackedTimeout so
+    // the DevLog panel surfaces every arm/re-arm.
+    const NO_PROGRESS_MS = 90_000;
+    let stuckTimer: TrackedTimer | null = null;
     let abortedDueToStuck = false;
     let sawAnyMessage = false;
     const armStuckTimer = () => {
-      if (stuckTimer) clearTimeout(stuckTimer);
-      stuckTimer = setTimeout(() => {
-        if (
-          this.permManager.hasPending(sessionId) ||
-          this.elicitManager.hasPending(sessionId)
-        ) {
-          armStuckTimer();
-          return;
-        }
-        abortedDueToStuck = true;
-        try {
-          ctrl.abort();
-        } catch {
-          /* ignore */
-        }
-      }, NO_PROGRESS_MS);
+      if (stuckTimer) stuckTimer.cancel();
+      stuckTimer = trackedTimeout(
+        () => {
+          if (
+            this.permManager.hasPending(sessionId) ||
+            this.elicitManager.hasPending(sessionId)
+          ) {
+            armStuckTimer();
+            return;
+          }
+          abortedDueToStuck = true;
+          try {
+            ctrl.abort();
+          } catch {
+            /* ignore */
+          }
+        },
+        {
+          label: 'turn watchdog',
+          ms: NO_PROGRESS_MS,
+          category: 'watchdog',
+          detail: `session ${sessionId.slice(0, 8)}`,
+          logFire: true,
+        },
+      );
     };
 
     // Wrap adapter callbacks to also bump activity / re-arm the stuck timer
@@ -437,7 +500,10 @@ export class AgentSessionManager extends EventEmitter {
         });
       }
     } finally {
-      if (stuckTimer) clearTimeout(stuckTimer);
+      // Cast: TS narrows `stuckTimer` to `null` here because all reassignments
+      // happen inside closures (armStuckTimer + the proxy handler). The actual
+      // runtime value is TrackedTimer | null.
+      (stuckTimer as TrackedTimer | null)?.cancel();
       s.currentTurn = null;
       // Belt-and-braces: clear any lingering streaming preview the adapter
       // might have left around (success path normally clears it itself).

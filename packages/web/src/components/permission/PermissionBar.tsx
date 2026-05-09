@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
 import { wsClient } from '../../lib/ws';
 import type { PermissionPrompt } from '../../lib/types';
@@ -7,28 +7,11 @@ import { ToolInputPreview } from './ToolInputPreview';
 
 function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
   const removePermission = useAppStore(s => s.removePermission);
-  const [elapsed, setElapsed] = useState(0);
-  const timeoutSecs = prompt.timeoutMs / 1000;
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const spent = (Date.now() - prompt.createdAt) / 1000;
-      setElapsed(Math.min(spent, timeoutSecs));
-    }, 100);
-    return () => clearInterval(interval);
-  }, [prompt.createdAt, timeoutSecs]);
-
-  const progress = 1 - elapsed / timeoutSecs;
 
   const respond = (decision: 'allow' | 'deny' | 'always-allow') => {
     wsClient.respondPermission(prompt.id, decision);
     removePermission(prompt.id);
   };
-
-  // ASCII countdown bar — segments fill from 0% to 100%, then flip to "0s"
-  const SEGMENTS = 28;
-  const filled = Math.max(0, Math.min(SEGMENTS, Math.round(progress * SEGMENTS)));
-  const bar = '█'.repeat(filled) + '░'.repeat(SEGMENTS - filled);
 
   return (
     <div
@@ -65,37 +48,10 @@ function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {Math.ceil(timeoutSecs - elapsed)}s · {prompt.sessionId.slice(0, 12)}
+        {prompt.sessionId.slice(0, 12)}
       </span>
       <div style={{ marginTop: 18, marginBottom: 10 }}>
         <ToolInputPreview toolName={prompt.toolName} input={prompt.toolInput} />
-      </div>
-      {/* ASCII countdown bar */}
-      <div
-        style={{
-          fontFamily: 'inherit',
-          fontSize: 12,
-          lineHeight: 1,
-          letterSpacing: '-0.03em',
-          color: 'var(--accent-amber)',
-          marginBottom: 10,
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 8,
-        }}
-      >
-        <span style={{ flex: 1, overflow: 'hidden' }}>{bar}</span>
-        <span
-          style={{
-            color: 'var(--text-muted)',
-            fontSize: 10,
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-            fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {Math.ceil(timeoutSecs - elapsed)}s remaining
-        </span>
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <Button size="sm" variant="primary" onClick={() => respond('allow')}>
@@ -186,23 +142,11 @@ function Preview({ text }: { text: string }) {
 function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
   const removePermission = useAppStore(s => s.removePermission);
   const questions = prompt.questions ?? [];
-  const [elapsed, setElapsed] = useState(0);
-  const timeoutSecs = prompt.timeoutMs / 1000;
 
   // selections[i] = array of chosen labels for question i
   const [selections, setSelections] = useState<string[][]>(() =>
     questions.map(() => [])
   );
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const spent = (Date.now() - prompt.createdAt) / 1000;
-      setElapsed(Math.min(spent, timeoutSecs));
-    }, 100);
-    return () => clearInterval(interval);
-  }, [prompt.createdAt, timeoutSecs]);
-
-  const progress = 1 - elapsed / timeoutSecs;
 
   const toggle = (qIdx: number, label: string, multi: boolean) => {
     setSelections(prev => {
@@ -228,10 +172,6 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
     wsClient.answerQuestion(prompt.id, questions.map(() => []));
     removePermission(prompt.id);
   };
-
-  const SEGMENTS = 28;
-  const filled = Math.max(0, Math.min(SEGMENTS, Math.round(progress * SEGMENTS)));
-  const bar = '█'.repeat(filled) + '░'.repeat(SEGMENTS - filled);
 
   return (
     <div
@@ -268,35 +208,9 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {Math.ceil(timeoutSecs - elapsed)}s · {prompt.sessionId.slice(0, 12)}
+        {prompt.sessionId.slice(0, 12)}
       </span>
-      <div
-        style={{
-          fontFamily: 'inherit',
-          fontSize: 12,
-          lineHeight: 1,
-          letterSpacing: '-0.03em',
-          color: 'var(--accent-amber)',
-          marginTop: 18,
-          marginBottom: 12,
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 8,
-        }}
-      >
-        <span style={{ flex: 1, overflow: 'hidden' }}>{bar}</span>
-        <span
-          style={{
-            color: 'var(--text-muted)',
-            fontSize: 10,
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-            fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {Math.ceil(timeoutSecs - elapsed)}s remaining
-        </span>
-      </div>
+      <div style={{ height: 22 }} />
 
       {questions.map((q, qIdx) => {
         const multi = !!q.multiSelect;

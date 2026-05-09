@@ -130,6 +130,58 @@ export class ClaudeAdapter implements ProviderAdapter {
     this.streamingBlockIndex.delete(s.id);
   }
 
+  /**
+   * Mint a fresh claudeSessionId without running a real turn. The SDK only
+   * emits `system:init` (which carries the id) from inside query(), so we
+   * fire a minimal placeholder query and abort the moment init lands. Hooks /
+   * canUseTool / onElicitation are intentionally omitted — provisioning never
+   * reaches a tool gate. Worst case: a few tokens billed and a near-empty
+   * entry in the JSONL before the abort takes effect.
+   */
+  async provisionSession(
+    s: AgentSession,
+    ctrl: AbortController,
+    cb: AdapterCallbacks,
+  ): Promise<void> {
+    if (s.claudeSessionId) return;
+
+    const pathToClaudeCodeExecutable = resolveClaudeCodeExecutable();
+    const it = query({
+      prompt: ' ',
+      options: {
+        cwd: s.workingDir,
+        ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
+        ...(s.model ? { model: s.model } : {}),
+        settingSources: ['project', 'user'],
+        permissionMode: modeToPermissionMode(s.mode),
+        includePartialMessages: false,
+        abortController: ctrl,
+      },
+    });
+
+    try {
+      for await (const msg of it) {
+        const m = msg as { type?: string; subtype?: string };
+        if (m.type === 'system' && m.subtype === 'init') {
+          const info = sdkSystemInit(msg);
+          if (info?.claudeSessionId) {
+            cb.onSessionIdAssigned(info.claudeSessionId, s.claudeSessionIdHistory);
+          }
+          ctrl.abort();
+          break;
+        }
+      }
+    } catch (err) {
+      // The abort triggers an AbortError from the SDK — that's the success
+      // path here, not an error. Re-throw anything else (auth failure, network)
+      // so the manager can log it.
+      const name = err instanceof Error ? err.name : '';
+      const message = err instanceof Error ? err.message : String(err);
+      if (name === 'AbortError' || /aborted/i.test(message)) return;
+      throw err;
+    }
+  }
+
   async runTurn(
     s: AgentSession,
     text: string,

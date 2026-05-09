@@ -186,6 +186,15 @@ export interface ProviderAdapter {
   // can surface a turn-error event.
   runTurn(s: AgentSession, text: string, ctrl: AbortController, cb: AdapterCallbacks): Promise<void>;
 
+  // Optional: mint a provider-side session id WITHOUT running a turn. Called
+  // by the manager right after register() during session creation so the
+  // chat is "live" the moment the user clicks Start (transcript file exists,
+  // resume is possible). The adapter MUST call cb.onSessionIdAssigned when it
+  // learns the id and otherwise stay silent — no pushMessages, no applyUsage,
+  // no emitTurnResult. Errors should propagate so the manager can log them
+  // without breaking session creation.
+  provisionSession?(s: AgentSession, ctrl: AbortController, cb: AdapterCallbacks): Promise<void>;
+
   // Optional: clean up per-session adapter caches. Called from /reset.
   reset?(s: AgentSession): void;
 

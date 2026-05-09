@@ -15,6 +15,7 @@ import { TouchToolbar } from './components/mobile/TouchToolbar';
 import { IconButton } from './components/ui';
 import { useAppStore } from './stores/appStore';
 import { wsClient } from './lib/ws';
+import { devLog } from './lib/devLog';
 import { api } from './lib/api';
 import { createRafBatch } from './lib/rafBatch';
 import type { ToolStreamPayload } from './stores/appStore';
@@ -390,6 +391,21 @@ function App() {
       wsClient.on('process-state-changed', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
         if (pid) store.updateProcessState(pid, msg.payload.state);
+      }),
+      wsClient.on('daemon-log', (msg: any) => {
+        // Pipe daemon-side log entries (timers, watchdogs, etc.) into the
+        // web DevLog panel so any wait the user can't otherwise see is
+        // surfaced.
+        const e = msg.payload;
+        if (!e || typeof e !== 'object') return;
+        devLog.add({
+          category: e.category ?? 'info',
+          level: e.level,
+          label: typeof e.label === 'string' ? e.label : 'daemon log',
+          detail: typeof e.detail === 'string' ? e.detail : undefined,
+          durationMs: typeof e.durationMs === 'number' ? e.durationMs : undefined,
+          data: e.data,
+        });
       }),
       wsClient.on('process-metrics', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
