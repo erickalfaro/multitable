@@ -231,7 +231,6 @@ export function SessionChat({ sessionId, session }: Props) {
             projectId={session.projectId}
             state={session.state}
             attachmentKind="session"
-            agentProvider={session.agentProvider}
             active={session.state === 'running'}
           />
           <PermissionBar sessionId={sessionId} />

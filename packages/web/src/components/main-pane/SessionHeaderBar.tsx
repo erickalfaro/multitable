@@ -1,11 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { PanelBottom, Copy, Check, Pencil, Sparkles, Menu } from 'lucide-react';
-import { StatusDot } from '../sidebar/StatusDot';
 import { AttachButton } from './AttachButton';
-import { ModeBadge } from './ModeBadge';
 import type { Session } from '../../lib/types';
-import { IconButton, Spinner, AgentBadge } from '../ui';
+import { IconButton, Spinner } from '../ui';
 import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
 import { useIsMobile } from '../../lib/useIsMobile';
@@ -30,6 +28,13 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
   const upsertSession = useAppStore((s) => s.upsertSession);
   const provider = session.agentProvider;
   const agentSessionId = session.agentSessionId ?? claudeState?.agentSessionId ?? null;
+
+  const buildResumeCommand = (id: string): string => {
+    if (provider === 'claude') return `claude --resume ${id}`;
+    if (provider === 'codex') return `codex resume ${id}`;
+    return id;
+  };
+  const resumeCommand = agentSessionId ? buildResumeCommand(agentSessionId) : null;
 
   useEffect(() => {
     if (editing) {
@@ -86,11 +91,35 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
     }
   };
 
-  const handleCopySessionId = () => {
-    if (agentSessionId) {
-      navigator.clipboard.writeText(agentSessionId);
+  const handleCopySessionId = async () => {
+    if (!resumeCommand) return;
+    const showCopied = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
+      toast.success('Copied resume command', { duration: 1400 });
+    };
+    try {
+      await navigator.clipboard.writeText(resumeCommand);
+      showCopied();
+      return;
+    } catch {
+      // Fall through to legacy copy below.
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = resumeCommand;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.left = '0';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showCopied();
+    } catch {
+      toast.error('Failed to copy resume command');
     }
   };
 
@@ -149,7 +178,6 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
             </span>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <StatusDot state={session.state} size={8} />
             {editing ? (
               <input
                 ref={inputRef}
@@ -264,9 +292,6 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
       {/* Top row */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0, flex: 1 }}>
-          <div style={{ marginTop: 5, flexShrink: 0 }}>
-            <StatusDot state={session.state} size={8} />
-          </div>
           {editing ? (
             <input
               ref={inputRef}
@@ -352,12 +377,11 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
 
       {/* Bottom row — chips */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
-        <AgentBadge provider={provider} size="chip" />
-        <ModeBadge session={session} />
         {agentSessionId && (
-          <span
+          <button
+            type="button"
             onClick={handleCopySessionId}
-            title={`Click to copy ${provider} session ID`}
+            title={resumeCommand ? `Click to copy: ${resumeCommand}` : 'Copy session id'}
             style={{
               ...chipStyle,
               cursor: 'pointer',
@@ -365,24 +389,27 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              fontFamily: 'inherit',
               transition: 'border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLSpanElement).style.borderColor = 'var(--accent-amber)';
-              (e.currentTarget as HTMLSpanElement).style.color = 'var(--text-primary)';
+              (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent-amber)';
+              (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
             }}
             onMouseLeave={(e) => {
-              (e.currentTarget as HTMLSpanElement).style.borderColor = 'var(--border-strong)';
-              (e.currentTarget as HTMLSpanElement).style.color = 'var(--text-secondary)';
+              (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-strong)';
+              (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
             }}
           >
             {copied ? <Check size={11} /> : <Copy size={11} />}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {agentSessionId}
             </span>
-          </span>
+          </button>
         )}
-        {(costUsd > 0 || tokenCount > 0) && (
+        {session.capabilities?.costUsd !== false && costUsd > 0 && (
           <span style={chipStyle}>{formatCost(costUsd)}</span>
         )}
         {tokenCount > 0 && (

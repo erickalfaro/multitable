@@ -540,9 +540,14 @@ export class CodexAdapter implements ProviderAdapter {
 
         const usage = completion.pendingUsage;
         if (usage) {
+          // The Codex protocol's `cachedInputTokens` is a SUBSET of
+          // `inputTokens` (and `reasoningOutputTokens` is a subset of
+          // `outputTokens`) — see TokenUsageBreakdown.ts. snapshotStats sums
+          // tokensIn + tokensOut + cacheCreationTokens + cacheReadTokens, so
+          // we have to break out the cached portion to avoid double-counting.
           cb.applyUsage({
-            tokensIn: usage.inputTokens + usage.cachedInputTokens,
-            tokensOut: usage.outputTokens + usage.reasoningOutputTokens,
+            tokensIn: usage.inputTokens - usage.cachedInputTokens,
+            tokensOut: usage.outputTokens,
             cacheCreationTokens: 0,
             cacheReadTokens: usage.cachedInputTokens,
             costUsd: 0,

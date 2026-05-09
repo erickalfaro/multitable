@@ -1,7 +1,7 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Paperclip, X, Clock, Square, Maximize2 } from 'lucide-react';
 
-import { AgentBadge } from '../../ui';
+import { ModeBadge } from '../ModeBadge';
 import { ExpandedComposer, type ImageAttachment } from './ExpandedComposer';
 
 // Stable empty array so the pending-sends selector doesn't churn on
@@ -10,7 +10,7 @@ const EMPTY_PENDING: string[] = [];
 import { toast } from 'react-hot-toast';
 import { wsClient } from '../../../lib/ws';
 import { api } from '../../../lib/api';
-import type { ProcessState, AgentProvider } from '../../../lib/types';
+import type { ProcessState } from '../../../lib/types';
 import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
 import { buildCmTheme } from '../../../lib/cm-theme';
@@ -77,8 +77,6 @@ interface Props {
   state: ProcessState;
   attachmentKind: 'session' | 'terminal';
   placeholder?: string;
-  /** Provider that owns this session — drives the small `claude`/`codex` chip. */
-  agentProvider?: AgentProvider;
   /** Whether the agent is currently doing work (turn in flight). */
   active?: boolean;
 }
@@ -120,7 +118,6 @@ export const ChatInputCM = memo(function ChatInputCM({
   state,
   attachmentKind,
   placeholder: placeholderText,
-  agentProvider,
   active = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -190,6 +187,9 @@ export const ChatInputCM = memo(function ChatInputCM({
   );
   const enqueueSend = useAppStore((s) => s.enqueueSend);
   const removePendingSend = useAppStore((s) => s.removePendingSend);
+  // Live session for the mode dropdown. ModeBadge self-hides when the
+  // adapter only supports one mode, so it's safe to render unconditionally.
+  const session = useAppStore((s) => s.sessions[processId]);
 
   // Keep project id reachable by the file-mention completion source — it
   // reads it lazily so we don't have to re-create extensions when the user
@@ -781,12 +781,10 @@ export const ChatInputCM = memo(function ChatInputCM({
             <Maximize2 size={12} />
           </button>
 
-          {agentProvider && (
-            <AgentBadge
-              provider={agentProvider}
-              size="chip"
-              style={{ alignSelf: 'center', flexShrink: 0 }}
-            />
+          {session && (
+            <div style={{ alignSelf: 'center', flexShrink: 0 }}>
+              <ModeBadge session={session} />
+            </div>
           )}
 
           <div
@@ -911,7 +909,6 @@ export const ChatInputCM = memo(function ChatInputCM({
           imageAttachments={imageAttachments}
           active={active}
           state={state}
-          agentProvider={agentProvider}
           onAddAttachment={addImageAttachment}
           onRemoveAttachment={removeImageAttachment}
           onClose={(finalText) => {

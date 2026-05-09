@@ -5,9 +5,9 @@ import { Streamdown } from 'streamdown';
 import 'streamdown/styles.css';
 
 import { Modal } from '../../ui/Modal';
-import { AgentBadge } from '../../ui';
+import { ModeBadge } from '../ModeBadge';
 import { api } from '../../../lib/api';
-import type { ProcessState, AgentProvider } from '../../../lib/types';
+import type { ProcessState } from '../../../lib/types';
 import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
 import { buildCmTheme } from '../../../lib/cm-theme';
@@ -78,7 +78,6 @@ interface Props {
   imageAttachments: ImageAttachment[];
   active: boolean;
   state: ProcessState;
-  agentProvider?: AgentProvider;
   onAddAttachment: (a: ImageAttachment) => void;
   onRemoveAttachment: (path: string) => void;
   onClose: (finalText: string) => void;
@@ -114,7 +113,6 @@ export function ExpandedComposer({
   imageAttachments,
   active,
   state,
-  agentProvider,
   onAddAttachment,
   onRemoveAttachment,
   onClose,
@@ -133,6 +131,7 @@ export function ExpandedComposer({
 
   const activeThemeId = useAppStore((s) => s.activeThemeId);
   const customThemes = useAppStore((s) => s.customThemes);
+  const session = useAppStore((s) => s.sessions[processId]);
   const themeCompartment = useRef(new Compartment());
 
   const pickTheme = useCallback(() => {
@@ -323,12 +322,10 @@ export function ExpandedComposer({
       <TabButton active={tab === 'preview'} onClick={() => setTab('preview')}>
         Preview
       </TabButton>
-      {agentProvider && (
-        <AgentBadge
-          provider={agentProvider}
-          size="chip"
-          style={{ marginLeft: 12 }}
-        />
+      {session && (
+        <div style={{ marginLeft: 12 }}>
+          <ModeBadge session={session} placement="bottom" />
+        </div>
       )}
     </div>
   );
