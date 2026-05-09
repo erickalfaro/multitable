@@ -8,7 +8,7 @@ import { useTranscripts, type TranscriptSession } from '../../hooks/useTranscrip
 import { useCodexTranscripts } from '../../hooks/useCodexTranscripts';
 import { resumePastSession, resumePastCodexThread, selectPinnedSession } from '../../lib/pastAgents';
 import { relativeTime } from '../../lib/relativeTime';
-import type { AgentProvider } from '../../lib/types';
+import type { AgentProvider, DiscoveredModel } from '../../lib/types';
 
 type AgentProviderOption = 'claude' | 'codex' | undefined;
 
@@ -32,13 +32,6 @@ const AGENTS: Array<{
 interface Props {
   onClose: () => void;
   projectId: string;
-}
-
-interface DiscoveredModel {
-  id: string;
-  displayName: string;
-  description?: string;
-  isDefault?: boolean;
 }
 
 type ModelsState =

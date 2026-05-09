@@ -457,7 +457,7 @@ select:focus-visible,
 .mt-cm-composer .cm-scroller {
   overflow-y: auto;
   overflow-x: hidden;
-  max-height: 40vh;
+  max-height: 50vh;
   font-family: inherit;
 }
 .mt-cm-composer .cm-content {

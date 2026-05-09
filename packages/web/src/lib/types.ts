@@ -2,6 +2,16 @@ export type ProcessType = 'session' | 'terminal' | 'command';
 export type ProcessState = 'running' | 'idle' | 'stopped' | 'errored';
 export type AgentProvider = 'claude' | 'codex' | 'copilot';
 
+// Mirrors the daemon's `/api/providers/:provider/models` row shape. Lives here
+// so both AddAgentModal (one-shot fetch on session create) and the appStore
+// catalog cache (long-lived, used by ModelChip) can consume the same type.
+export interface DiscoveredModel {
+  id: string;
+  displayName: string;
+  description?: string;
+  isDefault?: boolean;
+}
+
 // Provider-agnostic operating mode. Each adapter translates these to its own
 // native primitive (Claude permissionMode, Codex sandboxMode, Copilot system
 // prompt + onPreToolUse). UI gates which modes appear via ProviderCapabilities.

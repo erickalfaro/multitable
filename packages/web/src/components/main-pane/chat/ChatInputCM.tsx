@@ -3,6 +3,7 @@ import { ArrowUp, Paperclip, X, Clock, Square, Maximize2 } from 'lucide-react';
 
 import { ModeBadge } from '../ModeBadge';
 import { ExpandedComposer, type ImageAttachment } from './ExpandedComposer';
+import { ModelChip } from './ModelChip';
 
 // Stable empty array so the pending-sends selector doesn't churn on
 // unrelated store updates.
@@ -654,7 +655,7 @@ export const ChatInputCM = memo(function ChatInputCM({
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: 6,
+          gap: 8,
           padding: '8px 10px',
           backgroundColor: 'var(--bg-elevated)',
           border: `1px solid ${focused ? 'var(--border-strong)' : 'var(--border)'}`,
@@ -723,165 +724,175 @@ export const ChatInputCM = memo(function ChatInputCM({
             ))}
           </div>
         )}
+
+        {/* Editor block — full-width, takes the top of the card. The
+            CodeMirror view mounts into this div via the [processId,
+            attachmentKind] effect; do not change the ref or remount it
+            during the restructure. */}
+        <div
+          ref={containerRef}
+          className="mt-cm-composer"
+          style={{
+            width: '100%',
+            minHeight: 84,
+            maxHeight: '50vh',
+            overflow: 'hidden',
+            opacity: disabled ? 0.55 : 1,
+          }}
+        />
+
+        {/* Toolbar — bottom strip integrated within the same card. Left
+            cluster holds attach / expand / mode / model; right cluster is
+            send (or stop while a turn is in flight). */}
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'space-between',
             gap: 8,
           }}
         >
-          <button
-            onClick={onAttachClick}
-            disabled={disabled}
-            title="Attach image"
-            onMouseEnter={() => setAttachHover(true)}
-            onMouseLeave={() => setAttachHover(false)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 26,
-              height: 26,
-              borderRadius: 'var(--radius-snug)',
-              border: 'none',
-              background: attachHover && !disabled ? 'var(--bg-hover)' : 'transparent',
-              color: 'var(--text-muted)',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              flexShrink: 0,
-              alignSelf: 'center',
-              transition: 'background-color var(--dur-fast) var(--ease-out)',
-            }}
-          >
-            <Paperclip size={13} />
-          </button>
-
-          <button
-            onClick={() => setExpanded(true)}
-            disabled={disabled}
-            title="Expand composer"
-            aria-label="Expand composer"
-            onMouseEnter={() => setExpandHover(true)}
-            onMouseLeave={() => setExpandHover(false)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 26,
-              height: 26,
-              borderRadius: 'var(--radius-snug)',
-              border: 'none',
-              background: expandHover && !disabled ? 'var(--bg-hover)' : 'transparent',
-              color: 'var(--text-muted)',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              flexShrink: 0,
-              alignSelf: 'center',
-              transition: 'background-color var(--dur-fast) var(--ease-out)',
-            }}
-          >
-            <Maximize2 size={12} />
-          </button>
-
-          {session && (
-            <div style={{ alignSelf: 'center', flexShrink: 0 }}>
-              <ModeBadge session={session} />
-            </div>
-          )}
-
           <div
-            ref={containerRef}
-            className="mt-cm-composer"
             style={{
-              flex: 1,
-              minHeight: 26,
-              maxHeight: '40vh',
-              overflow: 'hidden',
               display: 'flex',
-              alignItems: 'stretch',
-              alignSelf: 'stretch',
-              opacity: disabled ? 0.55 : 1,
+              alignItems: 'center',
+              gap: 6,
+              minWidth: 0,
+              flexWrap: 'wrap',
             }}
-          />
+          >
+            <button
+              onClick={() => setExpanded(true)}
+              disabled={disabled}
+              title="Expand composer"
+              aria-label="Expand composer"
+              onMouseEnter={() => setExpandHover(true)}
+              onMouseLeave={() => setExpandHover(false)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 26,
+                height: 26,
+                borderRadius: 'var(--radius-snug)',
+                border: 'none',
+                background: expandHover && !disabled ? 'var(--bg-hover)' : 'transparent',
+                color: 'var(--text-muted)',
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                flexShrink: 0,
+                transition: 'background-color var(--dur-fast) var(--ease-out)',
+              }}
+            >
+              <Maximize2 size={12} />
+            </button>
+
+            {session && <ModelChip session={session} />}
+
+            <button
+              onClick={onAttachClick}
+              disabled={disabled}
+              title="Attach image"
+              onMouseEnter={() => setAttachHover(true)}
+              onMouseLeave={() => setAttachHover(false)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 26,
+                height: 26,
+                borderRadius: 'var(--radius-snug)',
+                border: 'none',
+                background: attachHover && !disabled ? 'var(--bg-hover)' : 'transparent',
+                color: 'var(--text-muted)',
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                flexShrink: 0,
+                transition: 'background-color var(--dur-fast) var(--ease-out)',
+              }}
+            >
+              <Paperclip size={13} />
+            </button>
+
+            {session && <ModeBadge session={session} />}
+          </div>
 
           {active ? (
-          // Agent is mid-turn → the button at the send slot becomes Stop.
-          // Click aborts the in-flight turn via /api/sessions/:id/stop, which
-          // calls agentManager.abortTurn → ctrl.abort() → the SDK iterator
-          // unwinds, finally clears streaming state, daemon emits session:idle
-          // with outcome='aborted'. The chat shows a small "Turn cancelled."
-          // system note (NOT an error) and the session goes back to stopped.
-          <button
-            type="button"
-            onClick={() => {
-              api.sessions.stop(processId).catch((err) => {
-                console.error('[chat-input] stop failed:', err);
-                toast.error('Failed to stop turn');
-              });
-            }}
-            onMouseEnter={() => setSendHover(true)}
-            onMouseLeave={() => setSendHover(false)}
-            title="Stop (interrupt the agent)"
-            aria-label="Stop turn"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 28,
-              height: 28,
-              borderRadius: 'var(--radius-snug)',
-              border: 'none',
-              backgroundColor: sendHover ? 'var(--bg-hover)' : 'transparent',
-              color: 'var(--status-error, #ef4444)',
-              cursor: 'pointer',
-              flexShrink: 0,
-              alignSelf: 'center',
-              transition:
-                'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
-            }}
-          >
-            <Square size={12} fill="currentColor" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => onSendRef.current()}
-            disabled={!canSend}
-            onMouseEnter={() => setSendHover(true)}
-            onMouseLeave={() => setSendHover(false)}
-            title={
-              !canSend
-                ? 'Type a message'
-                : queueing
-                  ? 'Queue message (Enter)'
-                  : 'Send (Enter)'
-            }
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 28,
-              height: 28,
-              borderRadius: 'var(--radius-snug)',
-              border: canSend ? 'none' : '1px solid var(--border)',
-              // Filled affordance: when there's text to send the button reads
-              // as a primary action (light pill on dark, dark pill on light).
-              // When idle, falls back to a hairline outline so it doesn't
-              // dominate the empty state.
-              backgroundColor: canSend
-                ? sendHover
-                  ? 'var(--text-secondary)'
-                  : 'var(--text-primary)'
-                : 'transparent',
-              color: canSend ? 'var(--bg-elevated)' : 'var(--text-faint)',
-              cursor: canSend ? 'pointer' : 'not-allowed',
-              flexShrink: 0,
-              alignSelf: 'center',
-              transition:
-                'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
-            }}
-          >
-            <ArrowUp size={15} strokeWidth={2.4} />
-          </button>
-        )}
+            // Agent is mid-turn → the button at the send slot becomes Stop.
+            // Click aborts the in-flight turn via /api/sessions/:id/stop, which
+            // calls agentManager.abortTurn → ctrl.abort() → the SDK iterator
+            // unwinds, finally clears streaming state, daemon emits session:idle
+            // with outcome='aborted'. The chat shows a small "Turn cancelled."
+            // system note (NOT an error) and the session goes back to stopped.
+            <button
+              type="button"
+              onClick={() => {
+                api.sessions.stop(processId).catch((err) => {
+                  console.error('[chat-input] stop failed:', err);
+                  toast.error('Failed to stop turn');
+                });
+              }}
+              onMouseEnter={() => setSendHover(true)}
+              onMouseLeave={() => setSendHover(false)}
+              title="Stop (interrupt the agent)"
+              aria-label="Stop turn"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 28,
+                height: 28,
+                borderRadius: 'var(--radius-snug)',
+                border: 'none',
+                backgroundColor: sendHover ? 'var(--bg-hover)' : 'transparent',
+                color: 'var(--status-error, #ef4444)',
+                cursor: 'pointer',
+                flexShrink: 0,
+                transition:
+                  'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+              }}
+            >
+              <Square size={12} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onSendRef.current()}
+              disabled={!canSend}
+              onMouseEnter={() => setSendHover(true)}
+              onMouseLeave={() => setSendHover(false)}
+              title={
+                !canSend
+                  ? 'Type a message'
+                  : queueing
+                    ? 'Queue message (Enter)'
+                    : 'Send (Enter)'
+              }
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 28,
+                height: 28,
+                borderRadius: 'var(--radius-snug)',
+                border: canSend ? 'none' : '1px solid var(--border)',
+                // Filled affordance: when there's text to send the button reads
+                // as a primary action (light pill on dark, dark pill on light).
+                // When idle, falls back to a hairline outline so it doesn't
+                // dominate the empty state.
+                backgroundColor: canSend
+                  ? sendHover
+                    ? 'var(--text-secondary)'
+                    : 'var(--text-primary)'
+                  : 'transparent',
+                color: canSend ? 'var(--bg-elevated)' : 'var(--text-faint)',
+                cursor: canSend ? 'pointer' : 'not-allowed',
+                flexShrink: 0,
+                transition:
+                  'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
+              }}
+            >
+              <ArrowUp size={15} strokeWidth={2.4} />
+            </button>
+          )}
         </div>
       </div>
 

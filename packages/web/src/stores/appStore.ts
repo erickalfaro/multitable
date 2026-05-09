@@ -12,7 +12,10 @@ import type {
   SessionAlert,
   ElicitationPrompt,
   GitStatusSummary,
+  AgentProvider,
+  DiscoveredModel,
 } from '../lib/types';
+import { api } from '../lib/api';
 import type { Theme, ThemeColors } from '../lib/themes';
 import {
   BUILTIN_THEMES,
@@ -198,6 +201,14 @@ interface AppState {
   removePendingSend: (sessionId: string, index: number) => void;
   popPendingSend: (sessionId: string) => string | undefined;
   clearPendingSends: (sessionId: string) => void;
+
+  // Per-provider model catalog. Lazily fetched the first time a ModelChip
+  // mounts for a session whose model is non-default — the daemon endpoint
+  // probes the provider CLI on each call so we cache aggressively. Status
+  // is tracked separately so concurrent mounts dedupe via a 'loading' guard.
+  modelCatalog: Record<AgentProvider, DiscoveredModel[] | null>;
+  modelCatalogStatus: Record<AgentProvider, 'idle' | 'loading' | 'ready' | 'error'>;
+  loadModelCatalog: (provider: AgentProvider) => void;
 }
 
 export type TaskState = 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'stopped' | 'unknown';
@@ -898,6 +909,33 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       pendingSendsBySession: { ...s.pendingSendsBySession, [sessionId]: [] },
     })),
+
+  // Model catalog cache. The daemon route is `claude` / `codex` only today;
+  // copilot is `comingSoon` and short-circuits to a no-op so the chip falls
+  // back to its prettifier without firing a 404.
+  modelCatalog: { claude: null, codex: null, copilot: null },
+  modelCatalogStatus: { claude: 'idle', codex: 'idle', copilot: 'idle' },
+  loadModelCatalog: (provider) => {
+    const status = get().modelCatalogStatus[provider];
+    if (status === 'loading' || status === 'ready') return;
+    if (provider === 'copilot') return;
+    set((s) => ({
+      modelCatalogStatus: { ...s.modelCatalogStatus, [provider]: 'loading' },
+    }));
+    api.providers
+      .models(provider)
+      .then((res) => {
+        set((s) => ({
+          modelCatalog: { ...s.modelCatalog, [provider]: res.models },
+          modelCatalogStatus: { ...s.modelCatalogStatus, [provider]: 'ready' },
+        }));
+      })
+      .catch(() => {
+        set((s) => ({
+          modelCatalogStatus: { ...s.modelCatalogStatus, [provider]: 'error' },
+        }));
+      });
+  },
 }));
 
 function isTaskState(s: string | undefined): boolean {
