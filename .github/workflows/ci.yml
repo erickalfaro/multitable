@@ -26,3 +26,19 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+  # Single rollup check that branch protection requires.
+  # Green iff every matrix cell of lint-and-build was green.
+  # Stable name across matrix changes — don't rename without updating the
+  # branch protection rule on master.
+  ci:
+    if: always()
+    needs: [lint-and-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix result
+        run: |
+          if [ "${{ needs.lint-and-build.result }}" != "success" ]; then
+            echo "lint-and-build matrix did not succeed: ${{ needs.lint-and-build.result }}"
+            exit 1
+          fi
