@@ -28,11 +28,11 @@
 
 ## What is this?
 
-MultiTable is a **local, browser-based dashboard** for the chaos of agentic coding. A small Node.js daemon on your machine drives Claude Code through the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk), spawns dev servers and shells via real PTYs (thanks, [`node-pty`](https://github.com/microsoft/node-pty)), persists state in SQLite, and serves a React UI at `http://localhost:3000`. One tab. Every project. Every agent. Every dev server.
+MultiTable is a **local, browser-based dashboard** for the chaos of agentic coding. A small Node.js daemon on your machine drives **multiple AI agents** — Claude Code through the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) and OpenAI Codex through direct JSON-RPC against the [`codex app-server`](https://github.com/openai/codex) child process — spawns dev servers and shells via real PTYs (thanks, [`node-pty`](https://github.com/microsoft/node-pty)), persists state in SQLite, and serves a React UI at `http://localhost:3000`. One tab. Every project. Every agent. Every dev server. Optionally: approve permission prompts from your phone over Telegram.
 
-**Sessions are SDK-driven, not terminal-driven.** Claude Code conversations render as a sleek chat UI — markdown, syntax-highlighted code, collapsible tool calls, inline permission cards, `/` slash commands and `@file` mentions in the composer. No xterm screen-scraping. Commands (dev servers, queue workers) and terminals (ad-hoc shells) still run on real PTYs because that's the right model for them.
+**Agents are SDK-driven, not terminal-driven.** Both Claude Code and Codex render as a sleek chat UI — markdown, syntax-highlighted code, collapsible tool calls, live chain-of-thought, inline permission cards, schema-driven elicitation forms, `/` slash commands and `@file` mentions in the composer. No xterm screen-scraping. Commands (dev servers, queue workers) and terminals (ad-hoc shells) still run on real PTYs because that's the right model for them.
 
-**Privacy:** the daemon runs entirely on your machine. No accounts, no telemetry, no outbound calls. The only network traffic is between your browser and `localhost` (or your tailnet, if you turn that on).
+**Privacy:** the daemon runs entirely on your machine. No accounts, no telemetry, no outbound calls — except to the LLM providers you've signed in to (and to Telegram if you opt in). Network traffic is between your browser and `localhost` (or your tailnet, if you turn that on).
 
 ```
 Before MultiTable                      After MultiTable
@@ -78,16 +78,21 @@ Then open `http://<your-tailscale-hostname>:3000` from any device on the tailnet
 
 ## Features
 
-- **Sleek chat UI for AI sessions.** Claude Code runs as a CodeMirror-based composer + a chat history with markdown, shiki-highlighted code blocks, and collapsible tool-call cards. No more peering at a terminal pretending to be a chat.
-- **One sidebar, every process.** Sessions (AI agents, SDK-driven), commands (dev servers, workers, PTY-driven), and terminals (ad‑hoc shells, PTY-driven) in a single tree, grouped by project.
-- **Permission prompts surface in the UI.** No more missed Claude Code "Allow / Deny / Always Allow" prompts buried in a pane — accept from any device on your tailnet. Plumbed straight from the SDK's `canUseTool` callback.
+- **Multi-provider, not just Claude.** Claude Code via the official [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk); Codex via direct JSON-RPC to `codex app-server` (no PTY screen-scraping, no `@openai/codex-sdk` dependency). Both render in the same chat UI; both feed the same permission, diff, and notification plumbing. `Gemini` and `Copilot` are scaffolded for future drop-in adapters.
+- **Sleek chat UI for every agent.** A CodeMirror composer with `@file` mentions, `/` slash commands, image attachments, and an expandable full-screen draft mode. The chat history streams markdown (Streamdown), shiki-highlighted code, collapsible tool-call cards, **live chain-of-thought**, and **live task lists**. No more peering at a terminal pretending to be a chat.
+- **One sidebar, every process.** Agents (AI, SDK-driven), commands (dev servers, workers, PTY-driven), and terminals (ad‑hoc shells, PTY-driven) in a single tree, grouped by project. A 60-variant dot-matrix avatar set keeps projects visually distinct.
+- **Permission prompts surface in the UI — and on Telegram.** Allow / Deny / Always-Allow buttons render in-line as soon as Claude asks. If you wire up a Telegram bot, the same prompt forwards to your phone with inline keyboard buttons; tap a button, the answer flows back to your daemon and resolves the SDK's `canUseTool` Promise. No relay server, no cloud sync — your daemon talks directly to the Bot API.
+- **Elicitation forms.** MCP-style schema prompts (think: "the server needs this structured input from the user") render as a real form in the UI, type-aware, with enum dropdowns and defaults.
+- **Modes per agent.** `default`, `plan`, `accept-edits`, `auto`, `chat`, `read-only` — each provider translates appropriately (Claude → `permissionMode`; Codex → sandbox + thread reset, because Codex options are immutable after thread start).
 - **`@file` mentions and `/` slash commands** in the composer. Fuzzy file picker over your project tree; `/clear` and `/cost` are intercepted client-side; user-defined `.claude/commands/*.md` flow through the SDK as templated prompts.
-- **Browser notifications + sound chimes** when an agent finishes, needs attention, or asks a permission question. Walk away, hear when it's your turn.
+- **Live cost & token tracking** per agent, surfaced from the SDK's `result` message — no log scraping. (Codex doesn't currently report USD, so the dollar row is hidden for Codex sessions.)
+- **Live model picker.** Discovered live via `codex debug models` + Anthropic `/v1/models`, with fallback to canonical aliases. Switch models per agent.
+- **Past Agents browser.** Resume any past Claude or Codex thread from disk. Claude JSONL at `~/.claude/projects/<encoded-cwd>/<id>.jsonl` and Codex rollouts at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<thread_id>.jsonl` are both parsed into the same `Message[]` shape — full interop with both CLIs.
+- **Full git panel, not just diffs.** Status, staging, commit composer, branch picker, branch create/switch/delete, stash/pop, fetch/pull/push — per project, live-updated by a `chokidar` watcher + `simple-git`. Each agent gets a `git_baseline_commit` on creation, so you can also see exactly what *that agent* changed.
+- **Notification center + browser/audio alerts.** Per-category + per-severity prefs, OS notifications, tab badges for unread, and an in-app history with severity icons and dismiss controls.
+- **Dev log panel.** Daemon-side timers, WS, permission, and adapter events stream into an in-app debug panel — pause, search, replay. Saves a lot of tail-ing.
 - **Auto-restart with backoff** for commands. Configurable `autorestartMax`, `autorestartDelayMs`, and windowed reset — crashes don't mean silence.
 - **File-watch restart** for dev servers — edit `src/**/*.ts`, the watcher restarts the right process.
-- **Live cost & token tracking** per Claude Code session, surfaced from the SDK's `result` message — no log scraping.
-- **Git diffs** per session, via `simple-git`, so you can see what an agent actually changed.
-- **Session resume.** Conversations persist as JSONL at the same `~/.claude/projects/<encoded-cwd>/<id>.jsonl` location the `claude` CLI uses — full interop. The first turn after daemon restart resumes natively via the SDK.
 - **Command palette** (`cmdk`) for fuzzy-jumping between projects, processes, and actions.
 - **SQLite persistence.** Projects, sessions, commands, scrollback (commands/terminals only) — all survive restarts.
 - **LAN / Tailscale / mobile.** Bind the daemon to `0.0.0.0`, open the UI from your phone or iPad — same dashboard, with a touch toolbar.
@@ -102,11 +107,14 @@ Then open `http://<your-tailscale-hostname>:3000` from any device on the tailnet
 | Survives reboot       | ⚠️ session files | ❌       | ✅ SQLite     |
 | Per-process auto-restart | ❌         | ❌          | ✅             |
 | File-watch restart    | ❌            | ❌          | ✅             |
-| Agent in a chat UI (not a terminal) | ❌ | ❌      | ✅ (Claude Agent SDK) |
+| Agent in a chat UI (not a terminal) | ❌ | ❌      | ✅ (Claude SDK + Codex JSON-RPC) |
+| **Multiple agent providers in one UI (Claude + Codex)** | ❌ | ❌ | ✅ |
 | Agent permission prompts in UI | ❌   | ❌          | ✅             |
+| **Approve permission prompts from your phone (Telegram)** | ❌ | ❌ | ✅ |
 | Live cost / token tracking | ❌       | ❌          | ✅             |
+| **Live model picker per agent** | ❌    | ❌          | ✅             |
 | `@file` and `/` slash commands in composer | ❌ | ❌  | ✅             |
-| Git diff per session  | ❌            | ❌          | ✅             |
+| **Full in-UI git workflow (stage / commit / branch / stash)** | ❌ | ❌ | ✅ |
 | Use from your phone   | ❌            | ❌          | ✅             |
 | 100% local, no account | ✅           | ❌          | ✅             |
 
@@ -268,8 +276,8 @@ npm run dev
 From the empty dashboard:
 
 1. Click **+ Add Project** → point it at any directory on disk.
-2. Add a session (`claude`, `codex`, `aider`, whatever your agent is) or a command (`npm run dev`).
-3. Hit **Start**.
+2. Add an **agent** (Claude Code or Codex are both first-class — pick a provider, model, and mode) or a command (`npm run dev`).
+3. Send your first prompt — the agent auto-starts. (Or add a command and hit **Start**.)
 4. Grab a drink.
 
 ## Configure a project with `mt.yml`
@@ -326,59 +334,95 @@ A few things worth noting:
 ```mermaid
 flowchart TB
     subgraph Browser["Browser (laptop, iPad, phone)"]
-        UI["React UI<br/>chat (CodeMirror + react-markdown)<br/>+ xterm.js for cmds/terms"]
+        UI["React UI<br/>chat (CodeMirror + Streamdown)<br/>+ git panel + notif center<br/>+ xterm.js for cmds/terms"]
+    end
+
+    subgraph Phone["Telegram (optional)"]
+        TG["Allow / Deny / Always-Allow<br/>inline keyboards"]
     end
 
     subgraph Daemon["mt daemon (Node.js on localhost)"]
         Express["Express<br/>REST API"]
         WS["ws<br/>WebSocket stream"]
-        Agent["AgentSessionManager<br/>SDK query() + canUseTool + hooks"]
+        Agent["AgentSessionManager<br/>provider-agnostic orchestrator"]
+        subgraph Providers["agent/providers/"]
+            CA["ClaudeAdapter"]
+            CXA["CodexAdapter"]
+        end
         PTY["PtyManager<br/>node-pty (cmds, terminals)"]
         DB[("SQLite<br/>better-sqlite3")]
         Watcher["chokidar<br/>file watcher (cmds)"]
-        Git["simple-git<br/>diffs"]
+        Git["simple-git<br/>+ GitWatcher"]
         Perms["PermissionManager"]
+        Elic["ElicitationManager"]
+        TGB["TelegramBridge"]
     end
 
-    UI -- "REST: CRUD, /messages, /cost" --> Express
-    UI <-- "WS: session:send, pty I/O, state, permissions" --> WS
+    UI -- "REST: CRUD, /messages, /cost, /git/*, /integrations" --> Express
+    UI <-- "WS: session:send, pty I/O, state,<br/>permissions, elicitation, alerts, git" --> WS
 
     Express --> DB
     Express --> Agent
     Express --> PTY
+    Express --> Git
     WS <--> Agent
     WS <--> PTY
+    Git -- "git:status-changed" --> WS
     Watcher --> PTY
 
-    Agent -- "query()" --> SDK["@anthropic-ai/<br/>claude-agent-sdk"]
+    Agent --> CA
+    Agent --> CXA
     Agent --> DB
-    Agent <--> Perms
-    SDK -- "canUseTool, hooks" --> Agent
+    CA <--> Perms
+    CA <--> Elic
+    CA -- "query()" --> SDK["@anthropic-ai/<br/>claude-agent-sdk"]
+    CXA -- "JSON-RPC stdio" --> CodexCh["codex app-server<br/>child process"]
+
     SDK -- "writes JSONL" --> JSONL[("~/.claude/projects/<br/>&lt;cwd&gt;/&lt;id&gt;.jsonl")]
-    Express -- "reads JSONL<br/>(transcripts, /cost fallback)" --> JSONL
+    CodexCh -- "writes rollouts" --> Rollouts[("~/.codex/sessions/<br/>&lt;date&gt;/rollout-*.jsonl")]
+    Express -- "reads JSONL + rollouts<br/>(transcripts, past agents)" --> JSONL
+    Express --> Rollouts
+
+    Perms -- "events" --> TGB
+    Agent -- "alerts + asks" --> TGB
+    TGB <--> TG
 
     PTY --> DB
     PTY <--> WS
 ```
 
-See [`docs/SPEC.md`](docs/SPEC.md) for the full product specification, [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a deeper visual walkthrough, and [`docs/SDK_MIGRATION_PLAN.md`](docs/SDK_MIGRATION_PLAN.md) for the architectural rewrite that moved sessions from PTY to SDK.
+See [`docs/SPEC.md`](docs/SPEC.md) for the full product specification, [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a deeper visual walkthrough, [`docs/SDK_MIGRATION_PLAN.md`](docs/SDK_MIGRATION_PLAN.md) for the rewrite that moved sessions from PTY to SDK, [`docs/CODEX_APP_SERVER_MIGRATION.md`](docs/CODEX_APP_SERVER_MIGRATION.md) for the move from the npm SDK to direct app-server JSON-RPC, and [`docs/THREE_PROVIDER_INTEGRATION_PLAN.md`](docs/THREE_PROVIDER_INTEGRATION_PLAN.md) for the multi-provider design.
 
 ## Repository layout
 
 ```
 packages/
-  daemon/   Node.js backend — Express + ws + node-pty + claude-agent-sdk + SQLite
-    src/agent/        AgentSessionManager, sdkAdapter (SDK-driven sessions)
-    src/pty/          PtyManager (commands + terminals)
-    src/hooks/        permissionManager, costParser, labeler, optionDetector
-    src/transcripts/  parser.ts (JSONL → Message[])
-    src/api/          REST routers per resource
+  daemon/   Node.js backend — Express + ws + node-pty + claude-agent-sdk + codex app-server + SQLite
+    src/agent/             AgentSessionManager (provider-agnostic) + sdkAdapter + streamBuffer + alerts
+    src/agent/providers/   ClaudeAdapter, CodexAdapter, codex-app-server transport/client, codex-protocol bindings
+    src/pty/               PtyManager (commands + terminals only)
+    src/hooks/             permissionManager, elicitationManager, costParser, labeler, optionDetector
+    src/notifications/     Telegram bridge (telegramBridge + telegramApi + telegramFormat)
+    src/git/               simple-git wrappers + chokidar GitWatcher
+    src/transcripts/       Claude JSONL parser + Codex rollout parser
+    src/api/               REST routers (projects, sessions, commands, terminals, processes,
+                           config, search, transcripts, notes, integrations, git, providers)
+    src/devLog.ts, src/loaders.ts, src/config/secrets.ts
   web/      React frontend
-    src/components/main-pane/chat/   SessionChat, MessageList, ChatInputCM (CodeMirror)
-    src/components/main-pane/        TerminalView (xterm) for commands/terminals
-    src/lib/                         ws client, api client, cm-completions, shiki
+    src/components/main-pane/chat/   SessionChat + 14 chat subcomponents (CodeMirror composer,
+                                     ExpandedComposer, ModelChip, ReasoningCard, LoaderNode,
+                                     ToolCallCard, TurnRow, ChatScroller, TasksTab, …)
+    src/components/main-pane/git/    Full git panel (GitPanel, GitFileList, GitDiffPane,
+                                     GitBranchPicker, GitCommitComposer, DiffFileSection)
+    src/components/elicitation/      ElicitationModal (schema-driven forms)
+    src/components/notifications/    NotificationCenter
+    src/components/dev-log/          DevLogPanel
+    src/components/sidebar/          PastAgentsList (replaces old PastSessions), Sidebar items
+    src/components/ui/dotmatrix-*    60-variant project loader/avatar system
+    src/lib/                         ws, api, notify, devLog, markdown, notificationPrefs, pastAgents, …
   cli/      `mt` command (commander)
-docs/       Product spec, overview diagrams, SDK migration plan
+docs/       SPEC, OVERVIEW, SDK_MIGRATION_PLAN, CODEX_APP_SERVER_MIGRATION,
+            THREE_PROVIDER_INTEGRATION_PLAN
 ```
 
 ## Roadmap
@@ -389,8 +433,9 @@ docs/       Product spec, overview diagrams, SDK migration plan
 - [x] **v0.4** Claude Code integration — hooks, in-UI permissions, options, resume, cost & token tracking
 - [x] **v0.5** Chat UI for sessions — CodeMirror composer, markdown + shiki rendering, collapsible tool cards
 - [x] **v0.6** SDK migration — sessions driven by `@anthropic-ai/claude-agent-sdk` (no PTY for sessions); `@file` mentions and `/` slash commands
-- [ ] **v0.7** Global keyboard shortcuts (`Ctrl+K` palette, process jumps) and richer search
-- [ ] **v0.8** Polish — conflict detection improvements, CLI ergonomics, more themes, packaged binaries
+- [x] **v0.7** Multi-provider architecture — `ProviderAdapter` contract; Codex as a first-class adapter via `codex app-server` JSON-RPC (no PTY, no `@openai/codex-sdk`); live reasoning + tool deltas; modes per agent
+- [x] **v0.8** Remote + workflow polish — Telegram bridge for permission prompts; full in-UI git workflow (stage / commit / branch / stash); notification center with per-category prefs; elicitation forms; live model picker; Past Agents browser; in-app DevLog panel
+- [ ] **v0.9** Global keyboard shortcuts (`Ctrl+K` palette, process jumps), richer search, more provider adapters (Gemini, Copilot scaffolding exists), packaged binaries
 
 ## Contributing
 
@@ -401,7 +446,8 @@ Good first issues are labelled `good first issue`. The most useful early PRs wou
 - **Global keyboard shortcuts** (the command palette opens, but nothing has bound `Ctrl+K` yet).
 - **Windows per-process CPU %** (the metrics poller currently relies on Unix `ps`).
 - **More native slash commands** (`/model`, `/compact`, `/init` etc. — currently only `/clear` and `/cost` are intercepted; the rest get sent to the SDK as plain text and don't do their CLI thing).
-- **Adapters for additional agents** beyond Claude Code (Codex, Aider, etc. still run as raw PTYs through commands today; an SDK-style integration for non-Claude agents is wide open).
+- **Adapters for additional providers** (Gemini, Aider, Copilot — the `ProviderAdapter` contract under `packages/daemon/src/agent/providers/` is stable; drop in a new file alongside `claude.ts` and `codex.ts` and register it in the manager).
+- **Packaged binaries** for `mt` so installation doesn't require the Node toolchain.
 
 ## Security
 
@@ -413,4 +459,4 @@ MIT — see [`LICENSE`](LICENSE).
 
 ---
 
-<p align="center"><sub>Built with the Claude Agent SDK, node-pty, React, CodeMirror, SQLite, and a healthy refusal to tmux one more thing.</sub></p>
+<p align="center"><sub>Built with the Claude Agent SDK, codex app-server, node-pty, React, CodeMirror, SQLite, and a healthy refusal to tmux one more thing.</sub></p>
