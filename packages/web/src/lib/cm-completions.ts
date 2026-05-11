@@ -94,7 +94,7 @@ function fuzzyScore(query: string, candidate: string): number {
 
 export function fileMentionSource(projectIdGetter: () => string | null) {
   return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
-    const match = ctx.matchBefore(/@[\w./\-]*/);
+    const match = ctx.matchBefore(/@[\w./-]*/);
     if (!match) return null;
     // Require the char before '@' to be whitespace/start — avoids triggering
     // inside emails etc.
@@ -134,7 +134,7 @@ export function fileMentionSource(projectIdGetter: () => string | null) {
     // share the `@` prefix, so CM6's default prefix-match filter would
     // discard every option and silently close the popup. We've already
     // filtered via `fuzzyScore` upstream, so trust that result.
-    return { from: match.from, options, validFor: /^@[\w./\-]*$/, filter: false };
+    return { from: match.from, options, validFor: /^@[\w./-]*$/, filter: false };
   };
 }
 

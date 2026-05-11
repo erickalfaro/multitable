@@ -15,7 +15,7 @@
   <img alt="Platforms: macOS, Linux, Windows" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-informational">
   <img alt="Node &gt;=18" src="https://img.shields.io/badge/node-%E2%89%A518-brightgreen">
   <img alt="100% local" src="https://img.shields.io/badge/runs-100%25%20local-success">
-  <img alt="Status: MVP" src="https://img.shields.io/badge/status-MVP-orange">
+  <img alt="Version: 0.8.0" src="https://img.shields.io/badge/version-0.8.0-blue">
   <a href="https://github.com/erickalfaro/multitable/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/erickalfaro/multitable/ci.yml?branch=master"></a>
 </p>
 
