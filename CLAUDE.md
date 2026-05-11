@@ -329,6 +329,48 @@ A note on terminology: **the UI says "agent" wherever it used to say "session"**
 - Prettier: single quotes, trailing commas, semicolons, 100-char width, 2-space tabs.
 - ESLint extends `eslint:recommended` + `@typescript-eslint/recommended`. Unused vars prefixed with `_` are allowed.
 
+## How to push to master
+
+Master is protected. **Direct pushes to master are blocked, including for the repo owner** (`enforce_admins: true`). Every change — even a one-line typo — goes through a PR. The CI workflow runs lint + build on a 3×3 matrix (Linux/macOS/Windows × Node 18/20/22); a single rollup job named `ci` aggregates the matrix and is the only required status check on the protection rule.
+
+The standard flow:
+
+```bash
+# 1. Branch from master
+git checkout master && git pull
+git checkout -b <type>/<short-description>   # e.g. fix/typo, feat/foo, chore/bar
+
+# 2. Make changes, commit
+git add <files> && git commit -m "..."
+
+# 3. Push branch + open PR
+git push -u origin HEAD
+gh pr create --fill                          # or --title / --body for releases
+
+# 4. Wait for CI green, then squash-merge
+gh pr merge --squash --delete-branch
+```
+
+Conventions:
+
+- **Always squash-merge** — the repo only has squash + rebase enabled; squash is the default and matches GitHub's recommendation. PR title becomes the master commit subject, PR body becomes the body.
+- **One PR = one logical change.** Small fixes are fine — don't batch unrelated work just to avoid the PR overhead.
+- **Branch naming:** `feat/`, `fix/`, `chore/`, `docs/`, `refactor/` prefixes. Anything you'd put in a conventional commit message.
+- **Releases:** bump versions in all four `package.json` files (root + 3 packages), update the README badge, tag `vX.Y.Z` on master after the PR merges, then `gh release create vX.Y.Z --target master --generate-notes` (hand-edit the auto-notes for the headline summary).
+
+Emergency override (don't do this casually):
+
+```bash
+# Temporarily disable enforcement, push hotfix, re-enable.
+gh api -X DELETE repos/erickalfaro/multitable/branches/master/protection/enforce_admins
+git push origin master
+gh api -X POST   repos/erickalfaro/multitable/branches/master/protection/enforce_admins
+```
+
+This exists for true emergencies (broken CI infra blocking a critical fix, etc.). For everything else, even a one-line README change goes through a PR — that's what the protection rule is for.
+
+The required check name is `ci` (the rollup job in `.github/workflows/ci.yml`). **Don't rename the `ci` job without also updating the branch protection rule** via `gh api -X PUT repos/erickalfaro/multitable/branches/master/protection/required_status_checks` — the rule references the check by name, and a rename silently turns the gate into "no required checks ever arrive" → admin bypass becomes the only way through.
+
 ## Recently retired (don't reintroduce)
 
 These have been deleted on the way to today's architecture. Rebuilding them would re-create bugs we already fixed:
