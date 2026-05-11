@@ -5,7 +5,7 @@
 <h1 align="center">MultiTable</h1>
 
 <p align="center">
-  <em>One cockpit for every AI coding agent, dev server, and terminal in your workflow.</em><br/>
+  <em>Run Claude Code, Codex, Copilot, and Gemini side by side — plus your dev servers, terminals, and git, all in one app.</em><br/>
   <sub>Because <code>tmux</code> wasn't built for the day Claude, Codex, and <code>npm run dev</code> all need your attention at once.</sub>
 </p>
 

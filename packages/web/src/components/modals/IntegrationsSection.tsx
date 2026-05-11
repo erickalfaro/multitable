@@ -319,7 +319,7 @@ export function IntegrationsSection() {
           <Input
             value={dashboardUrlDraft}
             onChange={(e) => setDashboardUrlDraft(e.target.value)}
-            placeholder="http://epc.tail146615.ts.net:5173"
+            placeholder="http://devbox.tailXXXXXX.ts.net:5173"
             wrapperStyle={{ flex: 1, maxWidth: 460 }}
             leftIcon={<Smartphone size={12} />}
             onKeyDown={(e) => {
