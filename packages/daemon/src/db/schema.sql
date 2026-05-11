@@ -23,11 +23,25 @@ CREATE TABLE IF NOT EXISTS sessions (
   autorespawn INTEGER DEFAULT 1,
   terminal_alerts INTEGER DEFAULT 0,
   file_watch_patterns TEXT DEFAULT '[]',
+  agent_provider TEXT DEFAULT 'claude',
+  model TEXT,
+  agent_session_id TEXT,
+  agent_session_id_history TEXT DEFAULT '[]',
   claude_session_id TEXT,
-  scrollback_data BLOB,
+  claude_session_id_history TEXT DEFAULT '[]',
+  tags TEXT DEFAULT '[]',
+  mode TEXT DEFAULT 'default',
   scratchpad TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
-  last_active_at INTEGER
+  last_active_at INTEGER,
+  loader_variant TEXT,
+  git_baseline_commit TEXT
+);
+
+CREATE TABLE IF NOT EXISTS claude_session_loaders (
+  claude_session_id TEXT PRIMARY KEY,
+  loader_variant TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS session_events (

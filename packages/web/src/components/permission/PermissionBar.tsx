@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
 import { wsClient } from '../../lib/ws';
 import type { PermissionPrompt } from '../../lib/types';
@@ -7,18 +7,6 @@ import { ToolInputPreview } from './ToolInputPreview';
 
 function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
   const removePermission = useAppStore(s => s.removePermission);
-  const [elapsed, setElapsed] = useState(0);
-  const timeoutSecs = prompt.timeoutMs / 1000;
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const spent = (Date.now() - prompt.createdAt) / 1000;
-      setElapsed(Math.min(spent, timeoutSecs));
-    }, 100);
-    return () => clearInterval(interval);
-  }, [prompt.createdAt, timeoutSecs]);
-
-  const progress = 1 - elapsed / timeoutSecs;
 
   const respond = (decision: 'allow' | 'deny' | 'always-allow') => {
     wsClient.respondPermission(prompt.id, decision);
@@ -28,54 +16,48 @@ function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
   return (
     <div
       style={{
+        position: 'relative',
         backgroundColor: 'var(--bg-elevated)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
-        padding: 14,
+        padding: '14px 14px 12px',
         marginBottom: 8,
-        boxShadow: 'var(--shadow-sm)',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10, gap: 8, userSelect: 'none', WebkitUserSelect: 'none' }}>
-        <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
-          {prompt.toolName}
-        </span>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
-          from {prompt.sessionId}
-        </span>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
-          {Math.ceil(timeoutSecs - elapsed)}s
-        </span>
-      </div>
-      {/* Countdown bar */}
-      <div
+      <span
         style={{
-          height: 3,
-          backgroundColor: 'var(--border)',
-          borderRadius: 'var(--radius-pill)',
-          marginBottom: 10,
-          overflow: 'hidden',
+          position: 'absolute',
+          top: 8,
+          left: 12,
+          fontSize: 9.5,
+          color: 'var(--accent-amber)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.18em',
+          fontWeight: 500,
         }}
       >
-        <div
-          style={{
-            height: '100%',
-            backgroundColor: 'var(--accent-blue)',
-            borderRadius: 'var(--radius-pill)',
-            width: `${progress * 100}%`,
-            boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.35)',
-            transition: 'width 0.1s linear',
-          }}
-        />
-      </div>
-      <div style={{ marginBottom: 10 }}>
+        permission · {prompt.toolName}
+      </span>
+      <span
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 12,
+          fontSize: 9.5,
+          color: 'var(--text-faint)',
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {prompt.sessionId.slice(0, 12)}
+      </span>
+      <div style={{ marginTop: 18, marginBottom: 10 }}>
         <ToolInputPreview toolName={prompt.toolName} input={prompt.toolInput} />
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <Button size="sm" variant="primary" onClick={() => respond('allow')}>
           Allow
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => respond('always-allow')}>
+        <Button size="sm" variant="secondary" onClick={() => respond('always-allow')}>
           Always Allow
         </Button>
         <div style={{ flex: 1 }} />
@@ -106,9 +88,7 @@ function Preview({ text }: { text: string }) {
           color: 'var(--text-muted)',
           margin: '6px 0 0',
           padding: '6px 8px',
-          backgroundColor: 'color-mix(in srgb, var(--bg-sidebar) 60%, transparent)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-sm)',
+          backgroundColor: 'var(--bg-sidebar)',
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           whiteSpace: 'pre',
           overflow: 'auto',
@@ -138,9 +118,7 @@ function Preview({ text }: { text: string }) {
         gap: 4,
         marginTop: 6,
         padding: 6,
-        backgroundColor: 'color-mix(in srgb, var(--bg-sidebar) 60%, transparent)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-sm)',
+        backgroundColor: 'var(--bg-sidebar)',
       }}
     >
       {swatches.map((s, i) => (
@@ -150,7 +128,7 @@ function Preview({ text }: { text: string }) {
           style={{
             width: 18,
             height: 18,
-            borderRadius: 3,
+            borderRadius: 'var(--radius-snug)',
             backgroundColor: s.hex,
             border: '1px solid color-mix(in srgb, var(--text-primary) 20%, transparent)',
             flexShrink: 0,
@@ -164,23 +142,11 @@ function Preview({ text }: { text: string }) {
 function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
   const removePermission = useAppStore(s => s.removePermission);
   const questions = prompt.questions ?? [];
-  const [elapsed, setElapsed] = useState(0);
-  const timeoutSecs = prompt.timeoutMs / 1000;
 
   // selections[i] = array of chosen labels for question i
   const [selections, setSelections] = useState<string[][]>(() =>
     questions.map(() => [])
   );
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const spent = (Date.now() - prompt.createdAt) / 1000;
-      setElapsed(Math.min(spent, timeoutSecs));
-    }, 100);
-    return () => clearInterval(interval);
-  }, [prompt.createdAt, timeoutSecs]);
-
-  const progress = 1 - elapsed / timeoutSecs;
 
   const toggle = (qIdx: number, label: string, multi: boolean) => {
     setSelections(prev => {
@@ -210,45 +176,41 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
   return (
     <div
       style={{
+        position: 'relative',
         backgroundColor: 'var(--bg-elevated)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
-        padding: 14,
+        padding: '14px 14px 12px',
         marginBottom: 8,
-        boxShadow: 'var(--shadow-sm)',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10, gap: 8, userSelect: 'none', WebkitUserSelect: 'none' }}>
-        <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
-          Question
-        </span>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
-          from {prompt.sessionId}
-        </span>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
-          {Math.ceil(timeoutSecs - elapsed)}s
-        </span>
-      </div>
-      <div
+      <span
         style={{
-          height: 3,
-          backgroundColor: 'var(--border)',
-          borderRadius: 'var(--radius-pill)',
-          marginBottom: 12,
-          overflow: 'hidden',
+          position: 'absolute',
+          top: 8,
+          left: 12,
+          fontSize: 9.5,
+          color: 'var(--accent-amber)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.18em',
+          fontWeight: 500,
         }}
       >
-        <div
-          style={{
-            height: '100%',
-            backgroundColor: 'var(--accent-blue)',
-            borderRadius: 'var(--radius-pill)',
-            width: `${progress * 100}%`,
-            boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.35)',
-            transition: 'width 0.1s linear',
-          }}
-        />
-      </div>
+        question
+      </span>
+      <span
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 12,
+          fontSize: 9.5,
+          color: 'var(--text-faint)',
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {prompt.sessionId.slice(0, 12)}
+      </span>
+      <div style={{ height: 22 }} />
 
       {questions.map((q, qIdx) => {
         const multi = !!q.multiSelect;
@@ -281,9 +243,9 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                       alignItems: 'flex-start',
                       gap: 8,
                       padding: 8,
-                      border: `1px solid ${selected ? 'var(--accent-blue)' : 'var(--border)'}`,
-                      borderRadius: 'var(--radius-md)',
-                      backgroundColor: selected ? 'color-mix(in srgb, var(--accent-blue) 10%, transparent)' : 'transparent',
+                      border: `1px solid ${selected ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
+                      borderRadius: 'var(--radius-snug)',
+                      backgroundColor: selected ? 'color-mix(in srgb, var(--accent-amber) 10%, transparent)' : 'transparent',
                       cursor: 'pointer',
                       transition: 'background-color 0.12s, border-color 0.12s',
                     }}
@@ -319,7 +281,7 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
           Submit answer
         </Button>
         <div style={{ flex: 1 }} />
-        <Button size="sm" variant="ghost" onClick={skip}>
+        <Button size="sm" variant="secondary" onClick={skip}>
           Skip
         </Button>
       </div>
@@ -346,12 +308,10 @@ export function PermissionBar({ sessionId }: PermissionBarProps = {}) {
         right: 12,
         bottom: 12,
         padding: 12,
-        borderRadius: 'var(--radius-xl)',
-        border: '1px solid var(--border)',
-        backgroundColor: 'color-mix(in srgb, var(--bg-statusbar) 95%, transparent)',
-        backdropFilter: 'blur(12px) saturate(1.1)',
-        WebkitBackdropFilter: 'blur(12px) saturate(1.1)',
-        boxShadow: 'var(--shadow-lg)',
+        borderRadius: 'var(--radius-soft)',
+        border: '1px solid var(--border-strong)',
+        backgroundColor: 'var(--bg-sidebar)',
+        boxShadow: 'none',
         zIndex: 10,
         maxHeight: '60%',
         overflowY: 'auto',

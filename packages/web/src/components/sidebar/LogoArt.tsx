@@ -17,11 +17,13 @@ const FACES = [
   'T_T', // error
 ];
 
-// One color per agent — reuses status tokens so every theme adapts.
+// One color per agent — uses the Obsidian palette: amber + live + err + white.
+// All four are on-brand under the manifesto's "no blue" rule and keep the
+// four cells visually distinct.
 const CELL_COLORS = [
+  'var(--accent-amber)',
   'var(--status-running)',
-  'var(--accent-blue)',
-  'var(--status-warning)',
+  'var(--text-primary)',
   'var(--status-error)',
 ];
 
@@ -76,12 +78,12 @@ export function LogoArt() {
 
   const preStyle: React.CSSProperties = {
     margin: 0,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontFamily: 'monospace',
     fontSize: 10,
     lineHeight: 1.1,
     letterSpacing: 0,
     whiteSpace: 'pre',
-    color: 'var(--text-muted)', // border chars
+    color: 'var(--text-faint)', // border chars
     userSelect: 'none',
     WebkitUserSelect: 'none',
   };

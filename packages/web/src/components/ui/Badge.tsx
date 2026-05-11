@@ -6,40 +6,44 @@ export type BadgeSize = 'sm' | 'md';
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   variant?: BadgeVariant;
   size?: BadgeSize;
+  /**
+   * Solid mode is preserved for ABI compatibility but renders identically to
+   * outline mode in the Essence design (1px box, no fills).
+   */
   solid?: boolean;
 }
 
-function variantColors(variant: BadgeVariant): { fg: string; bg: string } {
+function variantColor(variant: BadgeVariant): string {
   switch (variant) {
     case 'accent':
-      return { fg: 'var(--accent-blue)', bg: 'color-mix(in srgb, var(--accent-blue) 15%, transparent)' };
+      return 'var(--accent-amber)';
     case 'running':
-      return { fg: 'var(--status-running)', bg: 'color-mix(in srgb, var(--status-running) 15%, transparent)' };
+      return 'var(--status-running)';
     case 'warning':
-      return { fg: 'var(--status-warning)', bg: 'color-mix(in srgb, var(--status-warning) 18%, transparent)' };
+      return 'var(--status-warning)';
     case 'error':
-      return { fg: 'var(--status-error)', bg: 'color-mix(in srgb, var(--status-error) 18%, transparent)' };
+      return 'var(--status-error)';
     case 'muted':
-      return { fg: 'var(--text-muted)', bg: 'color-mix(in srgb, var(--text-muted) 15%, transparent)' };
+      return 'var(--text-muted)';
     default:
-      return { fg: 'var(--text-secondary)', bg: 'color-mix(in srgb, var(--border) 50%, transparent)' };
+      return 'var(--text-secondary)';
   }
 }
 
 const SIZE: Record<BadgeSize, React.CSSProperties> = {
-  sm: { fontSize: 10, padding: '2px 7px', height: 18 },
-  md: { fontSize: 11, padding: '3px 9px', height: 22 },
+  sm: { fontSize: 9.5, padding: '1px 6px', height: 16 },
+  md: { fontSize: 10, padding: '2px 8px', height: 18 },
 };
 
 export function Badge({
   variant = 'default',
   size = 'sm',
-  solid,
+  solid: _solid,
   style,
   children,
   ...rest
 }: BadgeProps) {
-  const { fg, bg } = variantColors(variant);
+  const color = variantColor(variant);
   return (
     <span
       style={{
@@ -48,15 +52,13 @@ export function Badge({
         gap: 4,
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        borderRadius: 'var(--radius-pill)',
-        fontWeight: 600,
-        color: solid ? '#fff' : fg,
-        backgroundColor: solid
-          ? variant === 'default'
-            ? 'var(--text-muted)'
-            : fg
-          : bg,
-        border: solid ? '1px solid transparent' : '1px solid color-mix(in srgb, currentColor 22%, transparent)',
+        borderRadius: 'var(--radius-snug)',
+        fontWeight: 500,
+        color,
+        backgroundColor: 'transparent',
+        border: `1px solid ${color}`,
+        textTransform: 'uppercase',
+        letterSpacing: '0.14em',
         lineHeight: 1,
         whiteSpace: 'nowrap',
         ...SIZE[size],

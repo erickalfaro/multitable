@@ -7,39 +7,23 @@ import {
   updateSession,
   deleteSession,
   getAllSessions,
-  getSessionsByProject,
   getSessionCostAggregate,
-  insertSessionEvent,
+  getProjectById,
 } from '../db/store.js';
+import { getDiffSinceCommit, isGitRepo } from '../git/index.js';
 import { parseSessionCost } from '../hooks/costParser.js';
 import { parseSessionPrompts, parseAllProjectPrompts } from '../hooks/promptsParser.js';
-import { getClaudeState } from '../hooks/receiver.js';
+import { generateSessionLabel } from '../hooks/labeler.js';
+import {
+  parseTranscriptChain,
+  walkParentUuidChain,
+  getSessionJsonlPath,
+} from '../transcripts/parser.js';
+import { parseCodexThread } from '../transcripts/codexParser.js';
 import { createAttachmentHandler, rawAttachmentBody, removeAttachmentDir } from './attachments.js';
-import type { PtyManager } from '../pty/manager.js';
-import type { ProcessConfig, SpawnConfig } from '../types.js';
+import type { AgentSessionManager } from '../agent/manager.js';
 
-function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig {
-  return {
-    autostart: false,
-    autorestart: false,
-    autorestartMax: 5,
-    autorestartDelayMs: 2000,
-    autorestartWindowSecs: 60,
-    autorespawn: true,
-    terminalAlerts: false,
-    fileWatchPatterns: [],
-    ...overrides,
-  };
-}
-
-function buildClaudeCommand(workingDir: string, resume?: string): string {
-  if (resume) {
-    return `claude --resume ${resume}`;
-  }
-  return 'claude';
-}
-
-export function createSessionsRouter(manager: PtyManager): Router {
+export function createSessionsRouter(agentManager: AgentSessionManager): Router {
   const router = Router();
 
   const attachmentHandler = createAttachmentHandler({
@@ -53,8 +37,17 @@ export function createSessionsRouter(manager: PtyManager): Router {
   router.get('/', (_req: Request, res: Response) => {
     const sessions = getAllSessions();
     const enriched = sessions.map((s) => {
-      const proc = manager.get(s.id);
-      return { ...s, state: proc?.state ?? 'stopped', pid: proc?.pid ?? null };
+      // Sessions no longer spawn a PTY; state lives in the AgentSessionManager.
+      // pid is always null for sessions now.
+      const agent = agentManager.get(s.id);
+      const capabilities = agentManager.getCapabilities(s.id);
+      return {
+        ...s,
+        state: agent?.state ?? 'stopped',
+        pid: null,
+        mode: agent?.mode ?? s.mode ?? 'default',
+        capabilities,
+      };
     });
     res.json(enriched);
   });
@@ -63,8 +56,15 @@ export function createSessionsRouter(manager: PtyManager): Router {
   router.get('/:id', (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-    const proc = manager.get(session.id);
-    res.json({ ...session, state: proc?.state ?? 'stopped', pid: proc?.pid ?? null });
+    const agent = agentManager.get(session.id);
+    const capabilities = agentManager.getCapabilities(session.id);
+    res.json({
+      ...session,
+      state: agent?.state ?? 'stopped',
+      pid: null,
+      mode: agent?.mode ?? session.mode ?? 'default',
+      capabilities,
+    });
   });
 
   // POST /api/sessions
@@ -104,6 +104,26 @@ export function createSessionsRouter(manager: PtyManager): Router {
         terminalAlerts,
         fileWatchPatterns,
       });
+      // Register immediately so the next `session:send` from the UI doesn't
+      // race the DB write with the agent manager's lookup.
+      agentManager.register({
+        id: session.id,
+        projectId: session.projectId,
+        name: session.name,
+        workingDir: session.workingDirectory || '',
+        provider: session.agentProvider,
+        model: session.model,
+        mode: session.mode,
+        agentSessionId: session.agentSessionId ?? null,
+        agentSessionIdHistory: session.agentSessionIdHistory ?? [],
+        claudeSessionId: session.claudeSessionId ?? null,
+        claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
+      });
+      // Mint the provider-side session id eagerly so the transcript file
+      // exists and resume works the moment the user clicks Start. Errors are
+      // logged inside; we don't await — the UI gets the new id via the
+      // `session-updated` WS broadcast when it lands.
+      void agentManager.provisionSession(session.id);
       res.status(201).json(session);
     } catch (err) {
       res.status(500).json({ error: 'Failed to create session' });
@@ -116,6 +136,15 @@ export function createSessionsRouter(manager: PtyManager): Router {
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
     const updated = updateSession(req.params.id, req.body);
+    // Re-broadcast when the visible name changed so other tabs/clients
+    // pick up manual renames without a full refresh.
+    if (
+      updated &&
+      typeof req.body?.name === 'string' &&
+      req.body.name !== session.name
+    ) {
+      agentManager.emit('session-renamed', { sessionId: req.params.id });
+    }
     res.json(updated);
   });
 
@@ -124,21 +153,41 @@ export function createSessionsRouter(manager: PtyManager): Router {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
-    // Stop if running
-    const proc = manager.get(req.params.id);
-    if (proc) manager.kill(req.params.id);
-
     deleteSession(req.params.id);
+    // Clean up in-memory agent state + any in-flight turn.
+    agentManager.remove(req.params.id);
     removeAttachmentDir(req.params.id);
     res.status(204).send();
   });
 
   // GET /api/sessions/:id/cost
+  //
+  // Phase 7 lookup order:
+  //   1. In-memory AgentSessionManager totals (live; populated by SDK `result`
+  //      messages within the current daemon process).
+  //   2. JSONL parse (real-time on disk; covers cold-start / pre-Phase-2
+  //      sessions whose totals haven't been observed by this daemon).
+  //   3. DB aggregate (final fallback for sessions without a JSONL).
   router.get('/:id/cost', (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
-    // Try to read cost from JSONL first (real-time, accurate)
+    // 1. In-memory totals — preferred when the daemon has observed any usage
+    //    for this session this run.
+    const agent = agentManager.get(req.params.id);
+    if (agent && (agent.tokensIn > 0 || agent.tokensOut > 0 || agent.totalCostUsd > 0)) {
+      return res.json({
+        tokensIn: agent.tokensIn,
+        tokensOut: agent.tokensOut,
+        cacheCreationTokens: agent.cacheCreationTokens,
+        cacheReadTokens: agent.cacheReadTokens,
+        costUsd: agent.totalCostUsd,
+        model: '', // model isn't tracked at session level today
+        messageCount: 0,
+      });
+    }
+
+    // 2. JSONL fallback — covers cold-start / pre-Phase-2 sessions.
     if (session.claudeSessionId && session.workingDirectory) {
       try {
         const jsonlCost = parseSessionCost(session.workingDirectory, session.claudeSessionId);
@@ -156,7 +205,7 @@ export function createSessionsRouter(manager: PtyManager): Router {
       } catch {}
     }
 
-    // Fallback to DB aggregate
+    // 3. DB aggregate.
     const cost = getSessionCostAggregate(req.params.id);
     res.json({ ...cost, cacheCreationTokens: 0, cacheReadTokens: 0, model: '', messageCount: 0 });
   });
@@ -172,6 +221,12 @@ export function createSessionsRouter(manager: PtyManager): Router {
   router.get('/:id/prompts', (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    if (session.agentProvider === 'codex') {
+      const agent = agentManager.get(req.params.id);
+      const fallback = (agent?.userMessages ?? []).map((text) => ({ text, timestamp: null }));
+      return res.json({ prompts: fallback, source: 'memory' });
+    }
 
     if (session.claudeSessionId && session.workingDirectory) {
       try {
@@ -191,166 +246,225 @@ export function createSessionsRouter(manager: PtyManager): Router {
       } catch {}
     }
 
-    const state = getClaudeState(req.params.id);
-    const fallback = (state?.userMessages ?? []).map((text) => ({ text, timestamp: null }));
+    const agent = agentManager.get(req.params.id);
+    const fallback = (agent?.userMessages ?? []).map((text) => ({ text, timestamp: null }));
     res.json({ prompts: fallback, source: 'memory' });
   });
 
-  // POST /api/sessions/:id/start
-  router.post('/:id/start', (req: Request, res: Response) => {
+  // GET /api/sessions/:id/messages — full parsed conversation from JSONL(s).
+  //
+  // Reads every JSONL in the session's claudeSessionId chain (history first,
+  // current id last) and merges them, deduped by raw entry uuid. Required
+  // because the SDK assigns a new claudeSessionId on certain resume paths
+  // (claude-code#8069, closed not-planned) — without chain reads, a forked
+  // session shows no scrollback even though the agent has full context.
+  //
+  // For sessions whose chain wasn't tracked (rows that predate the chain
+  // column), falls back to walking the JSONL parentUuid chain across sibling
+  // files in the same encoded-cwd directory. This is best-effort; a warning
+  // is logged when the lookup yields zero messages despite a valid id.
+  router.get('/:id/messages', (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-
-    const existing = manager.get(session.id);
-    if (existing && existing.state === 'running') {
-      return res.status(409).json({ error: 'Session is already running' });
+    if (session.agentProvider === 'codex') {
+      const agent = agentManager.get(req.params.id);
+      let messages = agent?.messages ?? [];
+      // Re-hydrate from disk if the in-memory cache is empty but a thread id
+      // exists. Covers the case where register() ran before the codex CLI had
+      // written its first turn, or where the parse failed at register time.
+      if (messages.length === 0 && session.agentSessionId) {
+        try {
+          const hydrated = parseCodexThread(session.agentSessionId);
+          if (hydrated.length > 0) {
+            if (agent) agent.messages = hydrated;
+            messages = hydrated;
+          }
+        } catch (err) {
+          console.error('[sessions] codex re-hydration failed for', session.id, err);
+        }
+      }
+      return res.json({ messages, endOffset: 0 });
+    }
+    if (!session.claudeSessionId || !session.workingDirectory) {
+      return res.json({ messages: [], endOffset: 0 });
     }
 
-    const { cols, rows } = req.body || {};
+    const workingDir = session.workingDirectory;
+    const currentSid = session.claudeSessionId;
+    const trackedChain = [...session.claudeSessionIdHistory, currentSid];
 
     try {
-      const spawnCfg: SpawnConfig = {
-        id: session.id,
-        name: session.name,
-        command: session.command,
-        workingDir: session.workingDirectory || '',
-        type: 'session',
-        projectId: session.projectId,
-        config: defaultProcessConfig({
-          autostart: session.autostart,
-          autorestart: session.autorestart,
-          autorestartMax: session.autorestartMax,
-          autorestartDelayMs: session.autorestartDelayMs,
-          autorestartWindowSecs: session.autorestartWindowSecs,
-          autorespawn: session.autorespawn,
-          terminalAlerts: session.terminalAlerts,
-          fileWatchPatterns: session.fileWatchPatterns,
-        }),
-        cols: cols || 80,
-        rows: rows || 24,
-      };
+      let { messages, endOffset } = parseTranscriptChain(workingDir, trackedChain);
 
-      // Remove existing stopped process entry if present
-      if (existing) manager.remove(session.id);
+      if (messages.length === 0 && session.claudeSessionIdHistory.length === 0) {
+        // Legacy fallback: this row never had its chain tracked, so try
+        // discovering ancestors by walking parentUuid across sibling JSONLs.
+        const discovered = walkParentUuidChain(workingDir, currentSid);
+        if (discovered.length > 0) {
+          const fullChain = [...discovered, currentSid];
+          ({ messages, endOffset } = parseTranscriptChain(workingDir, fullChain));
+        }
+      }
 
-      const proc = manager.spawn(spawnCfg);
-      res.json({ ok: true, pid: proc.pid });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to start session' });
+      if (messages.length === 0) {
+        const attempted = trackedChain
+          .map((sid) => getSessionJsonlPath(workingDir, sid))
+          .join(', ');
+        console.warn(
+          `[sessions] /messages returned empty for ${session.id} ` +
+            `(claudeSessionId=${currentSid}); tried: ${attempted}`
+        );
+      }
+
+      res.json({ messages, endOffset });
+    } catch (err) {
+      console.error(`[sessions] /messages failed for ${session.id}:`, err);
+      res.json({ messages: [], endOffset: 0 });
     }
   });
 
   // POST /api/sessions/:id/stop
+  //
+  // Canonical lifecycle endpoint: aborts any in-flight turn for the session.
+  // There is no PTY to kill; this is purely a cancel for the current query()
+  // call. Sending a new turn (POST .../turn or ws session:send) re-engages the
+  // SDK; there is no separate "start" or "restart" action.
   router.post('/:id/stop', (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-
-    manager.kill(req.params.id);
+    agentManager.abortTurn(req.params.id);
     res.json({ ok: true });
   });
 
-  // POST /api/sessions/:id/restart
-  router.post('/:id/restart', (req: Request, res: Response) => {
+  // POST /api/sessions/:id/mode
+  //
+  // Set the operating mode for the session (default / plan / accept-edits /
+  // auto / chat / read-only). Takes effect on the NEXT turn — the adapter
+  // assembles SDK options from session.mode at runTurn time. Validated against
+  // the current provider's declared capabilities.modes; rejects modes the
+  // provider doesn't implement.
+  router.post('/:id/mode', (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-
-    manager.restart(req.params.id);
-    res.json({ ok: true });
-  });
-
-  // POST /api/sessions/:id/spawn-claude
-  // Spawn a new Claude Code session in the session's PTY
-  router.post('/:id/spawn-claude', (req: Request, res: Response) => {
-    const session = getSessionById(req.params.id);
-    if (!session) return res.status(404).json({ error: 'Session not found' });
-
-    const { cols, rows } = req.body || {};
-    const claudeCmd = buildClaudeCommand(session.workingDirectory || '');
-
+    const mode = req.body?.mode;
+    const VALID = ['default', 'plan', 'accept-edits', 'auto', 'chat', 'read-only'];
+    if (typeof mode !== 'string' || !VALID.includes(mode)) {
+      return res.status(400).json({
+        error: `Invalid mode. Must be one of: ${VALID.join(', ')}`,
+      });
+    }
     try {
-      const existing = manager.get(session.id);
-      if (existing) manager.remove(session.id);
-
-      const spawnCfg: SpawnConfig = {
-        id: session.id,
-        name: session.name,
-        command: claudeCmd,
-        workingDir: session.workingDirectory || '',
-        type: 'session',
-        projectId: session.projectId,
-        config: defaultProcessConfig({
-          autorespawn: session.autorespawn,
-        }),
-        cols: cols || 80,
-        rows: rows || 24,
-      };
-
-      const proc = manager.spawn(spawnCfg);
-      insertSessionEvent(session.id, 'claude-spawned', { command: claudeCmd });
-      res.json({ ok: true, pid: proc.pid });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to spawn Claude' });
+      agentManager.setMode(req.params.id, mode as 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only');
+      res.json({ ok: true, mode });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
+  // POST /api/sessions/:id/reset
+  //
+  // Native handler for the `/clear` slash command. Cancels any in-flight turn,
+  // nulls the linked claudeSessionId in the DB and the agent manager, and
+  // resets per-session in-memory stats. The next user turn starts a fresh SDK
+  // conversation (no `resume`), so the SDK creates a new claudeSessionId at
+  // first SystemInit.
+  router.post('/:id/reset', (req: Request, res: Response) => {
+    const session = getSessionById(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    agentManager.resetSession(req.params.id);
+    updateSession(req.params.id, {
+      agentSessionId: null,
+      agentSessionIdHistory: [],
+      claudeSessionId: null,
+      claudeSessionIdHistory: [],
+    });
+    const updated = getSessionById(req.params.id);
+    res.json({ ok: true, session: updated });
+  });
+
+  // POST /api/sessions/:id/rename-ai
+  //
+  // Generates a short title from the session's user prompts via Haiku and
+  // overwrites session.name. Mirrors the prompt-lookup chain of
+  // /api/sessions/:id/prompts (current JSONL → all project JSONLs →
+  // in-memory userMessages) so resumed and brand-new sessions both work.
+  // Emits `session-renamed` so subscribers see `session:updated`.
+  router.post('/:id/rename-ai', async (req: Request, res: Response) => {
+    const session = getSessionById(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    let prompts: string[] = [];
+    if (session.agentProvider === 'codex') {
+      prompts = agentManager.get(req.params.id)?.userMessages ?? [];
+    }
+    if (prompts.length === 0 && session.claudeSessionId && session.workingDirectory) {
+      try {
+        prompts = parseSessionPrompts(session.workingDirectory, session.claudeSessionId).map((p) => p.text);
+      } catch {}
+    }
+    if (prompts.length === 0 && session.workingDirectory) {
+      try {
+        prompts = parseAllProjectPrompts(session.workingDirectory).map((p) => p.text);
+      } catch {}
+    }
+    if (prompts.length === 0) {
+      const agent = agentManager.get(req.params.id);
+      prompts = agent?.userMessages ?? [];
+    }
+
+    if (prompts.length === 0) {
+      return res.status(400).json({ error: 'No prompts yet — send a message first' });
+    }
+
+    const result = await generateSessionLabel(prompts);
+    if (!result.ok) {
+      console.error('[rename-ai] labeler failed:', result.error);
+      return res.status(502).json({ error: result.error });
+    }
+    // Strip wrapping quotes, normalize whitespace, drop trailing punctuation,
+    // and keep only the first line — Haiku occasionally adds an explanatory
+    // second line despite the system prompt.
+    const firstLine = result.title.split('\n', 1)[0] ?? result.title;
+    const cleaned = firstLine
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^["'`]+|["'`]+$/g, '')
+      .replace(/[.!?]+$/, '')
+      .trim();
+    const name = cleaned.length > 60 ? cleaned.slice(0, 59).trimEnd() + '…' : cleaned;
+    if (!name) {
+      return res.status(502).json({ error: 'AI returned an empty title' });
+    }
+
+    const updated = updateSession(req.params.id, { name });
+    if (!updated) return res.status(500).json({ error: 'Failed to persist new name' });
+    agentManager.emit('session-renamed', { sessionId: req.params.id });
+    res.json({ session: updated, name });
+  });
+
   // GET /api/sessions/:id/diff
+  // When the session has a captured baseline commit, returns the diff between
+  // that commit and the current working tree (everything the agent has
+  // touched since it was created). Falls back to a project-level working-tree
+  // diff when no baseline is recorded, preserving backwards compatibility.
   router.get('/:id/diff', async (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
-    const workingDir = session.workingDirectory;
-    if (!workingDir) return res.status(400).json({ error: 'Session has no working directory' });
+    const project = getProjectById(session.projectId);
+    const repoPath = (project && isGitRepo(project.path) ? project.path : null)
+      ?? (session.workingDirectory && isGitRepo(session.workingDirectory) ? session.workingDirectory : null);
+    if (!repoPath) {
+      return res.status(400).json({ error: 'Not a git repository', code: 'not-a-repo' });
+    }
 
     try {
-      const git = simpleGit(workingDir);
-      const diff = await git.diff();
+      const diff = session.gitBaselineCommit
+        ? await getDiffSinceCommit(repoPath, session.gitBaselineCommit)
+        : await simpleGit(repoPath).diff();
       res.json({ diff });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to get diff' });
-    }
-  });
-
-  // POST /api/sessions/:id/resume-claude
-  // Resume an existing Claude Code session
-  router.post('/:id/resume-claude', (req: Request, res: Response) => {
-    const session = getSessionById(req.params.id);
-    if (!session) return res.status(404).json({ error: 'Session not found' });
-
-    const { claudeSessionId, cols, rows } = req.body || {};
-    const resumeId = claudeSessionId || session.claudeSessionId;
-
-    if (!resumeId) {
-      return res.status(400).json({ error: 'No claudeSessionId to resume' });
-    }
-
-    // Persist the claudeSessionId to DB so spawnPty can pick it up for --resume
-    updateSession(session.id, { claudeSessionId: resumeId });
-
-    try {
-      const existing = manager.get(session.id);
-      if (existing) manager.remove(session.id);
-
-      // Use the base command (e.g. 'claude'); spawnPty will read the
-      // claudeSessionId from the DB and construct --resume with fallback.
-      const spawnCfg: SpawnConfig = {
-        id: session.id,
-        name: session.name,
-        command: session.command,
-        workingDir: session.workingDirectory || '',
-        type: 'session',
-        projectId: session.projectId,
-        config: defaultProcessConfig({
-          autorespawn: session.autorespawn,
-        }),
-        cols: cols || 80,
-        rows: rows || 24,
-      };
-
-      const proc = manager.spawn(spawnCfg);
-      insertSessionEvent(session.id, 'claude-resumed', { claudeSessionId: resumeId });
-      res.json({ ok: true, pid: proc.pid });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to resume Claude' });
     }
   });
 

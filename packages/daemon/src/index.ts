@@ -3,11 +3,15 @@ import { loadGlobalConfig } from './config/loader.js';
 import { initDb, getAllProjects, getSessionsByProject, getCommandsByProject } from './db/store.js';
 import { PtyManager } from './pty/manager.js';
 import { PermissionManager } from './hooks/permissionManager.js';
-import { HookManager } from './hooks/installer.js';
+import { ElicitationManager } from './hooks/elicitationManager.js';
+import { AgentSessionManager } from './agent/manager.js';
 import { FileWatcher } from './watcher/index.js';
+import { GitWatcher } from './git/watcher.js';
 import { createServer } from './server.js';
 import { checkOrphanedPids } from './pids.js';
 import { loadProjectConfig } from './config/loader.js';
+import { TelegramBridge } from './notifications/telegramBridge.js';
+import { getTelegramToken } from './config/secrets.js';
 import type { SpawnConfig, ProcessConfig } from './types.js';
 
 function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig {
@@ -23,6 +27,27 @@ function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig
     ...overrides,
   };
 }
+
+// Chokidar 3.6 has a known race in `setFsWatchListener` (nodefs-handler.js:159)
+// where attaching a watch to a file that's been atomically rewritten/deleted
+// throws `Cannot read properties of undefined (reading 'close')`. The error
+// is harmless — chokidar recovers and the watcher keeps working — but it
+// surfaces as an unhandled rejection and spams the daemon log. We swallow
+// just this one pattern; everything else still bubbles up.
+//
+// Heavy editor activity in the watched project (HMR cache invalidations,
+// `git stash`, `npm install`) is the usual trigger. A clean fix requires
+// chokidar 4.x.
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.stack || reason.message : String(reason);
+  if (
+    /chokidar\/lib\/nodefs-handler\.js/.test(msg) &&
+    /Cannot read properties of undefined \(reading 'close'\)/.test(msg)
+  ) {
+    return; // known harmless chokidar 3.6 race
+  }
+  console.error('[daemon] Unhandled rejection:', reason);
+});
 
 async function main() {
   console.log('Starting MultiTable daemon...');
@@ -46,6 +71,8 @@ async function main() {
   // 4. Create PtyManager and PermissionManager
   const manager = new PtyManager();
   const permManager = new PermissionManager();
+  const elicitManager = new ElicitationManager();
+  const agentManager = new AgentSessionManager(permManager, elicitManager);
 
   // Configure permission manager from project configs
   for (const projRef of config.projects) {
@@ -55,28 +82,48 @@ async function main() {
     }
   }
 
-  // 5. Install hooks for each registered project (from config AND DB)
-  const hookManager = new HookManager();
-  const dbProjects = getAllProjects();
-  const allProjectPaths = new Set<string>([
-    ...config.projects.map((p: { path: string }) => p.path),
-    ...dbProjects.map((p) => p.path),
-  ]);
-  for (const projectPath of allProjectPaths) {
-    try {
-      await hookManager.installForProject(projectPath, config.port);
-      console.log(`Installed hooks for: ${projectPath}`);
-    } catch (err) {
-      console.warn(`Failed to install hooks for ${projectPath}:`, err);
-    }
-  }
+  // 5a. Telegram bridge — second channel for permission prompts and alerts.
+  // Token comes from MULTITABLE_TELEGRAM_BOT_TOKEN env var (preferred) or
+  // ~/.config/multitable/secrets.yml. Chat allowlist + per-category toggles
+  // live in config.integrations.telegram and are editable from the GUI.
+  // start() is a no-op when token or chatIds are missing.
+  const tgConfig = config.integrations?.telegram ?? {};
+  const tgBridge = new TelegramBridge({
+    token: getTelegramToken(),
+    chatIds: Array.isArray(tgConfig.chatIds) ? tgConfig.chatIds : [],
+    sendNotifications: tgConfig.sendNotifications !== false,
+    sendAlerts: tgConfig.sendAlerts !== false,
+    dashboardUrl: typeof tgConfig.dashboardUrl === 'string' ? tgConfig.dashboardUrl : '',
+    permManager,
+    agentManager,
+  });
 
-  // 6. Create Express/WS server
-  const serverInstance = createServer(config, manager, permManager);
+  // 5b. Construct the GitWatcher before the server so the projects router can
+  // hold a reference. We give it a placeholder broadcaster — `setBroadcaster`
+  // could be cleaner, but the simplest fix is to declare the broadcast hook
+  // up front; it's reassigned just below once `serverInstance` exists.
+  // eslint-disable-next-line prefer-const
+  let broadcastRef: (type: string, payload: unknown) => void = () => {};
+  const fileWatcher = new FileWatcher();
+  const gitWatcher = new GitWatcher((projectId, status) => {
+    broadcastRef('git:status-changed', { projectId, status });
+  });
+
+  // 5c. Express/WS server (mounts /api/integrations using the bridge above).
+  const serverInstance = createServer(
+    config,
+    manager,
+    permManager,
+    agentManager,
+    elicitManager,
+    tgBridge,
+    gitWatcher,
+  );
   const { server, broadcast } = serverInstance;
+  broadcastRef = broadcast;
+  tgBridge.start();
 
   // 7. Load projects from DB, start autostart processes
-  const fileWatcher = new FileWatcher();
   const projects = getAllProjects();
 
   for (const project of projects) {
@@ -89,50 +136,29 @@ async function main() {
       broadcast('project:config-changed', { projectId: project.id });
     });
 
-    // Start autostart sessions
-    for (const session of sessions) {
-      if (session.autostart) {
-        try {
-          const spawnCfg: SpawnConfig = {
-            id: session.id,
-            name: session.name,
-            command: session.command,
-            workingDir: session.workingDirectory || project.path,
-            type: 'session',
-            projectId: project.id,
-            config: defaultProcessConfig({
-              autostart: session.autostart,
-              autorestart: session.autorestart,
-              autorestartMax: session.autorestartMax,
-              autorestartDelayMs: session.autorestartDelayMs,
-              autorestartWindowSecs: session.autorestartWindowSecs,
-              autorespawn: session.autorespawn,
-              terminalAlerts: session.terminalAlerts,
-              fileWatchPatterns: session.fileWatchPatterns,
-            }),
-          };
-          if (session.claudeSessionId) {
-            // Session has a prior Claude conversation — we can't know if it's
-            // still valid. Register as stopped so the user can choose Resume
-            // or Start New. Never auto-spawn stale Claude sessions.
-            manager.register(spawnCfg);
-            console.log(`Registered session (has prior Claude ID, needs user action): ${session.name} (${session.id})`);
-          } else {
-            manager.spawn(spawnCfg);
-            console.log(`Autostarted session: ${session.name} (${session.id})`);
-          }
-        } catch (err) {
-          console.error(`Failed to autostart session ${session.name}:`, err);
-        }
-      }
+    // Watch the working tree for git status changes (skipped if not a repo).
+    gitWatcher.watch(project.id, project.path);
 
-      // 8. Start file watchers for sessions with file watch patterns
-      if (session.fileWatchPatterns.length > 0) {
-        fileWatcher.watchPatterns(session.id, session.fileWatchPatterns, session.workingDirectory || project.path, () => {
-          console.log(`File change detected, restarting session: ${session.name}`);
-          manager.restart(session.id);
-        });
-      }
+    // Register sessions with the agent manager. Sessions are no longer spawned
+    // as PTY children; the SDK owns their lifecycle. "Autostart" has no meaning
+    // for an agent session — sending a turn is what "starts" work. File-watch
+    // restart also doesn't apply (we don't restart a conversation on file
+    // change). Both concepts are commands-only now.
+    for (const session of sessions) {
+      agentManager.register({
+        id: session.id,
+        projectId: project.id,
+        name: session.name,
+        workingDir: session.workingDirectory || project.path,
+        provider: session.agentProvider,
+        model: session.model,
+        mode: session.mode,
+        agentSessionId: session.agentSessionId ?? null,
+        agentSessionIdHistory: session.agentSessionIdHistory ?? [],
+        claudeSessionId: session.claudeSessionId ?? null,
+        claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
+      });
+      console.log(`Registered session: ${session.name} (${session.id})`);
     }
 
     // Start autostart commands
@@ -186,8 +212,11 @@ async function main() {
     console.log(`\nReceived ${signal}, shutting down...`);
     setTimeout(() => process.exit(0), 2000);
     fileWatcher.unwatchAll();
+    gitWatcher.unwatchAll();
     manager.destroy();
+    void agentManager.shutdown();
     serverInstance.closeAllClients();
+    void tgBridge.stop();
     server.close(() => process.exit(0));
   }
 

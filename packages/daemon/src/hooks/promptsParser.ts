@@ -18,11 +18,14 @@ interface JsonlEntry {
 }
 
 function encodePath(projectPath: string): string {
-  // Claude Code encodes the absolute path by replacing every "/" with "-",
-  // INCLUDING the leading slash. So /home/user/foo becomes -home-user-foo
-  // (note the leading dash). Stripping the leading slash loses that dash
-  // and misses the directory entirely.
-  return projectPath.replace(/\//g, '-');
+  // Claude Code encodes the absolute path by replacing every non-alphanumeric
+  // character with "-", INCLUDING the leading slash, underscores, dots, and
+  // existing hyphens. /home/user/my_project → -home-user-my-project. Per
+  // the SDK sessions docs:
+  // https://code.claude.com/docs/en/agent-sdk/sessions
+  // Replacing only "/" misses paths with underscores or dots and lands on a
+  // directory that doesn't exist.
+  return projectPath.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
 function getSessionJsonlPath(projectPath: string, claudeSessionId: string): string {

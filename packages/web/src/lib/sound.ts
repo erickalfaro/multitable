@@ -57,3 +57,19 @@ export function playDoneChime(): void {
     { freq: 523, start: 0.09, dur: 0.22, peak: 0.04 },
   ]);
 }
+
+// Single tone, mid pitch — non-fatal warning.
+export function playWarningChime(): void {
+  playTones([
+    { freq: 587, start: 0, dur: 0.16, peak: 0.05 },
+    { freq: 466, start: 0.12, dur: 0.22, peak: 0.045 },
+  ]);
+}
+
+// Two falling tones, low — error / failure.
+export function playErrorChime(): void {
+  playTones([
+    { freq: 392, start: 0, dur: 0.18, peak: 0.06 },
+    { freq: 261, start: 0.14, dur: 0.28, peak: 0.06 },
+  ]);
+}

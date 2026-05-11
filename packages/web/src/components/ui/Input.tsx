@@ -16,8 +16,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     const borderColor = invalid
       ? 'var(--status-error)'
       : focus
-        ? 'var(--accent-blue)'
-        : 'var(--border)';
+        ? 'var(--accent-amber)'
+        : 'var(--border-strong)';
 
     return (
       <div
@@ -26,16 +26,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           alignItems: 'center',
           gap: 8,
           padding: leftIcon || rightIcon ? '0 10px' : 0,
-          backgroundColor: disabled ? 'var(--bg-sidebar)' : 'var(--bg-primary)',
+          backgroundColor: disabled ? 'var(--bg-sidebar)' : 'var(--bg-elevated)',
           border: `1px solid ${borderColor}`,
-          borderRadius: 'var(--radius-md)',
-          transition:
-            'border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
-          boxShadow: focus
-            ? invalid
-              ? '0 0 0 3px color-mix(in srgb, var(--status-error) 22%, transparent)'
-              : 'var(--accent-glow)'
-            : 'none',
+          borderRadius: 'var(--radius-snug)',
+          transition: 'border-color var(--dur-fast) var(--ease-out)',
           opacity: disabled ? 0.65 : 1,
           ...wrapperStyle,
         }}
@@ -63,8 +57,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             outline: 'none',
             background: 'transparent',
             color: 'var(--text-primary)',
-            fontSize: 13,
-            padding: leftIcon || rightIcon ? '8px 0' : '8px 12px',
+            fontFamily: 'inherit',
+            fontSize: 12,
+            caretColor: 'var(--accent-amber)',
+            padding: leftIcon || rightIcon ? '6px 0' : '6px 10px',
             minWidth: 0,
             ...style,
           }}

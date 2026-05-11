@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { StatusDot } from './StatusDot';
+import { SessionStatusLoader } from './SessionStatusLoader';
 import { Bell, Square } from 'lucide-react';
-import type { ManagedProcess } from '../../lib/types';
-import { api } from '../../lib/api';
+import type { ManagedProcess, Session } from '../../lib/types';
+import { api, stopProcessByType } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
-import { IconButton } from '../ui';
+import { IconButton, AgentBadge } from '../ui';
+import { relativeTime } from '../../lib/relativeTime';
 
 interface Props {
   process: ManagedProcess;
@@ -25,7 +27,7 @@ export function SidebarItem({
 }: Props) {
   const [hovered, setHovered] = useState(false);
 
-  const pendingCount = useAppStore(s =>
+  const permissionCount = useAppStore(s =>
     process.type === 'session'
       ? s.pendingPermissions.reduce(
           (n, p) => (p.sessionId === process.id ? n + 1 : n),
@@ -33,11 +35,35 @@ export function SidebarItem({
         )
       : 0,
   );
+  const unreadAttention = useAppStore(s =>
+    process.type === 'session' ? s.unreadBySession[process.id] ?? 0 : 0,
+  );
+  const hasStreamingText = useAppStore(s =>
+    process.type === 'session' ? Boolean(s.streamingBySession[process.id]) : false,
+  );
+  const hasToolProgress = useAppStore(s =>
+    process.type === 'session' ? Boolean(s.toolProgressBySession[process.id]) : false,
+  );
+  const hasSessionStatus = useAppStore(s =>
+    process.type === 'session' ? (s.statusBySession[process.id]?.status ?? null) !== null : false,
+  );
+  const pendingCount = permissionCount + unreadAttention;
+  const sessionActive =
+    process.type === 'session' &&
+    (process.state === 'running' || hasStreamingText || hasToolProgress || hasSessionStatus);
 
   const isIdle =
     process.type === 'session' &&
-    process.state === 'running' &&
+    sessionActive &&
     !(process as any).claudeState?.currentTool;
+
+  const sessionRecency =
+    process.type === 'session'
+      ? (process as Session).claudeState?.lastActivity ||
+        (process as Session).lastActiveAt ||
+        (process as Session).createdAt ||
+        0
+      : 0;
 
   return (
     <div
@@ -47,28 +73,46 @@ export function SidebarItem({
       onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex',
-        alignItems: 'flex-start',
-        padding: '6px 10px',
-        margin: '2px 8px',
+        alignItems: 'center',
+        padding: '4px 10px 4px 9px',
+        margin: '1px 0',
         cursor: 'pointer',
         userSelect: 'none',
         WebkitUserSelect: 'none',
         position: 'relative',
-        borderRadius: 'var(--radius-md)',
+        borderRadius: 'var(--radius-snug)',
         backgroundColor: isSelected
-          ? 'color-mix(in srgb, var(--accent-blue) 14%, transparent)'
+          ? 'var(--bg-elevated)'
           : hovered
             ? 'var(--bg-hover)'
             : 'transparent',
-        boxShadow: isSelected
-          ? 'inset 3px 0 0 var(--accent-blue)'
-          : 'inset 0 0 0 transparent',
+        borderLeft: isSelected
+          ? '3px solid var(--accent-amber)'
+          : '3px solid transparent',
         transition:
-          'background-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
+          'background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
       }}
     >
-      <div style={{ marginTop: 4 }}>
-        <StatusDot state={process.state} isIdle={isIdle} />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 12,
+          flexShrink: 0,
+        }}
+      >
+        {process.type === 'session' ? (
+          <SessionStatusLoader
+            loaderVariant={(process as Session).loaderVariant ?? null}
+            state={process.state}
+            projectId={process.projectId}
+            active={sessionActive}
+            isIdle={isIdle}
+          />
+        ) : (
+          <StatusDot state={process.state} isIdle={isIdle} />
+        )}
       </div>
       <div style={{ marginLeft: 10, flex: 1, minWidth: 0 }}>
         <div
@@ -80,32 +124,51 @@ export function SidebarItem({
         >
           <span
             style={{
+              flex: 1,
+              minWidth: 0,
               fontSize: 13.5,
+              lineHeight: 1.3,
               color: 'var(--text-primary)',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
               overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              wordBreak: 'break-word',
               fontWeight: isSelected ? 600 : 500,
             }}
           >
             {process.name}
           </span>
+          {process.type === 'session' && (
+            <AgentBadge
+              provider={(process as Session).agentProvider}
+              size="glyph"
+              style={{ marginLeft: 4, flexShrink: 0 }}
+            />
+          )}
           {pendingCount > 0 && (
             <span
-              title={`${pendingCount} confirmation${pendingCount === 1 ? '' : 's'} pending`}
+              title={
+                permissionCount > 0 && unreadAttention > 0
+                  ? `${permissionCount} permission${permissionCount === 1 ? '' : 's'} pending, ${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
+                  : permissionCount > 0
+                    ? `${permissionCount} confirmation${permissionCount === 1 ? '' : 's'} pending`
+                    : `${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
+              }
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 3,
                 marginLeft: 6,
-                padding: '2px 7px',
-                borderRadius: 'var(--radius-pill)',
-                background: 'var(--accent-blue)',
-                color: 'white',
-                fontSize: 10,
-                fontWeight: 600,
+                padding: '1px 6px',
+                borderRadius: 'var(--radius-snug)',
+                background: 'transparent',
+                color: 'var(--accent-amber)',
+                border: '1px solid var(--accent-amber)',
+                fontSize: 9.5,
+                fontWeight: 500,
+                letterSpacing: '0.06em',
                 flexShrink: 0,
-                boxShadow: 'var(--shadow-sm)',
                 animation: 'mt-pulse 1.6s ease-in-out infinite',
               }}
             >
@@ -140,6 +203,21 @@ export function SidebarItem({
                 {metrics}
               </span>
             )}
+            {!metrics && process.type === 'session' && sessionRecency > 0 && (
+              <span
+                title={new Date(sessionRecency).toLocaleString()}
+                style={{
+                  fontSize: 10,
+                  color: 'var(--text-muted)',
+                  fontVariantNumeric: 'tabular-nums',
+                  opacity: hovered && process.state === 'running' ? 0 : 1,
+                  transition: 'opacity var(--dur-fast) var(--ease-out)',
+                  pointerEvents: 'none',
+                }}
+              >
+                {relativeTime(sessionRecency)}
+              </span>
+            )}
             {process.state === 'running' && (
               <div
                 style={{
@@ -158,7 +236,7 @@ export function SidebarItem({
                   label="Stop"
                   onClick={(e) => {
                     e.stopPropagation();
-                    api.processes.stop(process.id);
+                    stopProcessByType(process).catch(() => {/* swallow */});
                   }}
                 >
                   <Square size={11} />

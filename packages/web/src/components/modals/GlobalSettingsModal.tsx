@@ -13,6 +13,8 @@ import {
 } from '../../lib/themes';
 import { Check, Copy, Pencil, Trash2, Plus } from 'lucide-react';
 import { Modal, Input, Button, IconButton, Divider, Badge } from '../ui';
+import { NotificationsSection } from './NotificationsSection';
+import { IntegrationsSection } from './IntegrationsSection';
 
 interface Props {
   onClose: () => void;
@@ -139,23 +141,27 @@ export function GlobalSettingsModal({ onClose }: Props) {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
-                  padding: '10px 12px',
-                  border: `1px solid ${isActive ? 'var(--accent-blue)' : 'var(--border)'}`,
-                  borderRadius: 'var(--radius-md)',
-                  backgroundColor: isActive ? 'color-mix(in srgb, var(--accent-blue) 10%, transparent)' : 'var(--bg-sidebar)',
-                  boxShadow: isActive ? 'var(--shadow-sm), 0 0 0 1px var(--accent-blue)' : 'var(--shadow-sm)',
-                  transition: 'box-shadow var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out)',
+                  padding: '8px 10px',
+                  border: `1px solid ${isActive ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
+                  borderLeft: `3px solid ${isActive ? 'var(--accent-amber)' : 'transparent'}`,
+                  borderRadius: 'var(--radius-snug)',
+                  backgroundColor: isActive ? 'var(--bg-elevated)' : 'var(--bg-sidebar)',
+                  transition: 'border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out)',
                 }}
               >
                 <button
                   onClick={() => setActiveTheme(t.id)}
                   title={isActive ? 'Active theme' : 'Set as default'}
                   style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: '50%',
-                    border: '2px solid var(--accent-blue)',
-                    background: isActive ? 'var(--accent-blue)' : 'transparent',
+                    width: 16,
+                    height: 16,
+                    borderRadius: 'var(--radius-snug)',
+                    border: `1px solid ${isActive ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
+                    background: 'transparent',
+                    color: 'var(--accent-amber)',
+                    fontFamily: 'inherit',
+                    fontSize: 11,
+                    lineHeight: 1,
                     cursor: 'pointer',
                     padding: 0,
                     display: 'flex',
@@ -164,7 +170,7 @@ export function GlobalSettingsModal({ onClose }: Props) {
                     flexShrink: 0,
                   }}
                 >
-                  {isActive && <Check size={12} color="white" />}
+                  {isActive && <Check size={10} />}
                 </button>
                 <span
                   style={{
@@ -285,28 +291,20 @@ export function GlobalSettingsModal({ onClose }: Props) {
 
         <Divider margin={18} />
 
+        {/* Notifications */}
+        <h3 style={sectionTitleStyle}>Notifications</h3>
+        <NotificationsSection />
+
+        <Divider margin={18} />
+
+        {/* Integrations */}
+        <h3 style={sectionTitleStyle}>Integrations</h3>
+        <IntegrationsSection />
+
+        <Divider margin={18} />
+
         {/* Behavior */}
         <h3 style={sectionTitleStyle}>Behavior</h3>
-
-        <div style={fieldStyle}>
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 13,
-              cursor: 'pointer',
-              color: 'var(--text-primary)',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={config.notifications}
-              onChange={(e) => setConfig({ ...config, notifications: e.target.checked })}
-            />
-            Enable notifications
-          </label>
-        </div>
 
         <div style={fieldStyle}>
           <label style={labelStyle}>Default editor</label>
@@ -371,12 +369,12 @@ function ThemeEditor({ theme, onChange, onClose }: EditorProps) {
   return (
     <div
       style={{
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--border-strong)',
+        borderRadius: 'var(--radius-soft)',
         padding: 14,
         marginBottom: 16,
         backgroundColor: 'var(--bg-sidebar)',
-        boxShadow: 'var(--shadow-sm)',
+        boxShadow: 'none',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>

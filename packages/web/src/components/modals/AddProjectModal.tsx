@@ -4,6 +4,7 @@ import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
 import toast from 'react-hot-toast';
 import { Modal, Input, Button } from '../ui';
+import { PastAgentsBrowser } from './PastAgentsBrowser';
 
 interface Props {
   onClose: () => void;
@@ -89,6 +90,7 @@ export function AddProjectModal({ onClose }: Props) {
       open
       onClose={onClose}
       title="Add Project"
+      width={640}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -135,7 +137,7 @@ export function AddProjectModal({ onClose }: Props) {
               border: 'none',
               padding: 4,
               margin: -4,
-              borderRadius: 4,
+              borderRadius: 'var(--radius-snug)',
               color: 'var(--text-muted)',
               cursor: browsing ? 'default' : 'pointer',
             }}
@@ -144,6 +146,27 @@ export function AddProjectModal({ onClose }: Props) {
           </button>
         }
       />
+      <div
+        style={{
+          marginTop: 16,
+          paddingTop: 12,
+          borderTop: '1px solid var(--border)',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 9.5,
+            fontWeight: 500,
+            color: 'var(--text-faint)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.18em',
+            marginBottom: 8,
+          }}
+        >
+          Or pick from past agents
+        </div>
+        <PastAgentsBrowser onClose={onClose} />
+      </div>
     </Modal>
   );
 }

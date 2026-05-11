@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { getConfigDir } from '../config/loader.js';
+import { pickLoaderVariant } from '../loaders.js';
 import type { Project, ManagedProcess } from '../types.js';
 
 let db: Database.Database;
@@ -23,6 +24,127 @@ export function initDb(): void {
     : path.join(__dirname, '../../src/db/schema.sql');
   const schema = fs.readFileSync(schemaPath, 'utf8');
   db.exec(schema);
+
+  // Idempotent column add for DBs that predate claude_session_id_history.
+  // SQLite throws "duplicate column" when re-run; that's the no-op signal.
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN claude_session_id_history TEXT DEFAULT '[]'");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN agent_provider TEXT DEFAULT 'claude'");
+  } catch {}
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN agent_session_id TEXT');
+  } catch {}
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN agent_session_id_history TEXT DEFAULT '[]'");
+  } catch {}
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN loader_variant TEXT');
+  } catch {}
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN git_baseline_commit TEXT');
+  } catch {}
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN model TEXT');
+  } catch {}
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT '[]'");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN mode TEXT DEFAULT 'default'");
+  } catch {}
+
+  // Sessions no longer use a PTY (they go through the Claude/Codex SDK). The
+  // pre-SDK PTY scrollback column accumulated stale BLOBs that ballooned
+  // /api/sessions responses to several MB on the wire. Free the rows first,
+  // then drop the column. Both wrapped in try/catch — the first nullifies
+  // existing data on every boot until the schema migration sticks; the second
+  // is a no-op once the column is gone.
+  try {
+    db.exec('UPDATE sessions SET scrollback_data = NULL WHERE scrollback_data IS NOT NULL');
+  } catch {}
+  try {
+    db.exec('ALTER TABLE sessions DROP COLUMN scrollback_data');
+  } catch {}
+
+  // Backfill loader_variant for any session missing one. Runs once per process
+  // start; cheap (single SELECT + at most N UPDATEs). Each session gets a
+  // unique variant from the unused pool until all 60 are taken; further
+  // assignments fall back to uniform random reuse.
+  backfillSessionLoaderVariants();
+}
+
+function backfillSessionLoaderVariants(): void {
+  const usedRows = db
+    .prepare('SELECT loader_variant FROM sessions WHERE loader_variant IS NOT NULL')
+    .all() as Array<{ loader_variant: string }>;
+  const used = new Set(usedRows.map((r) => r.loader_variant));
+  const missing = db
+    .prepare('SELECT id FROM sessions WHERE loader_variant IS NULL ORDER BY created_at ASC')
+    .all() as Array<{ id: string }>;
+  if (missing.length > 0) {
+    const update = db.prepare('UPDATE sessions SET loader_variant = ? WHERE id = ?');
+    for (const { id } of missing) {
+      const variant = pickLoaderVariant(used);
+      update.run(variant, id);
+      used.add(variant);
+    }
+  }
+
+  // Walk every existing session and ensure every claudeSessionId it has ever
+  // touched (current + history) is recorded in claude_session_loaders. This
+  // means deleting a session and resuming its transcript later will pick up
+  // the same loader. INSERT OR IGNORE preserves the first recorded mapping,
+  // so a freshly-recreated session never overwrites historical bindings.
+  const sessions = db
+    .prepare(
+      'SELECT id, loader_variant, claude_session_id, claude_session_id_history FROM sessions WHERE loader_variant IS NOT NULL',
+    )
+    .all() as Array<{
+    id: string;
+    loader_variant: string;
+    claude_session_id: string | null;
+    claude_session_id_history: string | null;
+  }>;
+  const recordStmt = db.prepare(
+    'INSERT OR IGNORE INTO claude_session_loaders (claude_session_id, loader_variant, created_at) VALUES (?, ?, ?)',
+  );
+  const now = Date.now();
+  for (const s of sessions) {
+    const ids = new Set<string>();
+    if (s.claude_session_id) ids.add(s.claude_session_id);
+    if (s.claude_session_id_history) {
+      try {
+        const arr = JSON.parse(s.claude_session_id_history);
+        if (Array.isArray(arr)) {
+          for (const id of arr) if (typeof id === 'string') ids.add(id);
+        }
+      } catch {}
+    }
+    for (const cid of ids) recordStmt.run(cid, s.loader_variant, now);
+  }
+}
+
+/**
+ * Bind a claudeSessionId to a loader variant permanently. INSERT OR IGNORE
+ * means the first binding wins — a claudeSessionId is "owned" by whichever
+ * loader was assigned to the session that first saw it. Survives session-row
+ * deletion, so resuming a transcript reuses the prior loader.
+ */
+export function recordClaudeSessionLoader(claudeSessionId: string, loaderVariant: string): void {
+  getDb()
+    .prepare(
+      'INSERT OR IGNORE INTO claude_session_loaders (claude_session_id, loader_variant, created_at) VALUES (?, ?, ?)',
+    )
+    .run(claudeSessionId, loaderVariant, Date.now());
+}
+
+export function getClaudeSessionLoader(claudeSessionId: string): string | null {
+  const row = getDb()
+    .prepare('SELECT loader_variant FROM claude_session_loaders WHERE claude_session_id = ?')
+    .get(claudeSessionId) as { loader_variant: string } | undefined;
+  return row?.loader_variant ?? null;
 }
 
 export function getDb(): Database.Database {
@@ -115,11 +237,19 @@ export interface SessionRow {
   autorespawn: number;
   terminal_alerts: number;
   file_watch_patterns: string;
+  agent_provider: string | null;
+  model: string | null;
+  agent_session_id: string | null;
+  agent_session_id_history: string | null;
   claude_session_id: string | null;
-  scrollback_data: Buffer | null;
+  claude_session_id_history: string | null;
+  tags: string | null;
+  mode: string | null;
   scratchpad: string;
   created_at: number;
   last_active_at: number | null;
+  loader_variant: string | null;
+  git_baseline_commit: string | null;
 }
 
 export interface SessionRecord {
@@ -137,14 +267,64 @@ export interface SessionRecord {
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
+  agentProvider: 'claude' | 'codex';
+  model: string | null;
+  agentSessionId: string | null;
+  agentSessionIdHistory: string[];
   claudeSessionId: string | null;
-  scrollbackData: Buffer | null;
+  claudeSessionIdHistory: string[];
+  tags: string[];
+  mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
   scratchpad: string;
   createdAt: number;
   lastActiveAt: number | null;
+  loaderVariant: string | null;
+  gitBaselineCommit: string | null;
+}
+
+// Parse the JSON-encoded chain of prior claude_session_ids the SDK has assigned
+// to this session over its lifetime. Tolerates legacy NULL columns and any
+// shape that isn't a flat string array (returns []).
+function parseStringArray(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x): x is string => typeof x === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function parseClaudeSessionIdHistory(raw: string | null): string[] {
+  return parseStringArray(raw);
+}
+
+const VALID_SESSION_MODES = new Set([
+  'default',
+  'plan',
+  'accept-edits',
+  'auto',
+  'chat',
+  'read-only',
+]);
+
+function parseSessionMode(
+  raw: string | null,
+): 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only' {
+  if (raw && VALID_SESSION_MODES.has(raw)) {
+    return raw as 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
+  }
+  return 'default';
 }
 
 function rowToSession(row: SessionRow): SessionRecord {
+  const provider = row.agent_provider === 'codex' ? 'codex' : 'claude';
+  const agentSessionId = row.agent_session_id ?? row.claude_session_id;
+  const agentSessionIdHistory =
+    parseClaudeSessionIdHistory(row.agent_session_id_history).length > 0
+      ? parseClaudeSessionIdHistory(row.agent_session_id_history)
+      : parseClaudeSessionIdHistory(row.claude_session_id_history);
   return {
     id: row.id,
     projectId: row.project_id,
@@ -160,12 +340,25 @@ function rowToSession(row: SessionRow): SessionRecord {
     autorespawn: row.autorespawn === 1,
     terminalAlerts: row.terminal_alerts === 1,
     fileWatchPatterns: JSON.parse(row.file_watch_patterns || '[]'),
+    agentProvider: provider,
+    model: row.model ?? null,
+    agentSessionId,
+    agentSessionIdHistory,
     claudeSessionId: row.claude_session_id,
-    scrollbackData: row.scrollback_data,
+    claudeSessionIdHistory: parseClaudeSessionIdHistory(row.claude_session_id_history),
+    tags: parseStringArray(row.tags),
+    mode: parseSessionMode(row.mode),
     scratchpad: row.scratchpad || '',
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
+    loaderVariant: row.loader_variant,
+    gitBaselineCommit: row.git_baseline_commit,
   };
+}
+
+function inferAgentProvider(command: string | null | undefined): 'claude' | 'codex' {
+  const first = (command ?? '').trim().split(/\s+/, 1)[0]?.toLowerCase() ?? '';
+  return first === 'codex' ? 'codex' : 'claude';
 }
 
 export function getSessionsByProject(projectId: string): SessionRecord[] {
@@ -197,16 +390,40 @@ export function createSession(data: {
   autorespawn?: boolean;
   terminalAlerts?: boolean;
   fileWatchPatterns?: string[];
+  agentProvider?: 'claude' | 'codex';
+  model?: string | null;
+  /**
+   * Optional explicit loader variant. Used by the transcript-resume flow to
+   * reattach the same loader to a respawned session. When omitted, a variant
+   * is picked from the unused pool (random reuse once all 60 are taken).
+   */
+  loaderVariant?: string;
+  gitBaselineCommit?: string | null;
 }): SessionRecord {
   const id = uuidv4();
   const now = Date.now();
+  // The "used" set is built only from live session rows. Sessions deleted via
+  // the GUI are gone from this query, which immediately frees their loader.
+  const usedRows = getDb()
+    .prepare('SELECT loader_variant FROM sessions WHERE loader_variant IS NOT NULL')
+    .all() as Array<{ loader_variant: string }>;
+  const used = new Set(usedRows.map((r) => r.loader_variant));
+  // If a specific variant was requested (transcript-resume restoring the
+  // session's prior loader) and it isn't currently held by another active
+  // session, honor it. Otherwise pick a random unused variant. Avoiding
+  // collisions with active sessions takes priority over respawn identity —
+  // the recorded binding in claude_session_loaders is preserved either way,
+  // so the original loader returns the next time it's free.
+  const preferred = data.loaderVariant;
+  const loaderVariant =
+    preferred && !used.has(preferred) ? preferred : pickLoaderVariant(used);
   getDb().prepare(`
     INSERT INTO sessions (
       id, project_id, name, command, working_directory, type,
       autostart, autorestart, autorestart_max, autorestart_delay_ms,
       autorestart_window_secs, autorespawn, terminal_alerts, file_watch_patterns,
-      scratchpad, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)
+      agent_provider, model, scratchpad, created_at, loader_variant, git_baseline_commit
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
   `).run(
     id,
     data.projectId,
@@ -222,9 +439,19 @@ export function createSession(data: {
     data.autorespawn !== false ? 1 : 0,
     data.terminalAlerts ? 1 : 0,
     JSON.stringify(data.fileWatchPatterns ?? []),
-    now
+    data.agentProvider ?? inferAgentProvider(data.command),
+    data.model ?? null,
+    now,
+    loaderVariant,
+    data.gitBaselineCommit ?? null
   );
   return getSessionById(id)!;
+}
+
+export function setSessionGitBaseline(id: string, sha: string | null): void {
+  getDb()
+    .prepare('UPDATE sessions SET git_baseline_commit = ? WHERE id = ?')
+    .run(sha, id);
 }
 
 export function updateSession(id: string, data: Partial<{
@@ -239,7 +466,14 @@ export function updateSession(id: string, data: Partial<{
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
+  agentProvider: 'claude' | 'codex';
+  model: string | null;
+  agentSessionId: string | null;
+  agentSessionIdHistory: string[];
   claudeSessionId: string | null;
+  claudeSessionIdHistory: string[];
+  tags: string[];
+  mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
   scratchpad: string;
   lastActiveAt: number;
 }>): SessionRecord | null {
@@ -257,9 +491,13 @@ export function updateSession(id: string, data: Partial<{
     autorestartWindowSecs: 'autorestart_window_secs',
     autorespawn: 'autorespawn',
     terminalAlerts: 'terminal_alerts',
+    agentProvider: 'agent_provider',
+    model: 'model',
+    agentSessionId: 'agent_session_id',
     claudeSessionId: 'claude_session_id',
     scratchpad: 'scratchpad',
     lastActiveAt: 'last_active_at',
+    mode: 'mode',
   };
 
   for (const [key, col] of Object.entries(fieldMap)) {
@@ -279,14 +517,41 @@ export function updateSession(id: string, data: Partial<{
     values.push(JSON.stringify(data.fileWatchPatterns));
   }
 
+  if (data.claudeSessionIdHistory !== undefined) {
+    fields.push('claude_session_id_history = ?');
+    values.push(JSON.stringify(data.claudeSessionIdHistory));
+  }
+
+  if (data.agentSessionIdHistory !== undefined) {
+    fields.push('agent_session_id_history = ?');
+    values.push(JSON.stringify(data.agentSessionIdHistory));
+  }
+
+  if (data.tags !== undefined) {
+    fields.push('tags = ?');
+    values.push(JSON.stringify(data.tags));
+  }
+
   if (fields.length === 0) return getSessionById(id);
   values.push(id);
   getDb().prepare(`UPDATE sessions SET ${fields.join(', ')} WHERE id = ?`).run(...values);
-  return getSessionById(id);
-}
+  const updated = getSessionById(id);
 
-export function saveScrollback(sessionId: string, data: Buffer): void {
-  getDb().prepare('UPDATE sessions SET scrollback_data = ? WHERE id = ?').run(data, sessionId);
+  // Whenever a claudeSessionId (current or historical) becomes known for a
+  // session, bind it to that session's loader variant in the persistence
+  // table. The binding survives session-row deletion, so transcript-resume
+  // recovers the same loader for the same conversation.
+  if (
+    updated?.loaderVariant &&
+    (data.claudeSessionId !== undefined || data.claudeSessionIdHistory !== undefined)
+  ) {
+    const ids = new Set<string>();
+    if (updated.claudeSessionId) ids.add(updated.claudeSessionId);
+    for (const hid of updated.claudeSessionIdHistory) ids.add(hid);
+    for (const cid of ids) recordClaudeSessionLoader(cid, updated.loaderVariant);
+  }
+
+  return updated;
 }
 
 export function deleteSession(id: string): void {

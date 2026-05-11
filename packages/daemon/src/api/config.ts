@@ -33,6 +33,7 @@ export function createConfigRouter(): Router {
         'port',
         'host',
         'projects',
+        'integrations',
       ];
 
       const updated: GlobalConfig = { ...current };

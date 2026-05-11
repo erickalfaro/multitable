@@ -7,40 +7,36 @@ import type { AttachmentKind } from '../../lib/attachments';
 
 type Key = { label: string; input: string; title?: string };
 
+// Ordered by mobile-terminal usage frequency: completion + history first,
+// then cursor movement, then escape/stop, then line nav.
 const KEYS: Key[] = [
-  { label: '\u238B', input: '\x1b', title: 'Esc' },
   { label: 'Tab', input: '\t' },
-  { label: '\u21E7Tab', input: '\x1b[Z', title: 'Shift+Tab' },
-  { label: '\u2303C', input: '\x03', title: 'Ctrl+C' },
-  { label: '\u2303D', input: '\x04', title: 'Ctrl+D' },
-  { label: '\u2303L', input: '\x0c', title: 'Ctrl+L (clear)' },
-  { label: '\u2303R', input: '\x12', title: 'Ctrl+R (history)' },
-  { label: '\u2303Z', input: '\x1a', title: 'Ctrl+Z' },
-  { label: '\u2190', input: '\x1b[D', title: 'Left' },
-  { label: '\u2192', input: '\x1b[C', title: 'Right' },
-  { label: '\u2191', input: '\x1b[A', title: 'Up' },
-  { label: '\u2193', input: '\x1b[B', title: 'Down' },
+  { label: '↑', input: '\x1b[A', title: 'Up' },
+  { label: '↓', input: '\x1b[B', title: 'Down' },
+  { label: '←', input: '\x1b[D', title: 'Left' },
+  { label: '→', input: '\x1b[C', title: 'Right' },
+  { label: '⎋', input: '\x1b', title: 'Esc' },
+  { label: '⌃C', input: '\x03', title: 'Ctrl+C' },
   { label: 'Home', input: '\x1b[H' },
   { label: 'End', input: '\x1b[F' },
-  { label: 'PgUp', input: '\x1b[5~' },
-  { label: 'PgDn', input: '\x1b[6~' },
-  { label: '\u21B5', input: '\r', title: 'Enter' },
 ];
 
 const buttonStyle: React.CSSProperties = {
   minWidth: 44,
   height: 40,
   padding: '0 10px',
-  borderRadius: 'var(--radius-md)',
-  border: '1px solid var(--border)',
+  borderRadius: 'var(--radius-snug)',
+  border: '1px solid var(--border-strong)',
   backgroundColor: 'var(--bg-elevated)',
   color: 'var(--text-primary)',
+  fontFamily: 'inherit',
   fontSize: 12,
-  fontWeight: 600,
+  fontWeight: 500,
   cursor: 'pointer',
   flexShrink: 0,
   touchAction: 'manipulation',
-  boxShadow: 'var(--shadow-sm), var(--shadow-inset)',
+  boxShadow: 'none',
+  letterSpacing: '0.04em',
   transition:
     'background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out)',
   display: 'inline-flex',
@@ -68,8 +64,15 @@ export function TouchToolbar() {
     if (s.terminals[s.selectedProcessId]) return 'terminal';
     return null;
   });
+  // Sessions don't accept raw key input — pty-input is dropped for them — and
+  // the chat composer has its own attach button. Render only for PTY-backed
+  // processes (terminals and commands) where these keys actually do something.
+  const isPty = useAppStore((s) => {
+    if (!s.selectedProcessId) return false;
+    return Boolean(s.terminals[s.selectedProcessId] || s.commands[s.selectedProcessId]);
+  });
 
-  if (!selectedProcessId) return null;
+  if (!selectedProcessId || !isPty) return null;
 
   const sendKey = (input: string) => {
     wsClient.sendInput(selectedProcessId, input);

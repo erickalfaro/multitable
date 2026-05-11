@@ -3,9 +3,38 @@ import * as nodePty from 'node-pty';
 import fs from 'fs';
 import { exec } from 'child_process';
 import { RingBuffer } from './ringBuffer.js';
-import { saveScrollback, getSessionById, updateSession } from '../db/store.js';
 import { addPid, removePid } from '../pids.js';
-import type { ManagedProcess, ProcessConfig, ProcessMetrics, ProcessState, SpawnConfig } from '../types.js';
+import type { ManagedProcess, ProcessState, SpawnConfig } from '../types.js';
+
+// When MultiTable itself is launched from inside a parent Claude Code
+// session (e.g. VSCode's integrated terminal), these env vars leak into the
+// daemon and then into every child `claude` we spawn. The child sees
+// CLAUDE_CODE_ENTRYPOINT=claude-vscode and tries to run as a nested VSCode
+// agent — which requires a parent IPC bridge that doesn't exist for us.
+// That path fails with a sandbox error and the process wedges.
+//
+// Strip these on spawn so the child boots as a standalone interactive CLI.
+// Explicit list keeps us from accidentally scrubbing env the session
+// actually needs (e.g. the user's PATH, HOME, ANTHROPIC_API_KEY).
+const PARENT_CLAUDE_ENV_KEYS = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING',
+  'CLAUDE_CODE_IPC_FD',
+  'CLAUDE_CODE_PARENT_SESSION_ID',
+  'CLAUDE_AGENT_SDK_VERSION',
+];
+
+function scrubParentClaudeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v == null) continue;
+    if (PARENT_CLAUDE_ENV_KEYS.includes(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
 
 // URL-style patterns indicate the port a server actually bound to.
 // The bare "port N" pattern also matches warnings like "Port 3000 is in use,
@@ -87,14 +116,12 @@ export class PtyManager extends EventEmitter {
   private processes = new Map<string, ManagedProcess>();
   private cpuSamples = new Map<string, CpuSample>();
   private metricsInterval: NodeJS.Timeout | null = null;
-  private scrollbackInterval: NodeJS.Timeout | null = null;
   private restartTimers = new Map<string, NodeJS.Timeout>();
   private portConfidence = new Map<string, 'high' | 'low'>();
 
   constructor() {
     super();
     this.startMetricsPolling();
-    this.startScrollbackFlushing();
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -124,37 +151,6 @@ export class PtyManager extends EventEmitter {
 
     this.processes.set(cfg.id, proc);
     this.spawnPty(proc, cfg.cols ?? 80, cfg.rows ?? 24);
-    return proc;
-  }
-
-  // Register a process in the manager without spawning the PTY.
-  // Used for sessions with a stale claudeSessionId — the user must explicitly
-  // choose Resume or Start New before any process starts.
-  register(cfg: SpawnConfig): ManagedProcess {
-    if (this.processes.has(cfg.id)) {
-      throw new Error(`Process ${cfg.id} already exists`);
-    }
-
-    const proc: ManagedProcess = {
-      id: cfg.id,
-      name: cfg.name,
-      command: cfg.command,
-      workingDir: cfg.workingDir,
-      type: cfg.type,
-      projectId: cfg.projectId,
-      config: cfg.config,
-      state: 'stopped',
-      pty: null,
-      pid: null,
-      startedAt: null,
-      restartCount: 0,
-      lastRestartAt: 0,
-      outputBuffer: new RingBuffer(),
-      metrics: { cpuPercent: 0, memoryBytes: 0, detectedPort: null },
-    };
-
-    this.processes.set(cfg.id, proc);
-    this.emit('state-changed', { processId: proc.id, state: proc.state });
     return proc;
   }
 
@@ -200,10 +196,20 @@ export class PtyManager extends EventEmitter {
 
   write(id: string, data: string): void {
     const proc = this.processes.get(id);
-    if (!proc || !proc.pty) return;
+    if (!proc) {
+      console.warn(`[pty-write] no process for id=${id}`);
+      return;
+    }
+    if (!proc.pty) {
+      console.warn(`[pty-write] process ${id} (${proc.name}) has no pty (state=${proc.state})`);
+      return;
+    }
+
     try {
       proc.pty.write(data);
-    } catch {}
+    } catch (err) {
+      console.error(`[pty-write] failed for id=${id}:`, err);
+    }
   }
 
   remove(id: string): void {
@@ -215,15 +221,12 @@ export class PtyManager extends EventEmitter {
 
   destroy(): void {
     if (this.metricsInterval) clearInterval(this.metricsInterval);
-    if (this.scrollbackInterval) clearInterval(this.scrollbackInterval);
     for (const id of this.processes.keys()) {
       this.kill(id);
     }
   }
 
-  // Force-spawn a stopped/errored process. Used by the explicit "Start New"
-  // action — the caller is responsible for clearing claudeSessionId from the DB
-  // before calling this so spawnPty() won't try --resume.
+  // Force-spawn a stopped/errored process.
   forceSpawn(id: string, cols = 80, rows = 24): void {
     const proc = this.processes.get(id);
     if (!proc) return;
@@ -232,22 +235,12 @@ export class PtyManager extends EventEmitter {
   }
 
   // Respawn PTY for a process if it is dead (for autorespawn on subscribe).
-  // Never auto-respawn errored processes or sessions that have a prior Claude
-  // conversation ID — the user must explicitly start/resume.
+  // Never auto-respawn errored processes.
   respawnIfDead(id: string, cols = 80, rows = 24): ManagedProcess | undefined {
     const proc = this.processes.get(id);
     if (!proc) return undefined;
     if (proc.state === 'running' || proc.state === 'errored') return proc;
     if (!proc.config.autorespawn) return proc;
-
-    // Don't auto-respawn sessions with a prior Claude session — the user
-    // must click Resume or Start New to avoid confusion.
-    if (proc.type === 'session') {
-      try {
-        const session = getSessionById(id);
-        if (session?.claudeSessionId) return proc;
-      } catch { /* proceed with respawn if DB lookup fails */ }
-    }
 
     this.spawnPty(proc, cols, rows);
     return proc;
@@ -256,32 +249,14 @@ export class PtyManager extends EventEmitter {
   // ─── Private ───────────────────────────────────────────────────────────────
 
   private spawnPty(proc: ManagedProcess, cols = 80, rows = 24): void {
-    // Clear old scrollback — TUI apps (like Claude Code) use the alternate
-    // screen buffer, so replaying raw PTY output produces garbage.  Instead,
-    // session history is preserved by resuming with `--resume`.
+    // Clear old scrollback so a restart starts from a clean slate.
     proc.outputBuffer.clear();
 
     // Reset port detection so a restart re-learns the port from fresh output.
     proc.metrics.detectedPort = null;
     this.portConfidence.delete(proc.id);
 
-    // For sessions, use --resume if a Claude session ID is known.
-    // If resume fails ("No conversation found"), we stop and surface the error
-    // rather than silently starting a new session — the user must explicitly
-    // choose to start fresh so there's no confusion about which session is active.
-    let command = proc.command;
-    let resumeClaudeSessionId: string | null = null;
-    if (proc.type === 'session') {
-      try {
-        const session = getSessionById(proc.id);
-        if (session?.claudeSessionId) {
-          resumeClaudeSessionId = session.claudeSessionId;
-          command = `claude --resume ${session.claudeSessionId}`;
-        }
-      } catch { /* fall back to original command */ }
-    }
-
-    const [spawnCmd, ...spawnArgs] = this.buildCommand(command);
+    const [spawnCmd, ...spawnArgs] = this.buildCommand(proc.command);
 
     let ptyProcess: nodePty.IPty;
     try {
@@ -290,7 +265,7 @@ export class PtyManager extends EventEmitter {
         cols,
         rows,
         cwd: proc.workingDir || process.cwd(),
-        env: { ...process.env } as Record<string, string>,
+        env: scrubParentClaudeEnv(process.env),
       });
     } catch (err) {
       console.error(`[PtyManager] Failed to spawn ${proc.id}:`, err);
@@ -305,39 +280,8 @@ export class PtyManager extends EventEmitter {
 
     addPid(proc.id, ptyProcess.pid);
 
-    // Track whether the resume failed so we can clear the stale claudeSessionId
-    let resumeFailed = false;
-
     ptyProcess.onData((data: string) => {
       proc.outputBuffer.write(data);
-
-      // Detect if claude --resume failed (conversation not found).
-      // Kill the process and surface an error — do NOT silently start a new session.
-      // IMPORTANT: Do NOT clear claudeSessionId from DB here. Keeping it ensures
-      // that on daemon restart the session is registered as stopped (not auto-spawned).
-      // The claudeSessionId is only cleared when the user explicitly clicks "Start New".
-      if (resumeClaudeSessionId && !resumeFailed && data.includes('No conversation found')) {
-        resumeFailed = true;
-        const staleId = resumeClaudeSessionId;
-        console.log(`[PtyManager] claude --resume failed for ${proc.id}, conversation ${staleId} not found — stopping session`);
-
-        // Kill the process so it doesn't sit at a fresh prompt pretending to be the old session
-        setTimeout(() => {
-          if (proc.pty) {
-            try { proc.pty.kill(); } catch {}
-            proc.pty = null;
-          }
-          proc.pid = null;
-          removePid(proc.id);
-          this.setState(proc, 'errored');
-          this.emit('resume-failed', {
-            processId: proc.id,
-            staleClaudeSessionId: staleId,
-            message: `Could not resume session: conversation ${staleId} was not found. Start a new session instead.`,
-          });
-        }, 100);
-        return; // don't emit this data to the terminal
-      }
 
       // Detect port. High-confidence URL matches ("localhost:3001") may override
       // a previous low-confidence match ("Port 3000 is in use..."); once a
@@ -363,16 +307,8 @@ export class PtyManager extends EventEmitter {
       proc.pty = null;
       proc.pid = null;
 
-      // Flush scrollback to DB immediately so it survives respawn/restart
-      if (proc.type === 'session' && proc.outputBuffer.size > 0) {
-        try {
-          const data = Buffer.from(proc.outputBuffer.read(), 'utf8');
-          saveScrollback(proc.id, data);
-        } catch { /* best effort */ }
-      }
-
-      // If state is already 'stopped' or 'errored', it was set by kill() or
-      // the resume-failed handler — don't override it based on exit code.
+      // If state is already 'stopped' or 'errored', it was set by kill() —
+      // don't override it based on exit code.
       if (proc.state === 'stopped' || proc.state === 'errored') {
         this.emit('exit', { processId: proc.id, exitCode, signal });
         return;
@@ -526,16 +462,4 @@ export class PtyManager extends EventEmitter {
     }, 2000);
   }
 
-  private startScrollbackFlushing(): void {
-    this.scrollbackInterval = setInterval(() => {
-      for (const [id, proc] of this.processes) {
-        if (proc.type === 'session' && proc.outputBuffer.size > 0) {
-          try {
-            const data = Buffer.from(proc.outputBuffer.read(), 'utf8');
-            saveScrollback(id, data);
-          } catch {}
-        }
-      }
-    }, 3000);
-  }
 }

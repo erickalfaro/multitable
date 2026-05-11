@@ -4,8 +4,6 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Response } from 'express';
 import type { PermissionPrompt, AskQuestion } from '../types.js';
 
-const TIMEOUT_MS = 110000;
-
 // Tools that are always approved without prompting the user
 const AUTO_DEFER_TOOLS = new Set([
   'Read',
@@ -41,6 +39,34 @@ function pathInsideCwd(toolName: string, toolInput: Record<string, any>, cwd: st
 
 type HookEventName = 'PreToolUse' | 'PermissionRequest';
 
+// Phase 5: the SDK canUseTool path resolves a Promise instead of writing to
+// an Express response. We carry SDK responders alongside HTTP responders on
+// the same PendingPermission so dedup still coalesces both paths into a
+// single user-facing card.
+type SdkResolver = (decision: SdkDecision) => void;
+
+type SdkDecision =
+  | { kind: 'allow'; updatedInput: Record<string, any> }
+  | { kind: 'deny'; message: string };
+
+export interface PermissionExtras {
+  title?: string;
+  displayName?: string;
+  subtitle?: string;
+  blockedPath?: string;
+}
+
+// SDK PermissionResult shape (verified against the bundled `claude` binary in
+// @anthropic-ai/claude-agent-sdk@0.2.119): the runtime Zod schema requires
+// `updatedInput: record` on allow and `message: string` on deny — even though
+// sdk.d.ts declares `updatedInput?` as optional. Returning `{ behavior: 'allow' }`
+// without `updatedInput` makes the binary throw and synthesize a deny with
+// `message: "Tool permission request failed: ZodError..."`, which kills every
+// tool call. Always pass the original tool input as `updatedInput`.
+export type PermissionResult =
+  | { behavior: 'allow'; updatedInput: Record<string, any> }
+  | { behavior: 'deny'; message: string };
+
 interface PendingPermission {
   prompt: PermissionPrompt;
   // Multiple held-open HTTP responses can attach to the same prompt when
@@ -49,7 +75,10 @@ interface PendingPermission {
   // and PermissionRequest expect different response shapes — even when they
   // describe the same underlying tool call we coalesced via dedup.
   responders: Array<{ res: Response; eventName: HookEventName }>;
-  timer: NodeJS.Timeout;
+  // Phase 5: SDK callbacks subscribe via a Promise resolver. Multiple SDK
+  // resolvers can pile onto a single prompt the same way HTTP responders do
+  // (e.g. the same tool retried mid-turn).
+  sdkResolvers: Array<{ resolve: SdkResolver; abortCleanup?: () => void }>;
   sessionId: string;
   dedupKey: string;
 }
@@ -117,6 +146,16 @@ function sendAll(
   for (const r of entry.responders) {
     try { r.res.json(build(r.eventName)); } catch {}
   }
+}
+
+// Resolve every SDK Promise attached to this prompt with the same decision.
+// Cleanup any abort listeners we set up at requestFromSdk time.
+function resolveAllSdk(entry: PendingPermission, decision: SdkDecision): void {
+  for (const r of entry.sdkResolvers) {
+    try { r.abortCleanup?.(); } catch {}
+    try { r.resolve(decision); } catch {}
+  }
+  entry.sdkResolvers.length = 0;
 }
 
 function parseAskQuestions(toolInput: Record<string, any> | undefined): AskQuestion[] {
@@ -267,7 +306,6 @@ export class PermissionManager extends EventEmitter {
       toolName: tool_name,
       toolInput: input,
       createdAt: Date.now(),
-      timeoutMs: TIMEOUT_MS,
       ...(isAskQuestion
         ? {
             kind: 'ask-question' as const,
@@ -276,14 +314,10 @@ export class PermissionManager extends EventEmitter {
         : { kind: 'permission' as const }),
     };
 
-    const timer = setTimeout(() => {
-      this.expire(id);
-    }, TIMEOUT_MS);
-
     this.pending.set(id, {
       prompt,
       responders: [{ res, eventName }],
-      timer,
+      sdkResolvers: [],
       sessionId,
       dedupKey,
     });
@@ -297,7 +331,6 @@ export class PermissionManager extends EventEmitter {
     const entry = this.pending.get(id);
     if (!entry) return;
 
-    clearTimeout(entry.timer);
     this.pending.delete(id);
 
     if (decision === 'always-allow') {
@@ -312,8 +345,10 @@ export class PermissionManager extends EventEmitter {
     const approved = decision === 'allow' || decision === 'always-allow';
     if (approved) {
       sendAll(entry, (eventName) => buildAllowBody(eventName, updatedInput));
+      resolveAllSdk(entry, { kind: 'allow', updatedInput: updatedInput ?? entry.prompt.toolInput });
     } else {
       sendAll(entry, (eventName) => buildDenyBody(eventName));
+      resolveAllSdk(entry, { kind: 'deny', message: 'Denied by user' });
     }
 
     this.emit('permission:resolved', id);
@@ -333,23 +368,32 @@ export class PermissionManager extends EventEmitter {
       return;
     }
 
-    clearTimeout(entry.timer);
     this.pending.delete(id);
 
     const body = buildAskQuestionResponse(entry.prompt, answers);
     sendAll(entry, () => body);
+
+    // SDK side: AskUserQuestion arrives via canUseTool. The SDK reads the
+    // `message` of a deny result as the tool result string, so we serialize
+    // the user's selections into JSON and deny — Claude reads the JSON and
+    // proceeds with the answer. Mirrors the CLI buildAskQuestionResponse
+    // semantics (deny + reason = answer) on the SDK side.
+    const askPayload = {
+      questions: (entry.prompt.questions || []).map((q, i) => ({
+        question: q.question,
+        header: q.header,
+        answer: answers[i] || [],
+      })),
+    };
+    let askJson: string;
+    try {
+      askJson = JSON.stringify(askPayload);
+    } catch {
+      askJson = String(askPayload);
+    }
+    resolveAllSdk(entry, { kind: 'deny', message: askJson });
+
     this.emit('permission:resolved', id);
-  }
-
-  private expire(id: string): void {
-    const entry = this.pending.get(id);
-    if (!entry) return;
-
-    this.pending.delete(id);
-    // On timeout, auto-approve to not block Claude
-    sendAll(entry, (eventName) => buildAllowBody(eventName));
-
-    this.emit('permission:expired', id);
   }
 
   getPending(): PermissionPrompt[] {
@@ -370,12 +414,153 @@ export class PermissionManager extends EventEmitter {
   clearForSession(sessionId: string): void {
     for (const [id, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
-        clearTimeout(entry.timer);
         sendAll(entry, (eventName) => buildAllowBody(eventName));
+        // SDK side: deny pending Promises with a descriptive message so the
+        // SDK's tool call fails cleanly rather than silently allowing after
+        // the session is gone.
+        resolveAllSdk(entry, { kind: 'deny', message: 'Session cleared' });
         this.pending.delete(id);
         this.emit('permission:resolved', id);
       }
     }
     this.sessionAllowList.delete(sessionId);
   }
+
+  /**
+   * SDK entry point: invoked from AgentSessionManager.makeCanUseTool when the
+   * Claude Agent SDK's canUseTool callback fires. Mirrors handleHook semantics
+   * (auto-defer for read-only tools inside cwd, sessionAllowList honor, dedup
+   * across in-flight prompts, 110s auto-allow timeout) but resolves a Promise
+   * carrying the SDK PermissionResult shape instead of writing to an Express
+   * response.
+   *
+   * NOTE: this duplicates the auto-defer / allowlist / dedup logic from
+   * handleHook rather than sharing a refactored helper. The HTTP path's
+   * responder model is tightly coupled to per-eventName response shapes
+   * (PreToolUse vs PermissionRequest); restructuring it before Phase 6 (which
+   * deletes the HTTP path entirely) risks regressions for marginal benefit.
+   * Will consolidate when the HTTP path goes away.
+   */
+  async requestFromSdk(
+    sessionId: string,
+    claudeSessionId: string,
+    toolName: string,
+    toolInput: Record<string, any>,
+    signal: AbortSignal,
+    extras?: PermissionExtras
+  ): Promise<PermissionResult> {
+    const input = toolInput || {};
+    const isAskQuestion = toolName === 'AskUserQuestion';
+
+    // Bail immediately if the caller is already aborted — don't even build a
+    // prompt; the SDK is unwinding and the for-await will exit.
+    if (signal.aborted) {
+      return { behavior: 'deny', message: 'Cancelled' };
+    }
+
+    // Resolve cwd for the path-scope check. We have the multitable session id
+    // here but not the workingDirectory directly; look it up via dynamic
+    // import to avoid a static cycle (db/store.ts is fine to require lazily
+    // — it's already imported by the rest of the daemon at startup).
+    let cwd = '';
+    try {
+      const { getSessionById } = await import('../db/store.js');
+      cwd = sessionId ? getSessionById(sessionId)?.workingDirectory ?? '' : '';
+    } catch {
+      cwd = '';
+    }
+
+    // Auto-defer: identical rules to handleHook. AskUserQuestion is never
+    // auto-deferred; it always surfaces a structured prompt.
+    const insideCwd = pathInsideCwd(toolName, input, cwd);
+    if (!isAskQuestion && this.autoDeferTools.has(toolName) && insideCwd) {
+      return { behavior: 'allow', updatedInput: input };
+    }
+
+    // sessionAllowList: same honor rules.
+    if (!isAskQuestion && this.sessionAllowList.get(sessionId)?.has(toolName)) {
+      return { behavior: 'allow', updatedInput: input };
+    }
+
+    // Dedup: attach to an existing pending prompt with the same key.
+    const dedupKey = makeDedupKey(sessionId, toolName, input);
+    for (const entry of this.pending.values()) {
+      if (entry.dedupKey === dedupKey) {
+        return new Promise<PermissionResult>((resolve) => {
+          this.attachSdkResolver(signal, entry, resolve);
+        });
+      }
+    }
+
+    // Build a fresh prompt and broadcast it so the UI can render the card.
+    const id = uuidv4();
+    const prompt: PermissionPrompt = {
+      id,
+      sessionId,
+      claudeSessionId: claudeSessionId || '',
+      toolName,
+      toolInput: input,
+      createdAt: Date.now(),
+      ...(isAskQuestion
+        ? {
+            kind: 'ask-question' as const,
+            questions: parseAskQuestions(input),
+          }
+        : { kind: 'permission' as const }),
+      ...(extras?.title ? { title: extras.title } : {}),
+      ...(extras?.displayName ? { displayName: extras.displayName } : {}),
+      ...(extras?.subtitle ? { subtitle: extras.subtitle } : {}),
+      ...(extras?.blockedPath ? { blockedPath: extras.blockedPath } : {}),
+    };
+
+    const entry: PendingPermission = {
+      prompt,
+      responders: [],
+      sdkResolvers: [],
+      sessionId,
+      dedupKey,
+    };
+    this.pending.set(id, entry);
+
+    return new Promise<PermissionResult>((resolve) => {
+      this.attachSdkResolver(signal, entry, resolve);
+      this.emit('permission:prompt', prompt);
+    });
+  }
+
+  /**
+   * Push an SDK resolver onto an in-flight prompt and wire its AbortSignal so
+   * a turn cancellation deny-resolves this Promise (with `message: 'Cancelled'`)
+   * and removes the resolver from the entry. If the entry has no remaining
+   * subscribers (no SDK Promises, no HTTP responders) after an abort, drop the
+   * prompt and emit `permission:resolved` so the UI clears its card.
+   */
+  private attachSdkResolver(
+    signal: AbortSignal,
+    entry: PendingPermission,
+    resolve: (r: PermissionResult) => void
+  ): void {
+    const sdkResolve: SdkResolver = (decision) => resolve(decisionToResult(decision));
+    const onAbort = () => {
+      const idx = entry.sdkResolvers.findIndex((r) => r.resolve === sdkResolve);
+      if (idx >= 0) entry.sdkResolvers.splice(idx, 1);
+      resolve({ behavior: 'deny', message: 'Cancelled' });
+      if (entry.sdkResolvers.length === 0 && entry.responders.length === 0) {
+        if (this.pending.get(entry.prompt.id) === entry) {
+          this.pending.delete(entry.prompt.id);
+          this.emit('permission:resolved', entry.prompt.id);
+        }
+      }
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    const abortCleanup = () => signal.removeEventListener('abort', onAbort);
+    entry.sdkResolvers.push({ resolve: sdkResolve, abortCleanup });
+  }
+}
+
+function decisionToResult(decision: SdkDecision): PermissionResult {
+  if (decision.kind === 'allow') {
+    return { behavior: 'allow', updatedInput: decision.updatedInput };
+  }
+  return { behavior: 'deny', message: decision.message };
 }

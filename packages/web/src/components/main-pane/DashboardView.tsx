@@ -27,22 +27,9 @@ export function DashboardView() {
     store.setProjectOverviewOpen(false);
     store.setSelectedProcess(proc.id);
 
-    if (proc.type === 'session' && proc.state === 'stopped') {
-      const s = proc as Session;
-      const hasPrior = !!(s.claudeSessionId || s.claudeState?.claudeSessionId);
-      if (hasPrior) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const dims = terminalManager.fit(proc.id);
-            api.sessions
-              .resumeClaude(proc.id, dims ?? undefined)
-              .catch(() => toast.error('Failed to resume session'));
-          });
-        });
-      } else {
-        api.processes.start(proc.id).catch(() => toast.error('Failed to start session'));
-      }
-    } else if (
+    // Sessions are SDK-driven: no start/resume action — first turn auto-starts.
+    // Commands and terminals still spawn via PtyManager.
+    if (
       (proc.type === 'command' || proc.type === 'terminal') &&
       proc.state === 'stopped'
     ) {
@@ -62,8 +49,19 @@ export function DashboardView() {
     >
       {showAddProject && <AddProjectModal onClose={() => setShowAddProject(false)} />}
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 20, gap: 12 }}>
-        <h1 style={{ fontSize: 26, fontWeight: 700, color: 'var(--text-primary)', margin: 0, flex: 1, letterSpacing: -0.3, minWidth: 0 }}>
-          Dashboard
+        <h1
+          style={{
+            fontSize: 18,
+            fontWeight: 500,
+            color: 'var(--text-primary)',
+            margin: 0,
+            flex: 1,
+            letterSpacing: '0.02em',
+            minWidth: 0,
+            textTransform: 'lowercase',
+          }}
+        >
+          dashboard
         </h1>
         <Button variant="primary" leftIcon={<Plus size={14} />} onClick={() => setShowAddProject(true)}>
           Add Project
@@ -116,8 +114,8 @@ export function DashboardView() {
                   top: 0,
                   left: 0,
                   right: 0,
-                  height: 3,
-                  background: `linear-gradient(90deg, ${color.stripe}, color-mix(in srgb, ${color.stripe} 40%, transparent))`,
+                  height: 2,
+                  background: color.stripe,
                   zIndex: 1,
                 }}
               />
@@ -127,13 +125,13 @@ export function DashboardView() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
-                  padding: '18px 16px 10px',
+                  padding: '14px 14px 8px',
                 }}
               >
                 <span
                   style={{
-                    fontSize: 16,
-                    fontWeight: 600,
+                    fontSize: 13.5,
+                    fontWeight: 500,
                     color: 'var(--text-primary)',
                     flex: 1,
                     overflow: 'hidden',
@@ -168,12 +166,13 @@ export function DashboardView() {
                   marginTop: 'auto',
                   borderTop: '1px solid var(--border)',
                   background: 'var(--bg-statusbar)',
-                  padding: '6px 12px',
+                  padding: '5px 12px',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 10,
-                  fontSize: 11,
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: 10,
+                  fontFamily: 'inherit',
+                  letterSpacing: '0.05em',
                   color: 'var(--text-muted)',
                 }}
               >
@@ -205,7 +204,7 @@ export function DashboardView() {
               No projects yet.{' '}
               <button
                 onClick={() => setShowAddProject(true)}
-                style={{ background: 'none', border: 'none', color: 'var(--accent-blue)', cursor: 'pointer', fontSize: 14, padding: 0, textDecoration: 'underline' }}
+                style={{ background: 'none', border: 'none', color: 'var(--accent-amber)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, padding: 0, textDecoration: 'underline' }}
               >
                 Add a project
               </button>{' '}

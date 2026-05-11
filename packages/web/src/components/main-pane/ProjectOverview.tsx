@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
-import { api } from '../../lib/api';
+import { api, stopProcessByType } from '../../lib/api';
 import {
   Settings,
   Bot,
@@ -11,7 +11,8 @@ import {
   Plus,
 } from 'lucide-react';
 import type { Session, ManagedProcess } from '../../lib/types';
-import { Badge, Divider, IconButton } from '../ui';
+import { isProcessActive } from '../../lib/processState';
+import { Badge, Divider, IconButton, AgentBadge } from '../ui';
 import { StatusDot } from '../sidebar/StatusDot';
 import { terminalManager } from '../../lib/terminalManager';
 import toast from 'react-hot-toast';
@@ -40,7 +41,7 @@ function ProcessTile({
   onSelect: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const isRunning = process.state === 'running' || process.state === 'idle';
+  const isRunning = isProcessActive(process);
 
   const typeIcon =
     process.type === 'session' ? (
@@ -56,8 +57,7 @@ function ProcessTile({
   if (process.type === 'command') {
     metaLine = truncate(process.command, 64);
   } else if (process.type === 'session') {
-    const s = process as Session;
-    metaLine = s.claudeState?.label || truncate(process.command, 64);
+    metaLine = truncate(process.command, 64);
   } else {
     metaLine = truncate(process.workingDir || '~', 64);
   }
@@ -79,7 +79,7 @@ function ProcessTile({
   };
   const handleStop = (e: React.MouseEvent) => {
     e.stopPropagation();
-    api.processes.stop(process.id).catch(() => toast.error('Failed to stop'));
+    stopProcessByType(process).catch(() => toast.error('Failed to stop'));
   };
   const handleRestart = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -126,6 +126,9 @@ function ProcessTile({
         >
           {process.name}
         </span>
+        {process.type === 'session' && (
+          <AgentBadge provider={(process as Session).agentProvider} size="chip" style={{ flexShrink: 0 }} />
+        )}
         <div style={{ flexShrink: 0 }}>
           <StatusDot state={process.state} size={8} />
         </div>
@@ -295,16 +298,20 @@ export function ProjectOverview({ projectId }: Props) {
   const store = useAppStore();
   const project = store.projects.find((p) => p.id === projectId);
 
-  const sessions = Object.values(store.sessions).filter((s) => s.projectId === projectId);
+  const sessions = Object.values(store.sessions)
+    .filter((s) => s.projectId === projectId)
+    .sort((a, b) => {
+      const recency = (s: typeof a) =>
+        s.claudeState?.lastActivity || s.lastActiveAt || s.createdAt || 0;
+      return recency(b) - recency(a);
+    });
   const commands = Object.values(store.commands).filter((c) => c.projectId === projectId);
   const terminals = Object.values(store.terminals).filter((t) => t.projectId === projectId);
 
-  const runningTotal = [...sessions, ...commands, ...terminals].filter(
-    (p) => p.state === 'running' || p.state === 'idle',
-  ).length;
-  const runningSessions = sessions.filter((s) => s.state === 'running' || s.state === 'idle').length;
-  const runningCommands = commands.filter((c) => c.state === 'running' || c.state === 'idle').length;
-  const runningTerminals = terminals.filter((t) => t.state === 'running' || t.state === 'idle').length;
+  const runningTotal = [...sessions, ...commands, ...terminals].filter(isProcessActive).length;
+  const runningSessions = sessions.filter(isProcessActive).length;
+  const runningCommands = commands.filter(isProcessActive).length;
+  const runningTerminals = terminals.filter(isProcessActive).length;
 
   // Mirrors ProjectSidebarItem.handleSelectProcess — select the process, close
   // the overview so Terminal mounts, and auto-resume/start stopped sessions
@@ -313,22 +320,9 @@ export function ProjectOverview({ projectId }: Props) {
     store.setProjectOverviewOpen(false);
     store.setSelectedProcess(proc.id);
 
-    if (proc.type === 'session' && proc.state === 'stopped') {
-      const s = proc as Session;
-      const hasPrior = !!(s.claudeSessionId || s.claudeState?.claudeSessionId);
-      if (hasPrior) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const dims = terminalManager.fit(proc.id);
-            api.sessions
-              .resumeClaude(proc.id, dims ?? undefined)
-              .catch(() => toast.error('Failed to resume session'));
-          });
-        });
-      } else {
-        api.processes.start(proc.id).catch(() => toast.error('Failed to start session'));
-      }
-    } else if (
+    // Sessions are SDK-driven: no start/resume action — first turn auto-starts.
+    // Commands and terminals still spawn via PtyManager.
+    if (
       (proc.type === 'command' || proc.type === 'terminal') &&
       proc.state === 'stopped'
     ) {
@@ -411,15 +405,15 @@ export function ProjectOverview({ projectId }: Props) {
       {/* Sessions */}
       <section style={{ marginBottom: 24 }}>
         <SectionHeader
-          title="Sessions"
+          title="Agents"
           running={runningSessions}
           total={sessions.length}
           onAdd={handleAddSession}
         />
         {sessions.length === 0 ? (
           <EmptyState
-            label="No sessions yet"
-            addLabel="Add a session"
+            label="No agents yet"
+            addLabel="Add an agent"
             onAdd={handleAddSession}
           />
         ) : (

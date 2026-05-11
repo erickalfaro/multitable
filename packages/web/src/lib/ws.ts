@@ -1,9 +1,24 @@
 import type { WsMessage } from './types';
 import { useAppStore } from '../stores/appStore';
+import { devLog, trimPreview } from './devLog';
 
 type MessageHandler = (msg: WsMessage) => void;
 
 const MAX_RETRIES = 20;
+
+function previewWsMessage(msg: WsMessage): string {
+  const parts: string[] = [];
+  if (msg.processId) parts.push(`pid=${msg.processId.slice(0, 8)}`);
+  if (msg.payload && typeof msg.payload === 'object') {
+    try {
+      const json = JSON.stringify(msg.payload);
+      parts.push(trimPreview(json, 180));
+    } catch {
+      // ignore
+    }
+  }
+  return parts.join(' ');
+}
 
 class WsClient {
   private ws: WebSocket | null = null;
@@ -25,7 +40,13 @@ class WsClient {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${protocol}//${window.location.host}/ws`;
 
-    useAppStore.getState().setConnectionState('reconnecting');
+    // Only flip the banner for *re*connects. The first attempt should be
+    // invisible — flashing "Reconnecting..." during normal mount feels like
+    // a hang.
+    if (this.hasConnectedBefore) {
+      useAppStore.getState().setConnectionState('reconnecting');
+    }
+    devLog.add({ category: 'ws-conn', label: `connecting ${url}` });
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
@@ -34,6 +55,10 @@ class WsClient {
       this.reconnectDelay = 1000;
       this.retryCount = 0;
       useAppStore.getState().setConnectionState('connected');
+      devLog.add({
+        category: 'ws-conn',
+        label: isReconnect ? 'reconnected' : 'connected',
+      });
 
       // Notify listeners so they can re-fetch data after server restart
       if (isReconnect) {
@@ -50,19 +75,42 @@ class WsClient {
     this.ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data) as WsMessage;
+        const isPty = msg.type === 'pty-output' || msg.type === 'scrollback';
+        devLog.add({
+          category: isPty ? 'ws-pty' : 'ws-in',
+          label: msg.type,
+          detail: previewWsMessage(msg),
+          data: msg,
+        });
         const handlers = this.handlers.get(msg.type) ?? [];
         handlers.forEach(h => h(msg));
         const allHandlers = this.handlers.get('*') ?? [];
         allHandlers.forEach(h => h(msg));
-      } catch {
-        // ignore malformed messages
+      } catch (err) {
+        devLog.add({
+          category: 'error',
+          label: 'ws: malformed inbound message',
+          detail: err instanceof Error ? err.message : String(err),
+          data: { raw: typeof evt.data === 'string' ? trimPreview(evt.data, 400) : '<binary>' },
+        });
       }
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (evt) => {
       this.retryCount++;
+      devLog.add({
+        category: 'ws-conn',
+        level: 'warn',
+        label: `closed (code=${evt.code}${evt.reason ? `, ${evt.reason}` : ''})`,
+        detail: `retry ${this.retryCount}/${MAX_RETRIES}`,
+      });
       if (this.retryCount >= MAX_RETRIES) {
         useAppStore.getState().setConnectionState('disconnected');
+        devLog.add({
+          category: 'ws-conn',
+          level: 'error',
+          label: 'reconnect attempts exhausted',
+        });
         return;
       }
       useAppStore.getState().setConnectionState('reconnecting');
@@ -73,7 +121,11 @@ class WsClient {
     };
 
     this.ws.onerror = () => {
-      // onerror is always followed by onclose, so reconnect happens there
+      devLog.add({
+        category: 'ws-conn',
+        level: 'error',
+        label: 'socket error',
+      });
     };
   }
 
@@ -91,7 +143,25 @@ class WsClient {
 
   send(msg: WsMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      const isPtyInput = msg.type === 'pty-input';
+      devLog.add({
+        category: isPtyInput ? 'ws-pty' : 'ws-out',
+        label: msg.type,
+        detail: previewWsMessage(msg),
+        data: msg,
+      });
       this.ws.send(JSON.stringify(msg));
+    } else {
+      // Only surface when we had something meaningful to send — helps catch
+      // cases where the socket dropped mid-interaction.
+      devLog.add({
+        category: 'ws-out',
+        level: 'warn',
+        label: `dropped ${msg.type}`,
+        detail: `socket not open (readyState=${this.ws?.readyState})`,
+        data: msg,
+      });
+      console.warn(`[ws] dropped message type=${msg.type} — socket not open (readyState=${this.ws?.readyState})`);
     }
   }
 
@@ -110,6 +180,23 @@ class WsClient {
     this.send({ type: 'pty-input', processId, payload: { data } });
   }
 
+  sendTurn(processId: string, text: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      useAppStore.getState().appendMessages(processId, [
+        {
+          id: `send-error-${Date.now()}`,
+          ts: Date.now(),
+          kind: 'system',
+          text: 'Send failed: WebSocket is not connected.',
+        },
+      ]);
+      console.warn(`[ws] dropped session turn — socket not open (readyState=${this.ws?.readyState})`);
+      return;
+    }
+    useAppStore.getState().updateProcessState(processId, 'running');
+    this.send({ type: 'session:send', processId, payload: { text } });
+  }
+
   sendResize(processId: string, cols: number, rows: number): void {
     this.send({ type: 'pty-resize', processId, payload: { cols, rows } });
     // Cache latest dims so auto-resubscribe on reconnect uses the current size
@@ -125,6 +212,17 @@ class WsClient {
 
   answerQuestion(id: string, answers: string[][]): void {
     this.send({ type: 'permission:answer-question', payload: { id, answers } });
+  }
+
+  respondElicitation(
+    id: string,
+    action: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, string | number | boolean | string[]>,
+  ): void {
+    this.send({
+      type: 'session:elicitation:respond',
+      payload: { id, action, content },
+    });
   }
 }
 

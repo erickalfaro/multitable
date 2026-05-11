@@ -14,3 +14,14 @@ coverage/
 *.tsbuildinfo
 .eslintcache
 .claude/settings.json
+
+# Daemon runtime files. They normally live in ~/.config/multitable (outside
+# the repo) but ignore them here too in case one ever lands in-tree, so
+# credentials/state can't be committed by accident.
+secrets.yml
+auth.json
+pids.json
+
+# IDE-local config — may contain workspace-specific paths or launch settings.
+.vscode/
+.idea/

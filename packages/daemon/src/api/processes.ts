@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { PtyManager } from '../pty/manager.js';
-import { updateSession } from '../db/store.js';
 
 export function createProcessesRouter(manager: PtyManager): Router {
   const router = Router();
@@ -49,14 +48,6 @@ export function createProcessesRouter(manager: PtyManager): Router {
     if (!proc) return res.status(404).json({ error: 'Process not found' });
     if (proc.state === 'running') {
       return res.status(409).json({ error: 'Process is already running' });
-    }
-    // For sessions: clear any stale claudeSessionId so this starts fresh.
-    // This is the ONLY place claudeSessionId should be cleared — when the
-    // user explicitly chooses to start a new session.
-    if (proc.type === 'session') {
-      try {
-        updateSession(proc.id, { claudeSessionId: null });
-      } catch { /* best effort */ }
     }
     manager.forceSpawn(req.params.id, req.body?.cols, req.body?.rows);
     res.json({ ok: true });

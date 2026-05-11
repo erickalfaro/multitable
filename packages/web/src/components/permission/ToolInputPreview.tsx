@@ -7,10 +7,9 @@ const codeBlockStyle: React.CSSProperties = {
   color: 'var(--text-primary)',
   margin: 0,
   padding: '8px 10px',
-  backgroundColor: 'color-mix(in srgb, var(--bg-sidebar) 60%, transparent)',
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-md)',
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  backgroundColor: 'var(--bg-sidebar)',
+  borderRadius: 'var(--radius-soft)',
+  fontFamily: 'inherit',
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
   overflow: 'auto',
@@ -18,10 +17,10 @@ const codeBlockStyle: React.CSSProperties = {
 };
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 600,
+  fontSize: 9.5,
+  fontWeight: 500,
   textTransform: 'uppercase',
-  letterSpacing: 0.5,
+  letterSpacing: '0.18em',
   color: 'var(--text-muted)',
   marginBottom: 4,
 };
@@ -31,13 +30,12 @@ const rowStyle: React.CSSProperties = {
 };
 
 const pathStyle: React.CSSProperties = {
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  fontFamily: 'inherit',
   fontSize: 12,
   color: 'var(--text-primary)',
-  backgroundColor: 'color-mix(in srgb, var(--bg-sidebar) 60%, transparent)',
-  padding: '4px 8px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--border)',
+  backgroundColor: 'var(--bg-sidebar)',
+  padding: '3px 8px',
+  borderRadius: 'var(--radius-snug)',
   display: 'inline-block',
   maxWidth: '100%',
   overflow: 'hidden',
@@ -75,13 +73,13 @@ function Diff({ oldStr, newStr }: { oldStr: string; newStr: string }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 4 }}>
       <div>
-        <div style={{ ...labelStyle, color: 'var(--accent-red, #ef4444)' }}>− Remove</div>
+        <div style={{ ...labelStyle, color: 'var(--status-error)' }}>− Remove</div>
         <pre
           className="mt-scroll"
           style={{
             ...codeBlockStyle,
-            backgroundColor: 'color-mix(in srgb, var(--accent-red, #ef4444) 10%, transparent)',
-            borderColor: 'color-mix(in srgb, var(--accent-red, #ef4444) 30%, var(--border))',
+            backgroundColor: 'color-mix(in srgb, var(--status-error) 10%, transparent)',
+            borderColor: 'color-mix(in srgb, var(--status-error) 30%, var(--border))',
           }}
         >
           {oldStr || '(empty)'}

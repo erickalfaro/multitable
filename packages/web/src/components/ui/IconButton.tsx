@@ -9,7 +9,7 @@ interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> 
   label?: string;
 }
 
-const BOX: Record<IconButtonSize, number> = { sm: 22, md: 28, lg: 36 };
+const BOX: Record<IconButtonSize, number> = { sm: 22, md: 26, lg: 32 };
 
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
   function IconButton(
@@ -19,12 +19,13 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
     const [hover, setHover] = React.useState(false);
     const box = BOX[size];
 
-    const hoverBg =
-      variant === 'danger'
-        ? 'color-mix(in srgb, var(--status-error) 16%, transparent)'
-        : 'var(--bg-hover)';
     const baseColor =
-      variant === 'danger' ? 'var(--status-error)' : 'var(--text-secondary)';
+      variant === 'danger' ? 'var(--status-error)' : 'var(--text-muted)';
+    const hoverColor =
+      variant === 'danger' ? 'var(--status-error)' : 'var(--text-primary)';
+    const hoverBorder =
+      variant === 'danger' ? 'var(--status-error)' : 'var(--border-strong)';
+    const baseBorder = variant === 'subtle' ? 'var(--border-strong)' : 'transparent';
 
     return (
       <button
@@ -42,10 +43,10 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
           justifyContent: 'center',
           userSelect: 'none',
           WebkitUserSelect: 'none',
-          background: hover && !disabled ? hoverBg : variant === 'subtle' ? 'var(--bg-elevated)' : 'transparent',
-          border: variant === 'subtle' ? '1px solid var(--border)' : '1px solid transparent',
-          color: hover && !disabled ? (variant === 'danger' ? 'var(--status-error)' : 'var(--text-primary)') : baseColor,
-          borderRadius: 'var(--radius-md)',
+          background: hover && !disabled ? 'var(--bg-hover)' : variant === 'subtle' ? 'var(--bg-elevated)' : 'transparent',
+          border: `1px solid ${hover && !disabled ? hoverBorder : baseBorder}`,
+          color: hover && !disabled ? hoverColor : baseColor,
+          borderRadius: 'var(--radius-snug)',
           cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1,
           flexShrink: 0,

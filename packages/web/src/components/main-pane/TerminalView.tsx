@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTerminal } from '../../hooks/useTerminal';
 import { useAppStore } from '../../stores/appStore';
+import { useIsMobile } from '../../lib/useIsMobile';
 import { SessionHeaderBar } from './SessionHeaderBar';
 import { ProcessBanner } from './ProcessBanner';
 import { SessionDetailPanel } from './SessionDetailPanel';
@@ -23,7 +24,11 @@ export function TerminalView({ processId, process }: Props) {
   const attachKind =
     process?.type === 'session' ? 'session' : process?.type === 'terminal' ? 'terminal' : null;
   const containerRef = useTerminal(processId, !!terminalDisabled, { attachKind });
-  const { detailPanelOpen, setDetailPanelOpen } = useAppStore();
+  const { detailPanelOpen, setDetailPanelOpen, setMobileDrawerOpen } = useAppStore();
+  const isMobile = useIsMobile();
+  const projectName = useAppStore(
+    (s) => session ? s.projects.find((p) => p.id === session.projectId)?.name : undefined,
+  );
 
   const showBanner =
     process &&
@@ -46,6 +51,8 @@ export function TerminalView({ processId, process }: Props) {
         <SessionHeaderBar
           session={session}
           onToggleDetailPanel={() => setDetailPanelOpen(!detailPanelOpen)}
+          projectName={isMobile ? projectName : undefined}
+          onOpenDrawer={isMobile ? () => setMobileDrawerOpen(true) : undefined}
         />
       )}
 
@@ -57,7 +64,7 @@ export function TerminalView({ processId, process }: Props) {
         style={{
           flex: 1,
           display: 'flex',
-          flexDirection: 'column',
+          flexDirection: isMobile ? 'column' : 'row',
           overflow: 'hidden',
         }}
       >
@@ -66,12 +73,12 @@ export function TerminalView({ processId, process }: Props) {
           <div
             style={{
               flex: 1,
-              backgroundColor: '#1a1a1a',
+              backgroundColor: 'var(--bg-primary)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               color: 'var(--text-muted)',
-              fontSize: 14,
+              fontSize: 12.5,
             }}
           >
             Terminal unavailable — prior session not found
@@ -80,11 +87,12 @@ export function TerminalView({ processId, process }: Props) {
           <div
             style={{
               flex: showDetailPanel ? '1 1 60%' : '1',
-              backgroundColor: '#1a1a1a',
+              backgroundColor: 'var(--bg-primary)',
               overflow: 'hidden',
               minHeight: 0,
+              minWidth: 0,
               position: 'relative',
-              boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 0 -1px 0 rgba(0, 0, 0, 0.4)',
+              boxShadow: 'none',
             }}
           >
             <div
@@ -102,10 +110,12 @@ export function TerminalView({ processId, process }: Props) {
           <div
             style={{
               flex: '0 0 40%',
-              minHeight: 120,
-              maxHeight: '60%',
+              minHeight: isMobile ? 120 : 0,
+              maxHeight: isMobile ? '60%' : undefined,
+              minWidth: isMobile ? undefined : 280,
               overflow: 'hidden',
-              borderTop: '1px solid var(--border)',
+              borderTop: isMobile ? '1px solid var(--border)' : 'none',
+              borderLeft: isMobile ? 'none' : '1px solid var(--border)',
               backgroundColor: 'var(--bg-primary)',
             }}
           >

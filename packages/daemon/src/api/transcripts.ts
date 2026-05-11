@@ -13,9 +13,10 @@ import {
   getSessionById,
   updateSession,
   insertSessionEvent,
+  getClaudeSessionLoader,
 } from '../db/store.js';
-import type { PtyManager } from '../pty/manager.js';
-import type { ProcessConfig, SpawnConfig } from '../types.js';
+import type { AgentSessionManager } from '../agent/manager.js';
+import { listCodexThreads, parseCodexThread, findCodexSessionFile } from '../transcripts/codexParser.js';
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
@@ -27,20 +28,6 @@ interface TranscriptHeader {
 
 // Cache: jsonl path → { mtime, header }. Invalidated when mtime changes.
 const headerCache = new Map<string, { mtime: number; header: TranscriptHeader }>();
-
-function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig {
-  return {
-    autostart: false,
-    autorestart: false,
-    autorestartMax: 5,
-    autorestartDelayMs: 2000,
-    autorestartWindowSecs: 60,
-    autorespawn: true,
-    terminalAlerts: false,
-    fileWatchPatterns: [],
-    ...overrides,
-  };
-}
 
 // Read up to maxLines from a JSONL file. Cheap on small files; for our purposes
 // we only need the first few entries to extract metadata.
@@ -248,7 +235,7 @@ function encodeCwd(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
-export function createTranscriptsRouter(manager: PtyManager): Router {
+export function createTranscriptsRouter(agentManager: AgentSessionManager): Router {
   const router = Router();
 
   // GET /api/transcripts?q=&cwd=&limit=
@@ -343,7 +330,6 @@ export function createTranscriptsRouter(manager: PtyManager): Router {
   // POST /api/transcripts/:sessionId/resume
   router.post('/:sessionId/resume', async (req: Request, res: Response) => {
     const claudeSessionId = req.params.sessionId;
-    const { cols, rows } = req.body || {};
 
     // Locate the JSONL across all project dirs
     let jsonlPath: string | null = null;
@@ -366,7 +352,7 @@ export function createTranscriptsRouter(manager: PtyManager): Router {
     }
     const cwd = header.cwd.replace(/\/+$/, '');
 
-    // If a session row already exists for this claudeSessionId, just spawn it.
+    // If a session row already exists for this claudeSessionId, reuse it.
     const existingByClaudeId = getAllSessions().find(s => s.claudeSessionId === claudeSessionId);
     let sessionRecord = existingByClaudeId;
 
@@ -388,44 +374,173 @@ export function createTranscriptsRouter(manager: PtyManager): Router {
         .replace(/\s+/g, ' ')
         .trim();
 
+      // Reuse the loader the session originally owned, if recorded. Falls
+      // through to a fresh pick from the unused pool when the transcript
+      // predates loader_variant tracking.
+      const recordedVariant = getClaudeSessionLoader(claudeSessionId) ?? undefined;
       sessionRecord = createSession({
         projectId: project.id,
         name: promptPreview || 'Claude Code',
         command: 'claude',
         workingDirectory: cwd,
         type: 'session',
+        loaderVariant: recordedVariant,
       });
-      updateSession(sessionRecord.id, { claudeSessionId });
+      updateSession(sessionRecord.id, {
+        agentProvider: 'claude',
+        agentSessionId: claudeSessionId,
+        claudeSessionId,
+      });
       sessionRecord = getSessionById(sessionRecord.id) || sessionRecord;
     }
 
     try {
-      const existing = manager.get(sessionRecord.id);
-      if (existing) manager.remove(sessionRecord.id);
+      const refreshed = updateSession(sessionRecord.id, {
+        agentProvider: 'claude',
+        agentSessionId: claudeSessionId,
+        claudeSessionId,
+      }) ?? sessionRecord;
 
-      const spawnCfg: SpawnConfig = {
-        id: sessionRecord.id,
-        name: sessionRecord.name,
-        command: sessionRecord.command,
-        workingDir: sessionRecord.workingDirectory || cwd,
-        type: 'session',
-        projectId: sessionRecord.projectId,
-        config: defaultProcessConfig({
-          autorespawn: sessionRecord.autorespawn,
-        }),
-        cols: cols || 80,
-        rows: rows || 24,
-      };
-      const proc = manager.spawn(spawnCfg);
-      insertSessionEvent(sessionRecord.id, 'claude-resumed', { claudeSessionId, fromTranscriptExplorer: true });
+      const existing = agentManager.get(refreshed.id);
+      if (existing) agentManager.remove(refreshed.id);
+
+      agentManager.register({
+        id: refreshed.id,
+        name: refreshed.name,
+        projectId: refreshed.projectId,
+        workingDir: refreshed.workingDirectory || cwd,
+        provider: 'claude',
+        model: refreshed.model,
+        agentSessionId: refreshed.agentSessionId ?? claudeSessionId,
+        agentSessionIdHistory: refreshed.agentSessionIdHistory ?? [],
+        claudeSessionId: refreshed.claudeSessionId ?? claudeSessionId,
+        claudeSessionIdHistory: refreshed.claudeSessionIdHistory ?? [],
+      });
+      insertSessionEvent(refreshed.id, 'claude-resumed', { claudeSessionId, fromTranscriptExplorer: true });
       res.json({
         ok: true,
-        sessionId: sessionRecord.id,
-        projectId: sessionRecord.projectId,
-        pid: proc.pid,
+        sessionId: refreshed.id,
+        projectId: refreshed.projectId,
+        pid: null,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to spawn resume' });
+      res.status(500).json({ error: err.message || 'Failed to resume transcript' });
+    }
+  });
+
+  // GET /api/transcripts/codex?cwd=&limit= — list codex threads on disk.
+  // Mirrors the Claude transcripts list shape so the AddAgentModal can render
+  // them through the same PastAgentsList component.
+  router.get('/codex', (req: Request, res: Response) => {
+    const cwd = (req.query.cwd as string | undefined)?.trim() || undefined;
+    const limit = Math.min(500, Math.max(1, parseInt((req.query.limit as string) || '100', 10)));
+    try {
+      const headers = listCodexThreads({ cwd, limit });
+      const projects = getAllProjects();
+      const projectByPath = new Map(projects.map((p) => [p.path.replace(/\/+$/, ''), p]));
+      const sessions = headers.map((h) => {
+        const normalizedCwd = (h.cwd ?? '').replace(/\/+$/, '');
+        // Pull the first user prompt cheaply by re-reading just enough lines.
+        const msgs = parseCodexThread(h.threadId);
+        const firstUser = msgs.find((m) => m.kind === 'user') as { text?: string } | undefined;
+        return {
+          sessionId: h.threadId,
+          cwd: normalizedCwd,
+          projectName: projectByPath.get(normalizedCwd)?.name ?? path.basename(normalizedCwd || '/'),
+          gitBranch: null,
+          firstPrompt: firstUser?.text ?? '',
+          mtime: h.startedAt ?? 0,
+          pinnedSessionId: null,
+        };
+      });
+      res.json({ sessions, projects: [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list codex threads' });
+    }
+  });
+
+  // POST /api/transcripts/codex/:threadId/resume — create a session row bound
+  // to an existing codex thread and register it with the agent manager.
+  router.post('/codex/:threadId/resume', (req: Request, res: Response) => {
+    const threadId = req.params.threadId;
+    const file = findCodexSessionFile(threadId);
+    if (!file) {
+      return res.status(404).json({ error: `No codex thread found for ${threadId}` });
+    }
+    // The session_meta header carries cwd. parseHeader is Claude-specific, so
+    // use parseCodexThread for the messages and listCodexThreads for the
+    // header. Single read of either is fine for the modal trigger.
+    const headers = listCodexThreads();
+    const header = headers.find((h) => h.threadId === threadId);
+    if (!header || !header.cwd) {
+      return res.status(500).json({ error: 'Could not read codex thread metadata' });
+    }
+    const cwd = header.cwd.replace(/\/+$/, '');
+
+    const existingByThread = getAllSessions().find(
+      (s) => s.agentProvider === 'codex' && s.agentSessionId === threadId,
+    );
+    let sessionRecord = existingByThread;
+
+    if (!sessionRecord) {
+      let project = getProjectByPath(cwd) || getProjectByPath(cwd + '/');
+      if (!project) {
+        const name = path.basename(cwd) || cwd;
+        project = createProject({ name, path: cwd });
+      }
+      const msgs = parseCodexThread(threadId);
+      const firstUser = msgs.find((m) => m.kind === 'user') as { text?: string } | undefined;
+      const promptPreview = (firstUser?.text || 'Resumed Codex thread')
+        .slice(0, 60)
+        .replace(/\s+/g, ' ')
+        .trim();
+      sessionRecord = createSession({
+        projectId: project.id,
+        name: promptPreview || 'Codex',
+        command: 'codex',
+        workingDirectory: cwd,
+        type: 'session',
+        agentProvider: 'codex',
+      });
+      updateSession(sessionRecord.id, {
+        agentProvider: 'codex',
+        agentSessionId: threadId,
+        claudeSessionId: threadId,
+      });
+      sessionRecord = getSessionById(sessionRecord.id) || sessionRecord;
+    }
+
+    try {
+      const refreshed = updateSession(sessionRecord.id, {
+        agentProvider: 'codex',
+        agentSessionId: threadId,
+        claudeSessionId: threadId,
+      }) ?? sessionRecord;
+
+      const existing = agentManager.get(refreshed.id);
+      if (existing) agentManager.remove(refreshed.id);
+
+      agentManager.register({
+        id: refreshed.id,
+        name: refreshed.name,
+        projectId: refreshed.projectId,
+        workingDir: refreshed.workingDirectory || cwd,
+        provider: 'codex',
+        model: refreshed.model,
+        agentSessionId: refreshed.agentSessionId ?? threadId,
+        agentSessionIdHistory: refreshed.agentSessionIdHistory ?? [],
+        claudeSessionId: refreshed.claudeSessionId ?? threadId,
+        claudeSessionIdHistory: refreshed.claudeSessionIdHistory ?? [],
+      });
+      insertSessionEvent(refreshed.id, 'codex-resumed', { threadId, fromTranscriptExplorer: true });
+      res.json({
+        ok: true,
+        sessionId: refreshed.id,
+        projectId: refreshed.projectId,
+        pid: null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to resume codex thread' });
     }
   });
 

@@ -16,14 +16,16 @@ export function ProcessBanner({ process }: Props) {
 
   const session = process.type === 'session' ? (process as Session) : null;
 
+  // For sessions, the chat itself already shows turn-cancelled / turn-failed
+  // system messages — a banner on top would be redundant noise. The "ready
+  // for next turn" state is implied by the composer being interactive.
+  // We only render a banner for command/terminal processes.
+  if (session) return null;
+
   let message: string;
   let button: { label: string; onClick: () => void } | null = null;
 
-  if (isErrored && session) {
-    message = 'Prior session could not be found. Right-click this session in the sidebar to delete it.';
-  } else if (session) {
-    message = `${process.name} is stopped.`;
-  } else if (isStopped) {
+  if (isStopped) {
     message = `${process.name} is not running.`;
     button = {
       label: 'Start',
@@ -55,7 +57,7 @@ export function ProcessBanner({ process }: Props) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <StatusDot state={process.state} size={10} />
-        <span style={{ fontSize: 13.5, color: 'var(--text-primary)' }}>{message}</span>
+        <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{message}</span>
       </div>
       {button && (
         <Button variant="primary" size="sm" onClick={button.onClick}>

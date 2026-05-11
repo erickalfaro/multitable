@@ -2,41 +2,106 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ───────────────────────────────────────────────────────────
+   OBSIDIAN / ESSENCE v0.7 — canonical dark
+   ─────────────────────────────────────────────────────────── */
 :root {
-  --bg-primary: #1a1a1a;
-  --bg-sidebar: #141414;
-  --bg-statusbar: #1e1e1e;
-  --bg-elevated: #202020;
-  --bg-overlay: rgba(0, 0, 0, 0.55);
-  --text-primary: #e5e5e5;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
-  --border: #2e2e2e;
-  --border-strong: #3d3d3d;
-  --accent-blue: #60a5fa;
-  --accent-glow: 0 0 0 3px color-mix(in srgb, #60a5fa 22%, transparent);
-  --status-running: #22c55e;
-  --status-idle: #22c55e;
-  --status-warning: #f59e0b;
-  --status-error: #ef4444;
-  --status-stopped: #6b7280;
-  --bg-hover: #2a2a2a;
+  /* Surface — bg-0 → bg-3 mapped onto historical names */
+  --bg-primary: #08080b;     /* bg-0 — canvas */
+  --bg-sidebar: #0e0e12;     /* bg-1 — sidebar / panels */
+  --bg-statusbar: #0e0e12;   /* bg-1 */
+  --bg-elevated: #16161c;    /* bg-2 — modals, cards */
+  --bg-hover: #1f1f27;       /* bg-3 */
+  --bg-overlay: rgba(0, 0, 0, 0.7);
+
+  /* Text ramp — text-0 (faint) → text-3 (primary) */
+  --text-primary: #e6e6ed;   /* text-3 */
+  --text-secondary: #b8b8c4; /* text-2 */
+  --text-muted: #7a7a87;     /* text-1 */
+  --text-faint: #4a4a55;     /* text-0 — used for the dimmest hints */
+
+  /* Borders */
+  --border: #1a1a22;         /* border-0 */
+  --border-strong: #2a2a35;  /* border-1 */
+  --border-tab: #3d3d4a;     /* border-2 */
+
+  /* Single chromatic accent: AMBER. Historical name kept for ABI stability. */
+  --accent-blue: #ff8a00;    /* amber */
+  --accent-amber: #ff8a00;
+  --accent-amber-dim: #cc6e00;
+  --accent-glow: none;       /* no glows, ever */
+
+  /* Signal colors — appear ONLY on glyphs and exit codes */
+  --status-running: #2ecc71; /* live */
+  --status-idle: #7a7a87;    /* dim — text-1 */
+  --status-warning: #ff8a00; /* warnings unify into amber */
+  --status-error: #ff4d4f;   /* err */
+  --status-stopped: #4a4a55; /* text-0 */
+  --status-live: #2ecc71;
+  --status-err: #ff4d4f;
+
   --selection-bg: transparent;
-  --selection-border: #60a5fa;
+  --selection-border: #ff8a00;
 
-  /* Radii */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
-  --radius-pill: 999px;
+  /* Timeline node colors — one hue per agent action family. Dim, low-saturation
+     so the rail reads at a glance without screaming. */
+  --node-text:       #b8b8c4;
+  --node-thinking:   #8b7fb3;
+  --node-fs-read:    #5a9bb0;
+  --node-fs-write:   #c08a4f;
+  --node-shell:      #6fa86a;
+  --node-web:        #6788c4;
+  --node-subagent:   #b07a9f;
+  --node-mcp:        #9c8a5e;
+  --node-todo:       #7a7a87;
+  --node-permission: #ff8a00;
 
-  /* Shadows (deeper in dark) */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
-  --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.7), 0 4px 12px rgba(0, 0, 0, 0.5);
-  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* Radii — manifesto: structural seams sharp, primitives snug, containers soft, circles pill.
+     Tier semantics:
+       --radius-none : structural seams (panel borders, status bar, dividers)
+       --radius-snug : interactive primitives (buttons, inputs, kbd, chips, tooltips)
+       --radius-soft : content containers (cards, modals, tool cards)
+       --radius-pill : true circles only (status dots, loader dots, avatars)
+     Nothing > 4px except --radius-pill. */
+  --radius-none: 0;
+  --radius-snug: 2px;
+  --radius-soft: 4px;
+  --radius-pill: 9999px;
+
+  /* Legacy aliases — kept so existing references resolve during migration. */
+  --radius-sm: var(--radius-none);
+  --radius-md: var(--radius-snug);
+  --radius-lg: var(--radius-soft);
+  --radius-xl: var(--radius-soft);
+
+  /* Shadows — manifesto: none. Kept as variables so existing references resolve. */
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-xl: none;
+  --shadow-inset: none;
+
+  /* Single deliberate exception: the user-prompt card uses elevation so it
+     stands apart from the recessed assistant prose / tool calls. Dark mode
+     stacks an inset top highlight + a faint outer ring + a strong drop
+     shadow because plain rgba shadows barely register on a near-black canvas. */
+  --shadow-elevated-message:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 10px 24px rgba(0, 0, 0, 0.65),
+    0 2px 6px rgba(0, 0, 0, 0.45);
+
+  /* Second deliberate exception: the chat composer reads as a floating card
+     above the chat tray. Subtle two-stop drop shadow — the close-in stop
+     pins the edge, the wider stop separates it from the surface. */
+  --shadow-composer:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 10px 28px rgba(0, 0, 0, 0.45);
+
+  /* Soft container radius for the composer card — sits between --radius-soft
+     (4px, content cards) and --radius-pill. Manifesto exception scoped to a
+     single component; do not reuse for general containers. */
+  --radius-composer: 10px;
 
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -45,40 +110,77 @@
   --dur-med: 180ms;
   --dur-slow: 260ms;
 
-  /* Focus ring (theme-aware) */
-  --focus-ring: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--accent-blue);
+  /* Focus ring — 1px amber border, no halo */
+  --focus-ring: 0 0 0 1px var(--accent-amber);
 
   color-scheme: dark;
 }
 
+/* ───────────────────────────────────────────────────────────
+   OBSIDIAN — light fallback (warm cream)
+   ─────────────────────────────────────────────────────────── */
 [data-theme="light"] {
-  --bg-primary: #d9d2bf;
-  --bg-sidebar: #cfc7b2;
-  --bg-statusbar: #c5bca5;
-  --bg-elevated: #e4ddcb;
-  --bg-overlay: rgba(90, 80, 60, 0.45);
-  --text-primary: #3d3830;
-  --text-secondary: #6b6457;
-  --text-muted: #8f887a;
-  --border: #b3a993;
-  --border-strong: #9a8f77;
-  --accent-blue: #3f6aa8;
-  --accent-glow: 0 0 0 3px color-mix(in srgb, #3f6aa8 22%, transparent);
-  --status-running: #3e8450;
-  --status-idle: #3e8450;
-  --status-warning: #b57a2c;
-  --status-error: #a8463f;
-  --status-stopped: #8f887a;
-  --bg-hover: #c7beaa;
-  --selection-bg: transparent;
-  --selection-border: #3f6aa8;
+  --bg-primary: #f5f1e8;
+  --bg-sidebar: #ebe6d8;
+  --bg-statusbar: #ebe6d8;
+  --bg-elevated: #fbf8ef;
+  --bg-hover: #e0d9c5;
+  --bg-overlay: rgba(40, 30, 18, 0.45);
 
-  /* Softer shadows in light */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
-  --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  --text-primary: #1a1a14;
+  --text-secondary: #4a4538;
+  --text-muted: #7a7468;
+  --text-faint: #a8a397;
+
+  --border: #d8d2c0;
+  --border-strong: #bcb4a0;
+  --border-tab: #9c9482;
+
+  --accent-blue: #ff8a00;
+  --accent-amber: #ff8a00;
+  --accent-amber-dim: #b35e00;
+  --accent-glow: none;
+
+  --status-running: #1f9d55;
+  --status-idle: #7a7468;
+  --status-warning: #c46a00;
+  --status-error: #c92a2a;
+  --status-stopped: #a8a397;
+  --status-live: #1f9d55;
+  --status-err: #c92a2a;
+
+  --selection-bg: transparent;
+  --selection-border: #ff8a00;
+
+  /* Timeline node colors — light-theme counterparts. Saturated a touch more so
+     they read on the warm cream canvas. */
+  --node-text:       #4a4538;
+  --node-thinking:   #6e5fa0;
+  --node-fs-read:    #2f7388;
+  --node-fs-write:   #9e6a2c;
+  --node-shell:      #3f8c4a;
+  --node-web:        #3e62b0;
+  --node-subagent:   #8f5d80;
+  --node-mcp:        #7a663b;
+  --node-todo:       #7a7468;
+  --node-permission: #c46a00;
+
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-xl: none;
+  --shadow-inset: none;
+
+  /* Light mode: a clean drop shadow against the cream canvas does the work
+     on its own — no inset highlight or outer ring needed. */
+  --shadow-elevated-message:
+    0 6px 16px rgba(40, 30, 18, 0.18),
+    0 1px 3px rgba(40, 30, 18, 0.12);
+
+  /* Composer floating shadow — softer on the cream canvas. */
+  --shadow-composer:
+    0 1px 2px rgba(40, 30, 18, 0.10),
+    0 8px 22px rgba(40, 30, 18, 0.14);
 
   color-scheme: light;
 }
@@ -103,11 +205,21 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* App shell uses dynamic viewport height so the on-screen mobile keyboard
+   shrinks the visible area instead of overlaying the chat input. Falls back
+   to 100vh on browsers without dvh support. */
+.mt-app-shell {
+  height: 100vh;
+  height: 100dvh;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'Berkeley Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-feature-settings: 'tnum' 1, 'calt' 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -124,7 +236,7 @@ body {
 /* ---------- Custom scrollbars ---------- */
 .mt-scroll {
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 .mt-scroll::-webkit-scrollbar {
   width: 10px;
@@ -134,8 +246,8 @@ body {
   background: transparent;
 }
 .mt-scroll::-webkit-scrollbar-thumb {
-  background-color: var(--border);
-  border-radius: 5px;
+  background-color: var(--border-strong);
+  border-radius: 0;
   border: 2px solid transparent;
   background-clip: padding-box;
   transition: background-color var(--dur-fast) var(--ease-out);
@@ -147,8 +259,21 @@ body {
   background: transparent;
 }
 
-/* Apply themed scrollbars globally for any overflow area that opts in via class,
-   but also gently style the default scrollbars. */
+/* ---------- Chat streaming smoothness ----------
+ * Each turn block gets layout/paint containment so growth or markdown
+ * reflow inside it cannot trigger relayout of historical turns above. The
+ * chat scroller separately disables the browser's automatic scroll-anchor
+ * heuristic — we drive stickiness ourselves via ResizeObserver in
+ * ChatScroller.tsx so the behavior is consistent across browsers (Safari
+ * has no overflow-anchor) and never fights our own scroll adjustments.
+ */
+.mt-turn-block {
+  contain: layout paint;
+}
+.mt-chat-scroller {
+  overflow-anchor: none;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -157,8 +282,8 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background-color: color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: 5px;
+  background-color: var(--border-strong);
+  border-radius: 0;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -171,7 +296,7 @@ body {
 
 /* ---------- Selection ---------- */
 ::selection {
-  background-color: color-mix(in srgb, var(--accent-blue) 35%, transparent);
+  background-color: color-mix(in srgb, var(--accent-amber) 35%, transparent);
   color: inherit;
 }
 
@@ -186,7 +311,7 @@ select:focus-visible,
 [tabindex]:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-  border-radius: var(--radius-md);
+  border-radius: 0;
 }
 
 /* Remove default focus on xterm inner textarea — xterm handles caret itself */
@@ -211,13 +336,36 @@ select:focus-visible,
 }
 
 @keyframes mt-scale-in {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes mt-slide-up {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes mt-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes mt-blink {
+  50% { opacity: 0; }
+}
+
+.mt-spin {
+  animation: mt-spin 1s linear infinite;
+  transform-origin: center;
+}
+
+.mt-blink {
+  animation: mt-blink 1s steps(2) infinite;
+}
+
+/* ---------- Turn timeline rail ---------- */
+@keyframes mt-rail-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 0.25; }
 }
 
 /* ---------- Dashboard responsive padding ---------- */
@@ -240,4 +388,146 @@ select:focus-visible,
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------- Section header pattern (── LABEL  count ──) ---------- */
+.mt-section-rule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.mt-section-rule::before,
+.mt-section-rule::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border);
+}
+.mt-section-rule::before {
+  flex: 0 0 16px;
+}
+.mt-section-rule .mt-section-count {
+  color: var(--text-secondary);
+  letter-spacing: 0.05em;
+  margin-left: 6px;
+}
+
+/* ---------- Panel border-tab title ----------
+ * A title that sits IN the panel's top border. Use on a relatively-positioned
+ * panel container together with .mt-panel-tab on a child element.
+ */
+.mt-panel-tab {
+  position: absolute;
+  top: -7px;
+  left: 12px;
+  background: var(--bg-primary);
+  padding: 0 6px;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--text-muted);
+  font-weight: 500;
+  pointer-events: none;
+}
+.mt-panel-tab.mt-panel-tab-right {
+  left: auto;
+  right: 12px;
+  color: var(--text-faint);
+  letter-spacing: 0.14em;
+}
+.mt-panel-tab.mt-panel-tab-amber {
+  color: var(--accent-amber);
+}
+
+/* ---------- CodeMirror 6 composer ---------- */
+.mt-cm-composer {
+  width: 100%;
+}
+.mt-cm-composer .cm-editor {
+  width: 100%;
+  max-height: 100%;
+  background: transparent;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'Berkeley Mono', ui-monospace, monospace;
+}
+.mt-cm-composer .cm-scroller {
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: 50vh;
+  font-family: inherit;
+}
+.mt-cm-composer .cm-content {
+  min-height: 1.5em;
+  font-family: inherit;
+}
+/* Expanded variant — taller scroller to fit the modal's 60vh+ canvas. The
+   double-class selector wins specificity against .mt-cm-composer alone. */
+.mt-cm-composer.mt-cm-composer-expanded .cm-scroller {
+  max-height: 70vh;
+  min-height: 60vh;
+}
+
+/* ---------- CodeMirror autocomplete popup ---------- */
+.cm-tooltip {
+  z-index: 1000 !important;
+  background-color: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'Berkeley Mono', ui-monospace, monospace !important;
+}
+.cm-tooltip-autocomplete {
+  min-width: 280px;
+  max-width: 480px;
+}
+.cm-tooltip-autocomplete > ul {
+  max-height: 260px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.cm-tooltip-autocomplete > ul > li {
+  padding: 4px 10px;
+  color: var(--text-primary);
+}
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background-color: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+  border-left: 2px solid var(--accent-amber);
+  padding-left: 8px;
+}
+.cm-completionLabel {
+  font-family: inherit;
+  color: var(--text-primary);
+}
+.cm-completionDetail {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: normal;
+  margin-left: 8px;
+}
+.cm-completionMatchedText {
+  text-decoration: none;
+  color: var(--accent-amber);
+  font-weight: 700;
+}
+.cm-completionIcon {
+  opacity: 0.85;
+  margin-right: 4px;
+}
+
+/* ---------- Shiki code blocks ----------
+ * Shiki renders <pre class="shiki ..."><code>...</code></pre> with no padding
+ * by default, and an inline background-color from the chosen theme. The chat
+ * code block wraps this in a marginalia-style container; we add inner padding
+ * here so highlighted code clears the left marker without overriding shiki's
+ * own background.
+ */
+.mt-shiki pre {
+  padding: 10px 16px;
+  margin: 0;
 }

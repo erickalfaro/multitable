@@ -156,7 +156,7 @@ export function CommandPalette() {
     });
     result.push({
       id: 'create-session',
-      name: 'Add session...',
+      name: 'Add agent...',
       subtitle: focusedProjectId ? projectName(focusedProjectId) : '(select a project first)',
       category: 'Create',
       action: () => {
@@ -267,13 +267,13 @@ export function CommandPalette() {
         onClick={(e) => e.stopPropagation()}
         style={{
           backgroundColor: 'var(--bg-elevated)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-xl)',
+          border: '1px solid var(--border-strong)',
+          borderRadius: 'var(--radius-soft)',
           width: '100%',
           maxWidth: 620,
-          boxShadow: 'var(--shadow-xl)',
+          boxShadow: 'none',
           overflow: 'hidden',
-          animation: 'mt-scale-in var(--dur-med) var(--ease-out)',
+          animation: 'mt-fade-in var(--dur-med) var(--ease-out)',
         }}
       >
         <Command label="Command palette">
@@ -281,36 +281,54 @@ export function CommandPalette() {
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 10,
-              padding: '0 16px',
+              gap: 8,
+              padding: '0 14px',
               borderBottom: '1px solid var(--border)',
             }}
           >
-            <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            <span
+              aria-hidden
+              style={{
+                color: 'var(--accent-amber)',
+                fontFamily: 'inherit',
+                fontSize: 16,
+                fontWeight: 700,
+                lineHeight: 1,
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+              }}
+            >
+              :
+            </span>
+            <Search size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
             <Command.Input
               placeholder="Search commands..."
               autoFocus
               style={{
                 flex: 1,
-                padding: '14px 0',
-                fontSize: 15,
+                padding: '12px 0',
+                fontSize: 12.5,
+                fontFamily: 'inherit',
                 border: 'none',
                 outline: 'none',
                 backgroundColor: 'transparent',
                 color: 'var(--text-primary)',
+                caretColor: 'var(--accent-amber)',
               }}
             />
           </div>
           <Command.List
             className="mt-scroll"
-            style={{ maxHeight: 420, overflowY: 'auto', padding: 8 }}
+            style={{ maxHeight: 420, overflowY: 'auto', padding: 4 }}
           >
             <Command.Empty
               style={{
                 padding: 24,
                 color: 'var(--text-muted)',
                 textAlign: 'center',
-                fontSize: 13,
+                fontSize: 12,
+                textTransform: 'uppercase',
+                letterSpacing: '0.18em',
               }}
             >
               No results
@@ -330,10 +348,10 @@ export function CommandPalette() {
                       close();
                     }}
                     style={{
-                      padding: '8px 12px',
-                      borderRadius: 'var(--radius-md)',
+                      padding: '5px 10px',
+                      borderRadius: 'var(--radius-snug)',
                       cursor: 'pointer',
-                      fontSize: 14,
+                      fontSize: 12.5,
                       color: 'var(--text-primary)',
                       display: 'flex',
                       alignItems: 'center',
@@ -344,7 +362,7 @@ export function CommandPalette() {
                       {item.name}
                     </span>
                     {item.subtitle && (
-                      <span style={{ fontSize: 12, color: 'var(--text-muted)', flexShrink: 0 }}>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>
                         {item.subtitle}
                       </span>
                     )}
@@ -362,17 +380,23 @@ export function CommandPalette() {
           </Command.List>
         </Command>
         <style>{`
+          [cmdk-group] {
+            padding: 0 6px;
+          }
           [cmdk-group-heading] {
-            padding: 6px 12px 4px;
-            font-size: 10.5px;
-            font-weight: 700;
+            padding: 8px 4px 4px;
+            font-size: 9.5px;
+            font-weight: 500;
             color: var(--text-muted);
-            letter-spacing: 0.08em;
+            letter-spacing: 0.18em;
             text-transform: uppercase;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 4px;
           }
           [cmdk-item][data-selected="true"] {
-            background-color: color-mix(in srgb, var(--accent-blue) 14%, transparent);
-            box-shadow: inset 2px 0 0 var(--accent-blue);
+            background-color: var(--bg-hover);
+            box-shadow: inset 3px 0 0 var(--accent-amber);
+            color: var(--text-primary);
           }
         `}</style>
       </div>

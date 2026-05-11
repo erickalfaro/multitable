@@ -3,6 +3,8 @@ import { useAppStore } from '../../stores/appStore';
 import { TerminalView } from './TerminalView';
 import { DashboardView } from './DashboardView';
 import { ProjectOverview } from './ProjectOverview';
+import { SessionChat } from './chat/SessionChat';
+import type { Session } from '../../lib/types';
 
 export function MainPane() {
   const store = useAppStore();
@@ -28,6 +30,14 @@ export function MainPane() {
     store.sessions[selectedProcessId] ||
     store.commands[selectedProcessId] ||
     store.terminals[selectedProcessId];
+
+  if (process?.type === 'session') {
+    return (
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <SessionChat sessionId={selectedProcessId} session={process as Session} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>

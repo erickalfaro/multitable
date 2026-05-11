@@ -19,10 +19,12 @@ import {
   createCommand,
   createTerminal,
 } from '../db/store.js';
+import { getCurrentCommit, isGitRepo } from '../git/index.js';
+import type { GitWatcher } from '../git/watcher.js';
 import { loadProjectConfig, loadGlobalConfig } from '../config/loader.js';
-import { HookManager } from '../hooks/installer.js';
 import { removeAttachmentDir } from './attachments.js';
 import type { PtyManager } from '../pty/manager.js';
+import type { AgentSessionManager } from '../agent/manager.js';
 import type { ProcessConfig, SpawnConfig } from '../types.js';
 
 // Ubuntu's VS Code snap injects GTK_PATH / LOCPATH / LD_LIBRARY_PATH that
@@ -77,12 +79,88 @@ async function pickFolderDialog(): Promise<string | null> {
     return p ? p.replace(/\/+$/, '') : null;
   }
   if (platform === 'win32') {
-    const ps =
-      "Add-Type -AssemblyName System.Windows.Forms | Out-Null; " +
-      "$f = New-Object System.Windows.Forms.FolderBrowserDialog; " +
-      "$f.Description = 'Select Project Folder'; " +
-      "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }";
-    return runDialog('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+    // Modern Explorer-style picker via IFileOpenDialog (FOS_PICKFOLDERS).
+    // The legacy WinForms FolderBrowserDialog is kept as a catch-branch
+    // fallback for ancient Windows boxes (PS < 5.1, .NET < 4.5).
+    //
+    // We base64-encode the script and pass it via `-EncodedCommand` to
+    // sidestep the triple-nested quoting problem (Node string -> PowerShell
+    // -> C# heredoc inside Add-Type). PowerShell expects UTF-16LE for
+    // -EncodedCommand.
+    const ps = `
+try {
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class MtFolderPicker {
+  [ComImport, Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+  public class FileOpenDialogRCW { }
+
+  [ComImport, Guid("D57C7288-D4AD-4768-BE02-9D969532D960"),
+   InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IFileOpenDialog {
+    [PreserveSig] int Show([In] IntPtr parent);
+    void SetFileTypes(); void SetFileTypeIndex(); void GetFileTypeIndex();
+    void Advise(); void Unadvise();
+    void SetOptions(uint fos);
+    void GetOptions(out uint fos);
+    void SetDefaultFolder(); void SetFolder(); void GetFolder();
+    void GetCurrentSelection();
+    void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+    void GetFileName(); void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+    void SetOkButtonLabel(); void SetFileNameLabel();
+    void GetResult(out IShellItem ppsi);
+    void AddPlace(); void SetDefaultExtension();
+    void Close(); void SetClientGuid(); void ClearClientData();
+    void SetFilter();
+    void GetResults(); void GetSelectedItems();
+  }
+
+  [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"),
+   InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IShellItem {
+    void BindToHandler();
+    void GetParent();
+    void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
+    void GetAttributes();
+    void Compare();
+  }
+
+  public static string Pick(string title) {
+    var dlg = (IFileOpenDialog)(new FileOpenDialogRCW());
+    // FOS_PICKFOLDERS = 0x20, FOS_FORCEFILESYSTEM = 0x40
+    dlg.SetOptions(0x20 | 0x40);
+    if (title != null) dlg.SetTitle(title);
+    int hr = dlg.Show(IntPtr.Zero);
+    if (hr != 0) return null; // user cancelled or error
+    IShellItem item;
+    dlg.GetResult(out item);
+    string path;
+    // SIGDN_FILESYSPATH = 0x80058000
+    item.GetDisplayName(0x80058000u, out path);
+    return path;
+  }
+}
+"@
+  $p = [MtFolderPicker]::Pick("Select Project Folder")
+  if ($p) { Write-Output $p }
+} catch {
+  # Fallback for very old PowerShell / .NET versions.
+  Add-Type -AssemblyName System.Windows.Forms | Out-Null
+  $f = New-Object System.Windows.Forms.FolderBrowserDialog
+  $f.Description = 'Select Project Folder'
+  if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }
+}
+`;
+    const encoded = Buffer.from(ps, 'utf16le').toString('base64');
+    return runDialog('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-STA',
+      '-EncodedCommand',
+      encoded,
+    ]);
   }
   // linux / other unix
   try {
@@ -121,7 +199,11 @@ function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig
   };
 }
 
-export function createProjectsRouter(manager: PtyManager): Router {
+export function createProjectsRouter(
+  manager: PtyManager,
+  gitWatcher: GitWatcher,
+  agentManager: AgentSessionManager,
+): Router {
   const router = Router();
 
   // GET /api/projects
@@ -170,18 +252,12 @@ export function createProjectsRouter(manager: PtyManager): Router {
       return res.status(500).json({ error: 'Failed to create project' });
     }
 
-    // Install Claude Code hooks before responding, so the first session
-    // the user spawns in this project sees the permission UI, cost
-    // tracking, labels, etc. Otherwise hooks would only land on the
-    // next daemon restart. Best-effort: a hook-install failure must
-    // not block project creation.
-    try {
-      const config = loadGlobalConfig();
-      const hookManager = new HookManager();
-      await hookManager.installForProject(project.path, config.port);
-    } catch (err) {
-      console.warn(`Failed to install hooks for new project ${project.path}:`, err);
-    }
+    // Legacy webhook hooks are retired. The SDK's in-process hook callbacks
+    // cover everything we used to install into .claude/settings.json, so
+    // creating a project no longer touches that file.
+
+    // Start watching the working tree for live git status updates.
+    gitWatcher.watch(project.id, project.path);
 
     res.status(201).json(project);
   });
@@ -206,6 +282,7 @@ export function createProjectsRouter(manager: PtyManager): Router {
     const terminals = getTerminalsByProject(req.params.id);
     for (const child of [...sessions, ...commands, ...terminals]) {
       try { manager.remove(child.id); } catch { /* best effort */ }
+      try { agentManager.remove(child.id); } catch { /* best effort */ }
     }
 
     // Clean up attachments dirs for the children. Only sessions/terminals can
@@ -214,12 +291,8 @@ export function createProjectsRouter(manager: PtyManager): Router {
       removeAttachmentDir(child.id);
     }
 
-    // Uninstall claude hooks from the project's .claude/settings.json.
-    try {
-      const config = loadGlobalConfig();
-      const hookManager = new HookManager();
-      await hookManager.removeForProject(project.path, config.port);
-    } catch { /* best effort — file may not exist or already cleaned */ }
+    // Stop git status watcher before the row is removed.
+    gitWatcher.unwatch(req.params.id);
 
     // Cascades to sessions/commands/terminals/session_events/cost_records.
     deleteProject(req.params.id);
@@ -250,8 +323,8 @@ export function createProjectsRouter(manager: PtyManager): Router {
     const sessions = getSessionsByProject(req.params.id);
     // Enrich with running state
     const enriched = sessions.map((s) => {
-      const proc = manager.get(s.id);
-      return { ...s, state: proc?.state ?? 'stopped', pid: proc?.pid ?? null };
+      const agent = agentManager.get(s.id);
+      return { ...s, state: agent?.state ?? 'stopped', pid: null };
     });
     res.json(enriched);
   });
@@ -281,16 +354,40 @@ export function createProjectsRouter(manager: PtyManager): Router {
   });
 
   // POST /api/projects/:id/sessions — create a session under a project
-  router.post('/:id/sessions', (req: Request, res: Response) => {
+  router.post('/:id/sessions', async (req: Request, res: Response) => {
     const project = getProjectById(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const { name, command, workingDirectory, autostart, autorestart, autorespawn, terminalAlerts, fileWatchPatterns } = req.body || {};
+    const {
+      name,
+      command,
+      workingDirectory,
+      autostart,
+      autorestart,
+      autorespawn,
+      terminalAlerts,
+      fileWatchPatterns,
+      agentProvider,
+      model,
+    } = req.body || {};
     if (!name || !command) {
       return res.status(400).json({ error: 'name and command are required' });
     }
 
+    // Capture HEAD now so the per-agent diff scope can show only what this
+    // agent touched. Failures are non-fatal — sessions still work without it.
+    let gitBaselineCommit: string | null = null;
+    if (isGitRepo(project.path)) {
+      try {
+        gitBaselineCommit = await getCurrentCommit(project.path);
+      } catch {}
+    }
+
     try {
+      const provider: 'claude' | 'codex' | undefined =
+        agentProvider === 'claude' || agentProvider === 'codex' ? agentProvider : undefined;
+      const modelId =
+        typeof model === 'string' && model.trim().length > 0 ? model.trim() : null;
       const session = createSession({
         projectId: req.params.id,
         name,
@@ -302,8 +399,43 @@ export function createProjectsRouter(manager: PtyManager): Router {
         autorespawn,
         terminalAlerts,
         fileWatchPatterns,
+        gitBaselineCommit,
+        agentProvider: provider,
+        model: modelId,
       });
-      res.status(201).json(session);
+      // Register in the agent manager so the next session:send doesn't race
+      // the DB write, and so capabilities are available for the response.
+      agentManager.register({
+        id: session.id,
+        projectId: session.projectId,
+        name: session.name,
+        workingDir: session.workingDirectory || '',
+        provider: session.agentProvider,
+        model: session.model,
+        mode: session.mode,
+        agentSessionId: session.agentSessionId ?? null,
+        agentSessionIdHistory: session.agentSessionIdHistory ?? [],
+        claudeSessionId: session.claudeSessionId ?? null,
+        claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
+      });
+      // Mint the provider-side session id eagerly so the transcript file
+      // exists and resume works the moment the user clicks Start. Errors are
+      // logged inside; the new id arrives at the UI via the `session-updated`
+      // WS event when it lands.
+      void agentManager.provisionSession(session.id);
+      // Enrich the response so the web store has `capabilities` immediately —
+      // the ModeBadge dropdown self-hides when modes.length <= 1, and would
+      // stay hidden on a freshly created session if we returned the bare DB
+      // row. Mirrors the GET /api/sessions/:id shape.
+      const agent = agentManager.get(session.id);
+      const capabilities = agentManager.getCapabilities(session.id);
+      res.status(201).json({
+        ...session,
+        state: agent?.state ?? 'stopped',
+        pid: null,
+        mode: agent?.mode ?? session.mode ?? 'default',
+        capabilities,
+      });
     } catch (err) {
       res.status(500).json({ error: 'Failed to create session' });
     }
@@ -441,6 +573,59 @@ export function createProjectsRouter(manager: PtyManager): Router {
     child.unref();
 
     res.json({ ok: true });
+  });
+
+  // GET /api/projects/:id/slash-commands — discover Claude Code custom slash
+  // commands from `.claude/commands/*.md` (project) and `~/.claude/commands/*.md`
+  // (user-global). Markdown frontmatter `description:` is surfaced in the
+  // composer's autocomplete; the file's body is the prompt template the SDK
+  // will run when the command is invoked.
+  router.get('/:id/slash-commands', (req: Request, res: Response) => {
+    const project = getProjectById(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const dirs: Array<{ dir: string; scope: 'project' | 'user' }> = [
+      { dir: path.join(project.path, '.claude', 'commands'), scope: 'project' },
+    ];
+    if (home) dirs.push({ dir: path.join(home, '.claude', 'commands'), scope: 'user' });
+
+    interface SlashCmd { name: string; scope: 'project' | 'user'; description: string }
+    const out: SlashCmd[] = [];
+    const seen = new Set<string>();
+
+    for (const { dir, scope } of dirs) {
+      let entries: string[] = [];
+      try {
+        entries = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+      } catch {
+        continue;
+      }
+      for (const file of entries) {
+        const name = '/' + file.replace(/\.md$/, '');
+        if (seen.has(name)) continue;  // project shadows user
+        seen.add(name);
+        let description = '';
+        try {
+          const content = fs.readFileSync(path.join(dir, file), 'utf8');
+          // Look for `description:` in the YAML frontmatter (between leading ---).
+          const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+          if (fmMatch) {
+            const dm = fmMatch[1].match(/^description:\s*(.+)$/m);
+            if (dm) description = dm[1].trim().replace(/^["']|["']$/g, '');
+          }
+          // Fallback: first non-frontmatter, non-empty line.
+          if (!description) {
+            const body = fmMatch ? content.slice(fmMatch[0].length) : content;
+            description = (body.split('\n').find((l) => l.trim()) ?? '').trim().slice(0, 80);
+          }
+        } catch {}
+        out.push({ name, scope, description });
+      }
+    }
+
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ commands: out });
   });
 
   // GET /api/projects/:id/diff

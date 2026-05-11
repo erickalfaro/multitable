@@ -24,6 +24,7 @@ const DEFAULT_CONFIG: GlobalConfig = {
   port: 3000,
   host: '127.0.0.1',
   projects: [],
+  integrations: {},
 };
 
 export function loadGlobalConfig(): GlobalConfig {

@@ -3,18 +3,13 @@ import React, { forwardRef } from 'react';
 interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   interactive?: boolean;
   padding?: number | string;
+  /** Retained for ABI compatibility; all variants render with --radius-soft. */
   radius?: 'md' | 'lg' | 'xl';
   elevated?: boolean;
 }
 
-const RADIUS_MAP = {
-  md: 'var(--radius-md)',
-  lg: 'var(--radius-lg)',
-  xl: 'var(--radius-xl)',
-} as const;
-
 export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
-  { interactive, padding = 16, radius = 'lg', elevated = true, style, onMouseEnter, onMouseLeave, ...rest },
+  { interactive, padding = 14, radius: _radius, elevated = true, style, onMouseEnter, onMouseLeave, ...rest },
   ref,
 ) {
   const [hover, setHover] = React.useState(false);
@@ -25,12 +20,10 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
       onMouseLeave={(e) => { setHover(false); onMouseLeave?.(e); }}
       style={{
         backgroundColor: elevated ? 'var(--bg-elevated)' : 'var(--bg-sidebar)',
-        border: `1px solid ${interactive && hover ? 'var(--accent-blue)' : 'var(--border)'}`,
-        borderRadius: RADIUS_MAP[radius],
+        border: `1px solid ${interactive && hover ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
+        borderRadius: 'var(--radius-soft)',
         padding,
-        boxShadow: interactive && hover ? 'var(--shadow-md)' : 'var(--shadow-sm)',
-        transition:
-          'border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-med) var(--ease-out), transform var(--dur-med) var(--ease-out)',
+        transition: 'border-color var(--dur-fast) var(--ease-out)',
         cursor: interactive ? 'pointer' : 'default',
         userSelect: interactive ? 'none' : undefined,
         WebkitUserSelect: interactive ? 'none' : undefined,

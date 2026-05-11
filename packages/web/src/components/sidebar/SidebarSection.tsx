@@ -4,78 +4,64 @@ import { IconButton } from '../ui';
 
 interface Props {
   title: string;
-  running: number;
-  total: number;
   shortcut?: string;
   onAdd?: () => void;
   children: React.ReactNode;
 }
 
-export function SidebarSection({ title, running, total, shortcut, onAdd, children }: Props) {
+export function SidebarSection({ title, shortcut, onAdd, children }: Props) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div>
+    <div style={{ marginTop: 20 }}>
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          padding: '8px 12px 4px',
+          padding: '4px 10px 4px 12px',
           cursor: 'pointer',
-          marginTop: 12,
           userSelect: 'none',
           WebkitUserSelect: 'none',
-          transition: 'background-color var(--dur-fast) var(--ease-out)',
+          gap: 6,
         }}
         onClick={() => setCollapsed(!collapsed)}
       >
         <ChevronRight
-          size={12}
+          size={11}
           style={{
-            color: 'var(--text-muted)',
+            color: 'var(--text-faint)',
+            flexShrink: 0,
             transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
             transition: 'transform var(--dur-fast) var(--ease-out)',
           }}
         />
         <span
           style={{
-            fontSize: 10.5,
-            fontWeight: 700,
-            color: 'var(--text-muted)',
-            letterSpacing: '0.08em',
-            marginLeft: 6,
+            fontSize: 9.5,
+            fontWeight: 500,
+            color: 'var(--text-faint)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.18em',
+            marginRight: 'auto',
           }}
         >
           {title}
         </span>
-        <div
-          style={{
-            flex: 1,
-            height: 1,
-            backgroundColor: 'var(--border)',
-            margin: '0 8px',
-          }}
-        />
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
-          {running}/{total}
-        </span>
         {onAdd && (
           <IconButton
             size="sm"
+            variant="subtle"
             onClick={(e) => {
               e.stopPropagation();
               onAdd();
             }}
             label={`Add ${title.toLowerCase()}`}
-            style={{
-              marginLeft: 4,
-            }}
           >
-            <Plus size={12} />
+            <Plus size={11} />
           </IconButton>
         )}
         {shortcut && (
-          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-faint)', letterSpacing: '0.04em' }}>
             {shortcut}
           </span>
         )}

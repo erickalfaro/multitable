@@ -41,8 +41,8 @@ export function Modal({
         inset: 0,
         zIndex: 1200,
         backgroundColor: 'var(--bg-overlay)',
-        backdropFilter: 'blur(8px) saturate(1.1)',
-        WebkitBackdropFilter: 'blur(8px) saturate(1.1)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -59,13 +59,13 @@ export function Modal({
           maxWidth: '100%',
           maxHeight: 'calc(100vh - 32px)',
           backgroundColor: 'var(--bg-elevated)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-xl)',
-          boxShadow: 'var(--shadow-xl)',
+          border: '1px solid var(--border-strong)',
+          borderRadius: 'var(--radius-soft)',
+          boxShadow: 'none',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          animation: 'mt-scale-in var(--dur-med) var(--ease-out)',
+          animation: 'mt-fade-in var(--dur-med) var(--ease-out)',
         }}
       >
         {title !== undefined && (
@@ -73,14 +73,23 @@ export function Modal({
             style={{
               display: 'flex',
               alignItems: 'center',
-              padding: '16px 20px',
+              padding: '12px 16px',
               borderBottom: '1px solid var(--border)',
               gap: 12,
               userSelect: 'none',
               WebkitUserSelect: 'none',
             }}
           >
-            <div style={{ flex: 1, fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
+            <div
+              style={{
+                flex: 1,
+                fontSize: 11,
+                fontWeight: 500,
+                color: 'var(--text-secondary)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.18em',
+              }}
+            >
               {title}
             </div>
             <IconButton size="sm" onClick={onClose} label="Close">
@@ -91,7 +100,7 @@ export function Modal({
         <div
           className="mt-scroll"
           style={{
-            padding: 20,
+            padding: 16,
             overflowY: 'auto',
             flex: 1,
           }}
@@ -104,9 +113,9 @@ export function Modal({
               display: 'flex',
               justifyContent: 'flex-end',
               gap: 8,
-              padding: '12px 20px',
+              padding: '10px 16px',
               borderTop: '1px solid var(--border)',
-              backgroundColor: 'color-mix(in srgb, var(--bg-sidebar) 60%, transparent)',
+              backgroundColor: 'var(--bg-sidebar)',
             }}
           >
             {footer}

@@ -2,7 +2,6 @@ import React from 'react';
 import { LayoutGrid, Plus } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import { ProjectSidebarItem } from './ProjectSidebarItem';
-import { PastSessions } from './PastSessions';
 import { LogoArt } from './LogoArt';
 import { Button } from '../ui';
 
@@ -39,7 +38,6 @@ export function Sidebar() {
     >
       <div
         style={{
-          borderBottom: '1px solid var(--border)',
           flexShrink: 0,
         }}
       >
@@ -48,7 +46,7 @@ export function Sidebar() {
           aria-label="MultiTable"
           style={{
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-start',
             gap: 12,
             padding: '14px 14px 8px',
             userSelect: 'none',
@@ -56,28 +54,28 @@ export function Sidebar() {
           }}
         >
           <LogoArt />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 10 }}>
             <span
               style={{
-                fontSize: 15,
+                fontSize: 18,
                 fontWeight: 700,
-                color: 'var(--text-primary)',
-                letterSpacing: -0.2,
+                color: 'white',
+                letterSpacing: '-0.02em',
                 lineHeight: 1,
               }}
             >
-              MultiTable
+              mt
             </span>
             <span
               style={{
-                fontSize: 10,
+                fontSize: 9.5,
                 color: 'var(--text-muted)',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                letterSpacing: 0.5,
+                textTransform: 'uppercase',
+                letterSpacing: '0.18em',
                 lineHeight: 1,
               }}
             >
-              v0.1
+              multitable v0.1
             </span>
           </div>
         </div>
@@ -96,7 +94,7 @@ export function Sidebar() {
               color: onDashboard ? 'var(--text-primary)' : 'var(--text-secondary)',
             }}
           >
-            Dashboard
+            Home
           </Button>
         </div>
         {/* Add Project button */}
@@ -127,10 +125,6 @@ export function Sidebar() {
           <ProjectSidebarItem key={project.id} project={project} />
         ))
       )}
-
-      <div style={{ marginTop: 'auto' }}>
-        <PastSessions />
-      </div>
     </div>
   );
 }

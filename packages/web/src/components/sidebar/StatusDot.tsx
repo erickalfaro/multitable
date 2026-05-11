@@ -7,70 +7,49 @@ interface Props {
   size?: number;
 }
 
-function sheen(color: string): string {
-  return `radial-gradient(circle at 30% 30%, color-mix(in srgb, white 55%, transparent) 0%, ${color} 65%)`;
+interface GlyphSpec {
+  glyph: string;
+  color: string;
+}
+
+function pick(state: ProcessState, isIdle: boolean | undefined): GlyphSpec {
+  if (state === 'running' && isIdle) {
+    return { glyph: '○', color: 'var(--status-idle)' };
+  }
+  if (state === 'running') {
+    return { glyph: '●', color: 'var(--status-running)' };
+  }
+  if (state === 'errored') {
+    return { glyph: '⊘', color: 'var(--status-error)' };
+  }
+  if (state === 'stopped') {
+    return { glyph: '⊗', color: 'var(--status-stopped)' };
+  }
+  // idle (transitional / starting)
+  return { glyph: '◐', color: 'var(--status-warning)' };
 }
 
 export function StatusDot({ state, isIdle, size = 10 }: Props) {
-  const base: React.CSSProperties = {
-    width: size,
-    height: size,
-    borderRadius: '50%',
-    flexShrink: 0,
-    boxShadow: '0 0 0 1px color-mix(in srgb, var(--text-primary) 10%, transparent)',
-  };
-
-  if (state === 'running' && isIdle) {
-    return (
-      <div
-        style={{
-          ...base,
-          border: '2px solid var(--status-running)',
-          backgroundColor: 'transparent',
-          boxShadow: 'none',
-        }}
-      />
-    );
-  }
-  if (state === 'running') {
-    return (
-      <div
-        style={{
-          ...base,
-          background: sheen('var(--status-running)'),
-        }}
-      />
-    );
-  }
-  if (state === 'errored') {
-    return (
-      <div
-        style={{
-          ...base,
-          background: sheen('var(--status-error)'),
-        }}
-      />
-    );
-  }
-  if (state === 'stopped') {
-    return (
-      <div
-        style={{
-          ...base,
-          background: sheen('var(--status-stopped)'),
-        }}
-      />
-    );
-  }
-  // idle (transitional)
+  const { glyph, color } = pick(state, isIdle);
+  // Bump glyph rendering size relative to the legacy circle size so the
+  // character feels in line with surrounding text.
+  const fontSize = Math.max(11, Math.round(size * 1.3));
   return (
-    <div
+    <span
       style={{
-        ...base,
-        border: '2px solid var(--status-warning)',
-        backgroundColor: 'transparent',
-        boxShadow: 'none',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: size,
+        height: size,
+        flexShrink: 0,
+        fontFamily: 'inherit',
+        fontSize,
+        lineHeight: 1,
+        color,
       }}
-    />
+    >
+      {glyph}
+    </span>
   );
 }

@@ -1,0 +1,787 @@
+import { EventEmitter } from 'node:events';
+import type { AgentSession, SendTurnInput, AlertSeverity, SessionMode } from './types.js';
+import type { ProcessState } from '../types.js';
+import { parseCodexThread, listCodexThreads } from '../transcripts/codexParser.js';
+import type { PermissionManager } from '../hooks/permissionManager.js';
+import type { ElicitationManager } from '../hooks/elicitationManager.js';
+import { createAlert } from './alerts.js';
+import { updateSession, insertCostRecord, getSessionById } from '../db/store.js';
+import { detectOptions } from '../hooks/optionDetector.js';
+import { CodexAdapter } from './providers/codex.js';
+import { ClaudeAdapter } from './providers/claude.js';
+import { trackedTimeout, type TrackedTimer } from '../devLog.js';
+import type {
+  AdapterCallbacks,
+  ProviderAdapter,
+  ProviderCapabilities,
+} from './providers/types.js';
+
+// === AgentSessionManager: the middle layer ================================
+//
+// MultiTable's middle layer between the React/REST/WS app above and the
+// per-provider adapters below. Owns:
+//   - Session state machine (state, currentTurn, lastActivity)
+//   - In-memory s.messages cache + DB writes (sessions, cost_records)
+//   - WS event surface (every emit() here is rebroadcast by server.ts)
+//   - Watchdog (5-min no-progress per turn)
+//   - Cross-cutting side effects (auto-rename, option detection)
+//   - Capability advertisement (UI gating via session:capabilities)
+//
+// Adapters know nothing about WS, the store, REST, or the DB. They speak only
+// AdapterCallbacks upward and the SDK API downward. To add a new provider,
+// drop a new file under agent/providers/, implement ProviderAdapter, and
+// register it in the constructor.
+
+const AGENT_DEFAULT_NAMES = new Set([
+  'Claude Code',
+  'Codex',
+  'Gemini CLI',
+  'Amp',
+  'Aider',
+  'Goose',
+]);
+
+function titleFromFirstPrompt(prompt: string, maxLen = 60): string {
+  const firstLine = prompt.split('\n', 1)[0] ?? prompt;
+  const cleaned = firstLine.replace(/\s+/g, ' ').trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  return cleaned.slice(0, maxLen - 1).trimEnd() + '…';
+}
+
+type RegisterInput = Omit<
+  AgentSession,
+  | 'state'
+  | 'currentTurn'
+  | 'startedAt'
+  | 'provider'
+  | 'model'
+  | 'mode'
+  | 'agentSessionId'
+  | 'agentSessionIdHistory'
+  | 'claudeSessionId'
+  | 'claudeSessionIdHistory'
+  | 'totalCostUsd'
+  | 'tokensIn'
+  | 'tokensOut'
+  | 'cacheCreationTokens'
+  | 'cacheReadTokens'
+  | 'toolCount'
+  | 'currentTool'
+  | 'activeSubagents'
+  | 'lastActivity'
+  | 'userMessages'
+  | 'messages'
+  | 'streamingText'
+  | 'streamingBlockIndex'
+> &
+  Partial<
+    Pick<
+      AgentSession,
+      | 'provider'
+      | 'model'
+      | 'mode'
+      | 'agentSessionId'
+      | 'agentSessionIdHistory'
+      | 'claudeSessionId'
+      | 'claudeSessionIdHistory'
+    >
+  >;
+
+export class AgentSessionManager extends EventEmitter {
+  private sessions = new Map<string, AgentSession>();
+  private adapters: Record<string, ProviderAdapter>;
+  private permManager: PermissionManager;
+  private elicitManager: ElicitationManager;
+
+  constructor(permManager: PermissionManager, elicitManager: ElicitationManager) {
+    super();
+    this.permManager = permManager;
+    this.elicitManager = elicitManager;
+    this.adapters = {
+      claude: new ClaudeAdapter(permManager, elicitManager),
+      codex: new CodexAdapter(),
+    };
+  }
+
+  /** Register a session in memory. Pure bookkeeping. */
+  register(input: RegisterInput): AgentSession {
+    const existing = this.sessions.get(input.id);
+    if (existing) return existing;
+    const session: AgentSession = {
+      id: input.id,
+      projectId: input.projectId,
+      name: input.name,
+      workingDir: input.workingDir,
+      provider: input.provider ?? 'claude',
+      model: input.model ?? null,
+      mode: input.mode ?? 'default',
+      agentSessionId: input.agentSessionId ?? input.claudeSessionId ?? null,
+      agentSessionIdHistory: [
+        ...(input.agentSessionIdHistory ?? input.claudeSessionIdHistory ?? []),
+      ],
+      claudeSessionId: input.claudeSessionId ?? input.agentSessionId ?? null,
+      claudeSessionIdHistory: [
+        ...(input.claudeSessionIdHistory ?? input.agentSessionIdHistory ?? []),
+      ],
+      state: 'stopped',
+      startedAt: null,
+      currentTurn: null,
+      totalCostUsd: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      toolCount: 0,
+      currentTool: null,
+      activeSubagents: 0,
+      lastActivity: 0,
+      userMessages: [],
+      messages: [],
+      streamingText: '',
+      streamingBlockIndex: null,
+    };
+    this.sessions.set(session.id, session);
+    // Codex hydration from on-disk JSONL — codex CLI is the source of truth.
+    if (session.provider === 'codex') {
+      // Recovery path: codex sessions created during the brief window where
+      // the new app-server adapter wasn't persisting `agentSessionId` ended
+      // up with null thread ids in the DB. The conversation IS still on disk
+      // (codex app-server writes rollouts regardless), but we need a way to
+      // locate the right rollout file. If a single rollout matches the
+      // session's cwd + multitable's originator and isn't already claimed
+      // by another session row, adopt it now and persist for next boot.
+      if (!session.agentSessionId && session.workingDir) {
+        const adopted = this.tryAdoptOrphanedCodexRollout(session);
+        if (adopted) {
+          session.agentSessionId = adopted;
+          session.agentSessionIdHistory = [];
+          session.claudeSessionId = adopted;
+          session.claudeSessionIdHistory = [];
+          try {
+            updateSession(session.id, {
+              agentSessionId: adopted,
+              agentSessionIdHistory: [],
+              claudeSessionId: adopted,
+              claudeSessionIdHistory: [],
+            });
+          } catch (err) {
+            console.error('[agent] failed to persist adopted codex thread:', err);
+          }
+        }
+      }
+      if (session.agentSessionId) {
+        try {
+          const hydrated = parseCodexThread(session.agentSessionId);
+          if (hydrated.length > 0) session.messages = hydrated;
+        } catch (err) {
+          console.error('[agent] codex hydration failed for', session.id, err);
+        }
+      }
+    }
+    return session;
+  }
+
+  /**
+   * Find a rollout file for a codex session whose `agentSessionId` is null.
+   * Returns the threadId to adopt, or null if there's no unambiguous match.
+   * Conservative: only adopts when exactly ONE rollout matches the session's
+   * cwd + multitable's originator and isn't already claimed by another
+   * session row in this manager (claim = same threadId in agentSessionId).
+   */
+  private tryAdoptOrphanedCodexRollout(session: AgentSession): string | null {
+    try {
+      const candidates = listCodexThreads({ cwd: session.workingDir }).filter(
+        (h) => h.originator === 'multitable-daemon',
+      );
+      if (candidates.length === 0) return null;
+      const claimed = new Set<string>();
+      for (const other of this.sessions.values()) {
+        if (other.id === session.id) continue;
+        if (other.agentSessionId) claimed.add(other.agentSessionId);
+        for (const id of other.agentSessionIdHistory) claimed.add(id);
+      }
+      const unclaimed = candidates.filter((h) => !claimed.has(h.threadId));
+      // Single-match rule: if there's exactly one unclaimed rollout for this
+      // cwd, take it. If multiple, we can't disambiguate safely — skip.
+      if (unclaimed.length !== 1) return null;
+      console.info('[agent] adopting orphaned codex rollout', {
+        sessionId: session.id,
+        threadId: unclaimed[0].threadId,
+      });
+      return unclaimed[0].threadId;
+    } catch (err) {
+      console.error('[agent] orphan-rollout adoption failed:', err);
+      return null;
+    }
+  }
+
+  get(id: string): AgentSession | undefined {
+    return this.sessions.get(id);
+  }
+
+  getAll(): AgentSession[] {
+    return [...this.sessions.values()];
+  }
+
+  /**
+   * Get the capability bag for the adapter handling the given session.
+   * Used by the API/sessions response so the web UI knows what to render.
+   */
+  getCapabilities(sessionId: string): ProviderCapabilities | null {
+    const s = this.sessions.get(sessionId);
+    if (!s) return null;
+    return this.adapters[s.provider]?.capabilities ?? null;
+  }
+
+  /**
+   * Update the operating mode for a session. The change takes effect on the
+   * next turn (modes drive provider option assembly inside runTurn). Emits
+   * `mode-changed` so the UI can refresh the badge.
+   */
+  setMode(sessionId: string, mode: SessionMode): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    if (s.mode === mode) return;
+    const adapter = this.adapters[s.provider];
+    if (adapter && !adapter.capabilities.modes.includes(mode)) {
+      throw new Error(
+        `Provider ${s.provider} does not support mode '${mode}'. ` +
+          `Supported: ${adapter.capabilities.modes.join(', ')}`,
+      );
+    }
+    s.mode = mode;
+    // Some adapters cache provider state that's tied to mode (Codex caches a
+    // Thread with a fixed sandboxMode; Copilot will likely cache a Session
+    // with fixed system prompt). Reset the adapter cache so the NEXT turn
+    // picks up the new mode. ClaudeAdapter's reset is a no-op for this case
+    // since Claude assembles options per-turn — safe to call uniformly.
+    try {
+      adapter?.reset?.(s);
+    } catch (err) {
+      console.error('[agent] adapter.reset on mode change failed:', err);
+    }
+    try {
+      updateSession(sessionId, { mode });
+    } catch (err) {
+      console.error('[agent] failed to persist mode:', err);
+    }
+    this.emit('mode-changed', { sessionId, mode });
+  }
+
+  /**
+   * Mint a provider-side session id without running a turn. Called by the
+   * session-creation route right after register() so the on-disk transcript
+   * file exists and the chat is "live" the moment the user clicks Start.
+   *
+   * Fire-and-forget from the caller's perspective — errors are logged, never
+   * thrown. The new id arrives at the UI via the existing `session-updated`
+   * WS event when onSessionIdAssigned fires.
+   */
+  async provisionSession(sessionId: string): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    if (s.agentSessionId) return;
+    const adapter = this.adapters[s.provider];
+    if (!adapter?.provisionSession) return;
+
+    // Reuse the standard callback bag so onSessionIdAssigned takes the same
+    // DB-persist + WS-broadcast path as a real turn. Other callbacks should
+    // never fire during provisioning — wrap them in a Proxy that warns if an
+    // adapter accidentally pushes messages / usage / a turn-result here.
+    const baseCb = this.makeAdapterCallbacks(sessionId);
+    const allowed = new Set(['onSessionIdAssigned']);
+    const cb: AdapterCallbacks = new Proxy(baseCb, {
+      get: (target, prop, receiver) => {
+        const fn = Reflect.get(target, prop, receiver);
+        if (typeof fn !== 'function') return fn;
+        if (allowed.has(String(prop))) return fn;
+        return (...args: unknown[]) => {
+          console.warn(
+            `[agent] adapter.provisionSession called ${String(prop)}() — ignored`,
+            { sessionId, provider: s.provider },
+          );
+          // Defensive: do not invoke the real callback. The contract is that
+          // provisioning stays side-effect-free aside from id assignment.
+          void args;
+          return undefined as unknown;
+        };
+      },
+    });
+
+    const ctrl = new AbortController();
+    try {
+      await adapter.provisionSession(s, ctrl, cb);
+    } catch (err) {
+      console.error('[agent] provisionSession failed', {
+        sessionId,
+        provider: s.provider,
+        error: err instanceof Error ? err.stack ?? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Drive one user turn through the configured adapter. Serialized per session.
+   */
+  async sendTurn({ sessionId, text }: SendTurnInput): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s) throw new Error(`unknown session ${sessionId}`);
+    if (s.currentTurn) throw new Error('turn already in flight');
+
+    const adapter = this.adapters[s.provider];
+    if (!adapter) throw new Error(`no adapter registered for provider '${s.provider}'`);
+
+    const ctrl = new AbortController();
+    const turnStartedAt = Date.now();
+    const userMessageId = `turn-${turnStartedAt}-${Math.random().toString(36).slice(2, 8)}`;
+    s.currentTurn = {
+      abortController: ctrl,
+      startedAt: turnStartedAt,
+      promptPreview: text.slice(0, 80),
+      userMessageId,
+    };
+    s.state = 'running';
+    s.lastActivity = Date.now();
+    s.userMessages.push(text);
+    if (!s.startedAt) s.startedAt = new Date();
+
+    try {
+      updateSession(sessionId, { lastActiveAt: s.lastActivity });
+    } catch {
+      /* don't let a DB hiccup block the turn */
+    }
+
+    this.emit('state-changed', { sessionId, state: 'running' as ProcessState });
+
+    // Always surface the submitted prompt immediately. Adapters dedup their
+    // own SDK echoes against this optimistic id.
+    const userMsg: import('../transcripts/parser.js').Message = {
+      id: userMessageId,
+      ts: turnStartedAt,
+      kind: 'user',
+      text,
+    };
+    s.messages.push(userMsg);
+    this.emit('user-message', { sessionId, messages: [userMsg] });
+
+    // Watchdog: abort the turn if no SDK message arrives for this long. The
+    // legitimate quiet windows are (1) waiting on a permission prompt and
+    // (2) running a long tool. We re-arm whenever a permission is pending so
+    // the user can take their time without tripping the watchdog, and we
+    // budget this per quiet stretch otherwise. Logged via trackedTimeout so
+    // the DevLog panel surfaces every arm/re-arm.
+    const NO_PROGRESS_MS = 90_000;
+    let stuckTimer: TrackedTimer | null = null;
+    let abortedDueToStuck = false;
+    let sawAnyMessage = false;
+    const armStuckTimer = () => {
+      if (stuckTimer) stuckTimer.cancel();
+      stuckTimer = trackedTimeout(
+        () => {
+          if (
+            this.permManager.hasPending(sessionId) ||
+            this.elicitManager.hasPending(sessionId)
+          ) {
+            armStuckTimer();
+            return;
+          }
+          abortedDueToStuck = true;
+          try {
+            ctrl.abort();
+          } catch {
+            /* ignore */
+          }
+        },
+        {
+          label: 'turn watchdog',
+          ms: NO_PROGRESS_MS,
+          category: 'watchdog',
+          detail: `session ${sessionId.slice(0, 8)}`,
+          logFire: true,
+        },
+      );
+    };
+
+    // Wrap adapter callbacks to also bump activity / re-arm the stuck timer
+    // on every emit, so the watchdog tracks "real" SDK progress.
+    const baseCb = this.makeAdapterCallbacks(sessionId);
+    const cb: AdapterCallbacks = new Proxy(baseCb, {
+      get: (target, prop, receiver) => {
+        const fn = Reflect.get(target, prop, receiver);
+        if (typeof fn !== 'function') return fn;
+        return (...args: unknown[]) => {
+          sawAnyMessage = true;
+          armStuckTimer();
+          return (fn as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    });
+
+    armStuckTimer();
+    try {
+      await adapter.runTurn(s, text, ctrl, cb);
+      if (abortedDueToStuck) {
+        throw new Error(
+          sawAnyMessage
+            ? `${s.provider} went silent for ${NO_PROGRESS_MS / 1000}s mid-turn — aborted.`
+            : `No response from ${s.provider} in ${NO_PROGRESS_MS / 1000}s. ` +
+              `Check NODE_EXTRA_CA_CERTS, credentials, or network connection.`,
+        );
+      }
+    } catch (err: unknown) {
+      const baseMessage = err instanceof Error ? err.message : String(err);
+
+      // Distinguish three termination causes — they have very different UX:
+      //   1. User-initiated abort (clicked Stop) — NOT an error. Soft cancel.
+      //   2. Watchdog abort (no progress for NO_PROGRESS_MS) — IS an error.
+      //   3. SDK/network/auth/etc. — IS an error.
+      // The signal-aborted check distinguishes (1) from (3); abortedDueToStuck
+      // distinguishes (2). Watchdog ALSO aborts the controller, so check it
+      // first to avoid misclassifying as user-initiated.
+      const isWatchdog = abortedDueToStuck;
+      const isUserAbort = !isWatchdog && ctrl.signal.aborted;
+
+      // Adapter-specific recovery: only on real errors. A user cancel doesn't
+      // need a thread reset (codex thread is still resumable for the next turn).
+      if (!isUserAbort) adapter.reset?.(s);
+
+      if (isUserAbort) {
+        // Soft cancel — push a small system note so the chat shows what
+        // happened, transition back to stopped (NOT errored), and skip the
+        // error alert. The session:idle event with outcome='aborted' (fired
+        // in the finally block) is the canonical signal for the UI.
+        const cancelMsg: import('../transcripts/parser.js').Message = {
+          id: `turn-cancelled:${sessionId}:${turnStartedAt}`,
+          ts: Date.now(),
+          kind: 'system',
+          text: 'Turn cancelled.',
+        };
+        s.messages.push(cancelMsg);
+        this.emit('tool-event', { sessionId, messages: [cancelMsg] });
+        s.state = 'stopped';
+        this.emit('state-changed', { sessionId, state: 'stopped' as ProcessState });
+        // No alert — the user *initiated* the cancel; toasting them about it
+        // would be noise. The composer can react to session:idle if needed.
+      } else {
+        // Real error path — watchdog or SDK/network/auth/etc.
+        const message =
+          isWatchdog && !new RegExp(s.provider, 'i').test(baseMessage)
+            ? `No response from ${s.provider} in ${NO_PROGRESS_MS / 1000}s. ` +
+              `Check NODE_EXTRA_CA_CERTS, credentials, or network. (${baseMessage})`
+            : baseMessage;
+
+        console.error(`[agent] ${s.provider} turn failed`, {
+          sessionId,
+          agentSessionId: s.agentSessionId,
+          error: err instanceof Error ? err.stack ?? err.message : String(err),
+        });
+
+        const errorId =
+          s.provider === 'codex'
+            ? `codex:${s.agentSessionId ?? 'pending'}:turn-error:${turnStartedAt}`
+            : `turn-error:${sessionId}:${turnStartedAt}`;
+        const errorMsg: import('../transcripts/parser.js').Message = {
+          id: errorId,
+          ts: Date.now(),
+          kind: 'system',
+          text: `Turn failed: ${message}`,
+        };
+        s.messages.push(errorMsg);
+        this.emit('tool-event', { sessionId, messages: [errorMsg] });
+        s.state = 'errored';
+        this.emit('turn-error', { sessionId, error: message });
+        this.emit('state-changed', { sessionId, state: 'errored' as ProcessState });
+        this.emitAlert({
+          sessionId,
+          category: 'turn',
+          severity: 'error',
+          title: 'Turn failed',
+          body: message,
+        });
+      }
+    } finally {
+      // Cast: TS narrows `stuckTimer` to `null` here because all reassignments
+      // happen inside closures (armStuckTimer + the proxy handler). The actual
+      // runtime value is TrackedTimer | null.
+      (stuckTimer as TrackedTimer | null)?.cancel();
+      s.currentTurn = null;
+      // Belt-and-braces: clear any lingering streaming preview the adapter
+      // might have left around (success path normally clears it itself).
+      if (s.streamingText !== '' || s.streamingBlockIndex !== null) {
+        s.streamingText = '';
+        s.streamingBlockIndex = null;
+        this.emit('assistant-delta', { sessionId, text: '' });
+      }
+      this.emit('tool-delta', { sessionId, payload: null });
+      this.emit('reasoning-delta', { sessionId, text: '' });
+      if (s.state === 'running') {
+        s.state = 'stopped';
+        this.emit('state-changed', { sessionId, state: 'stopped' as ProcessState });
+      }
+      s.lastActivity = Date.now();
+      try {
+        updateSession(sessionId, { lastActiveAt: s.lastActivity });
+      } catch {
+        /* see note above */
+      }
+      this.emit('turn-complete', { sessionId });
+      // session:idle — the universal "agent loop is done, ready for the next
+      // user turn" signal. Distinct from turn-complete in that it ALSO fires
+      // after errors and aborts (turn-complete fires for every termination
+      // including errored, but consumers like the chat composer want a
+      // dedicated "you can type again" signal).
+      this.emit('idle', {
+        sessionId,
+        state: s.state,
+        // Inform the UI whether the loop ended cleanly, with an error, or via
+        // user abort, so it can render the right re-engage prompt.
+        outcome: abortedDueToStuck
+          ? 'watchdog'
+          : ctrl.signal.aborted
+            ? 'aborted'
+            : s.state === 'errored'
+              ? 'error'
+              : 'completed',
+      });
+      // Stop work fire-and-forget (option detection from JSONL) for Claude.
+      if (s.provider === 'claude' && s.claudeSessionId) {
+        void this.runStopWork(sessionId);
+      }
+    }
+  }
+
+  /** Build the AdapterCallbacks bag for a session id. */
+  private makeAdapterCallbacks(sessionId: string): AdapterCallbacks {
+    return {
+      emitAssistantMessage: (messages) =>
+        this.emit('assistant-message', { sessionId, messages }),
+      emitAssistantDelta: (text) => {
+        const s = this.sessions.get(sessionId);
+        if (!s) return;
+        s.streamingText = text;
+        s.streamingBlockIndex = null;
+        s.lastActivity = Date.now();
+        this.emit('assistant-delta', { sessionId, text });
+      },
+      emitToolEvent: (messages) => this.emit('tool-event', { sessionId, messages }),
+      emitUserMessage: (messages) => this.emit('user-message', { sessionId, messages }),
+      pushMessages: (messages) => {
+        const s = this.sessions.get(sessionId);
+        if (s) s.messages.push(...messages);
+      },
+      onSessionIdAssigned: (newId, history) => {
+        const s = this.sessions.get(sessionId);
+        if (!s) return;
+        s.agentSessionId = newId;
+        s.agentSessionIdHistory = history;
+        s.claudeSessionId = newId;
+        s.claudeSessionIdHistory = history;
+        try {
+          updateSession(sessionId, {
+            agentSessionId: newId,
+            agentSessionIdHistory: history,
+            claudeSessionId: newId,
+            claudeSessionIdHistory: history,
+          });
+        } catch (err) {
+          console.error('[agent] failed to persist agent session id:', err);
+        }
+        this.emit('session-updated', { sessionId, claudeSessionId: newId });
+      },
+      emitStateSnapshot: () => {
+        const s = this.sessions.get(sessionId);
+        if (!s) return;
+        this.emit('state-snapshot', { sessionId, snapshot: this.snapshotStats(s) });
+      },
+      applyUsage: ({ tokensIn, tokensOut, cacheCreationTokens, cacheReadTokens, costUsd }) => {
+        const s = this.sessions.get(sessionId);
+        if (!s) return;
+        s.tokensIn += tokensIn;
+        s.tokensOut += tokensOut;
+        s.cacheCreationTokens += cacheCreationTokens;
+        s.cacheReadTokens += cacheReadTokens;
+        s.totalCostUsd += costUsd;
+        try {
+          insertCostRecord({ sessionId, tokensIn, tokensOut, costUsd });
+        } catch (err) {
+          console.error('[agent] failed to insert usage record:', err);
+        }
+      },
+      emitTurnResult: (input) => this.emit('turn-result', { sessionId, ...input }),
+      setCurrentTool: (name) => {
+        const s = this.sessions.get(sessionId);
+        if (s) s.currentTool = name;
+      },
+      bumpActivity: () => {
+        const s = this.sessions.get(sessionId);
+        if (s) s.lastActivity = Date.now();
+      },
+      maybeRenameFromFirstPrompt: (prompt) =>
+        this.maybeRenameFromFirstPrompt(sessionId, prompt),
+      emitReconciled: (addedMessageIds) =>
+        this.emit('reconciled', { sessionId, addedMessageIds }),
+      emitToolDelta: (payload) => this.emit('tool-delta', { sessionId, payload }),
+      emitReasoningDelta: (text) => this.emit('reasoning-delta', { sessionId, text }),
+      emitMessageRekey: (oldId, newId) =>
+        this.emit('message-rekeyed', { sessionId, oldId, newId }),
+      emitAlert: (input) =>
+        this.emitAlert({
+          sessionId,
+          category: input.category,
+          severity: input.severity,
+          title: input.title,
+          body: input.body,
+          needsAttention: input.needsAttention,
+          persistent: input.persistent,
+          ttlMs: input.ttlMs,
+          metadata: input.metadata,
+        }),
+      incrementToolCount: () => {
+        const s = this.sessions.get(sessionId);
+        if (s) s.toolCount += 1;
+      },
+      incrementSubagents: (delta) => {
+        const s = this.sessions.get(sessionId);
+        if (s) s.activeSubagents = Math.max(0, s.activeSubagents + delta);
+      },
+      emitNotification: (payload) => this.emit('notification', { sessionId, payload }),
+      emitSessionEnded: () => this.emit('session-ended', { sessionId }),
+    };
+  }
+
+  /**
+   * Abort an in-flight turn. The adapter's runTurn loop unwinds and the
+   * `finally` block in sendTurn handles state cleanup + turn-complete + idle.
+   */
+  abortTurn(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    if (!s.currentTurn) return;
+    try {
+      s.currentTurn.abortController.abort();
+    } catch (err) {
+      console.error('[agent] abortTurn failed:', err);
+    }
+  }
+
+  /** Remove a session entirely. Aborts any in-flight turn, clears prompts. */
+  remove(sessionId: string): void {
+    this.abortTurn(sessionId);
+    try {
+      this.permManager.clearForSession(sessionId);
+    } catch (err) {
+      console.error('[agent] clearForSession failed:', err);
+    }
+    try {
+      this.elicitManager.clearForSession(sessionId);
+    } catch (err) {
+      console.error('[agent] elicit clearForSession failed:', err);
+    }
+    const s = this.sessions.get(sessionId);
+    if (s) {
+      const adapter = this.adapters[s.provider];
+      try {
+        adapter?.destroy?.(s);
+      } catch (err) {
+        console.error('[agent] adapter.destroy failed:', err);
+      }
+      adapter?.reset?.(s);
+    }
+    this.sessions.delete(sessionId);
+  }
+
+  /**
+   * Daemon-shutdown hook. Tears down every adapter's long-lived resources
+   * (e.g. the codex app-server child). Idempotent.
+   */
+  async shutdown(): Promise<void> {
+    for (const adapter of Object.values(this.adapters)) {
+      try {
+        await adapter.shutdown?.();
+      } catch (err) {
+        console.error('[agent] adapter.shutdown failed:', err);
+      }
+    }
+  }
+
+  resetSession(sessionId: string): void {
+    this.abortTurn(sessionId);
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    const adapter = this.adapters[s.provider];
+    adapter?.reset?.(s);
+    s.agentSessionId = null;
+    s.agentSessionIdHistory = [];
+    s.claudeSessionId = null;
+    s.claudeSessionIdHistory = [];
+    s.userMessages = [];
+    s.messages = [];
+    s.toolCount = 0;
+    s.currentTool = null;
+    s.tokensIn = 0;
+    s.tokensOut = 0;
+    s.cacheCreationTokens = 0;
+    s.cacheReadTokens = 0;
+    s.totalCostUsd = 0;
+    s.streamingText = '';
+    s.streamingBlockIndex = null;
+    s.lastActivity = Date.now();
+    this.emit('state-snapshot', { sessionId, snapshot: this.snapshotStats(s) });
+  }
+
+  private emitAlert(input: Parameters<typeof createAlert>[0]): void {
+    this.emit('alert', { alert: createAlert(input) });
+  }
+
+  // === Internal helpers ===================================================
+
+  private snapshotStats(s: AgentSession): Record<string, unknown> {
+    return {
+      provider: s.provider,
+      agentProvider: s.provider,
+      agentSessionId: s.agentSessionId,
+      claudeSessionId: s.claudeSessionId,
+      mode: s.mode,
+      currentTool: s.currentTool,
+      toolCount: s.toolCount,
+      tokenCount: s.tokensIn + s.tokensOut + s.cacheCreationTokens + s.cacheReadTokens,
+      costUsd: s.totalCostUsd,
+      totalCostUsd: s.totalCostUsd,
+      tokensIn: s.tokensIn,
+      tokensOut: s.tokensOut,
+      activeSubagents: s.activeSubagents,
+      lastActivity: s.lastActivity,
+      userMessages: s.userMessages,
+    };
+  }
+
+  private maybeRenameFromFirstPrompt(sessionId: string, prompt: string): void {
+    const row = getSessionById(sessionId);
+    if (!row) return;
+    if (!AGENT_DEFAULT_NAMES.has(row.name)) return;
+    const title = titleFromFirstPrompt(prompt);
+    if (!title) return;
+    try {
+      const updated = updateSession(sessionId, { name: title });
+      if (updated) this.emit('session-renamed', { sessionId });
+    } catch (err) {
+      console.error('[agent] maybeRenameFromFirstPrompt failed:', err);
+    }
+  }
+
+  /** Fire-and-forget: option detection from the JSONL flushed at Stop. */
+  private async runStopWork(sessionId: string): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s || !s.claudeSessionId) return;
+    try {
+      const result = await detectOptions(s.workingDir, s.claudeSessionId);
+      if (result) this.emit('options-detected', { sessionId, options: result.options });
+    } catch {
+      // best-effort — JSONL may not have flushed yet
+    }
+  }
+}
+
+// Re-export AlertSeverity for downstream imports that rely on it through
+// manager.ts (kept for backwards compatibility with existing imports).
+export type { AlertSeverity };

@@ -6,7 +6,7 @@ import { SidebarItem } from './SidebarItem';
 import { AddProcessModal } from '../modals/AddProcessModal';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuItem } from '../context-menu/ContextMenu';
-import { api } from '../../lib/api';
+import { api, stopProcessByType } from '../../lib/api';
 import { terminalManager } from '../../lib/terminalManager';
 import toast from 'react-hot-toast';
 import type { ManagedProcess, Project } from '../../lib/types';
@@ -51,12 +51,15 @@ export function ProjectSidebarItem({ project }: Props) {
     process?: ManagedProcess;
   } | null>(null);
 
-  const projectSessions = Object.values(sessions).filter((s) => s.projectId === project.id);
+  const projectSessions = Object.values(sessions)
+    .filter((s) => s.projectId === project.id)
+    .sort((a, b) => {
+      const recency = (s: typeof a) =>
+        s.claudeState?.lastActivity || s.lastActiveAt || s.createdAt || 0;
+      return recency(b) - recency(a);
+    });
   const projectCommands = Object.values(commands).filter((c) => c.projectId === project.id);
   const projectTerminals = Object.values(terminals).filter((t) => t.projectId === project.id);
-  const runningSessions = projectSessions.filter((s) => s.state === 'running').length;
-  const runningCommands = projectCommands.filter((c) => c.state === 'running').length;
-  const runningTerminals = projectTerminals.filter((t) => t.state === 'running').length;
 
   const handleSelectProject = () => {
     store.setFocusedProject(project.id);
@@ -77,29 +80,8 @@ export function ProjectSidebarItem({ project }: Props) {
       setSelectedProcess(proc.id);
     }
 
-    // Auto-resume/start sessions when clicked in a non-running state.
-    // Errored state means a previous resume already failed — don't auto-retry;
-    // the user must explicitly start a new session.
-    if (proc.type === 'session' && proc.state === 'stopped') {
-      const s = proc as any;
-      const hasPrior = !!(s.claudeSessionId || s.claudeState?.claudeSessionId);
-      if (hasPrior) {
-        // Defer resume until after TerminalView mounts and the xterm has fitted,
-        // so the backend spawns the PTY at the real container size (not 80×24).
-        // Double-RAF matches terminalManager.attach's own fit timing, ensuring
-        // glyph measurements have settled before we read cols/rows.
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const dims = terminalManager.fit(proc.id);
-            api.sessions
-              .resumeClaude(proc.id, dims ?? undefined)
-              .catch(() => toast.error('Failed to resume session'));
-          });
-        });
-      } else {
-        api.processes.start(proc.id).catch(() => toast.error('Failed to start session'));
-      }
-    }
+    // Sessions are SDK-driven now: there's no "start" or "resume" action —
+    // the first user turn auto-starts the work. Clicking simply selects.
   };
 
   const routeAwayIfSelected = (deletedId: string) => {
@@ -121,29 +103,37 @@ export function ProjectSidebarItem({ project }: Props) {
   const getSessionMenuItems = (process: ManagedProcess): MenuItem[] => {
     const isRunning = process.state === 'running';
     return [
-      {
-        label: isRunning ? 'Stop' : 'Start',
-        action: () => {
-          if (isRunning) api.processes.stop(process.id).catch(() => toast.error('Failed to stop'));
-          else api.processes.start(process.id).catch(() => toast.error('Failed to start'));
-        },
-      },
+      // Sessions auto-start on the first turn (sending a message IS starting),
+      // so the Start path doesn't apply — only show Stop while a turn is in
+      // flight. Stop here means "abort the in-flight SDK turn" via
+      // /api/sessions/:id/stop, NOT the PTY route.
+      ...(isRunning
+        ? [
+            {
+              label: 'Stop',
+              action: () =>
+                stopProcessByType(process as Parameters<typeof stopProcessByType>[0]).catch(() =>
+                  toast.error('Failed to stop'),
+                ),
+            } as MenuItem,
+          ]
+        : []),
       {
         label: 'Clear output',
         action: () => api.processes.clearScrollback(process.id).catch(() => toast.error('Failed to clear')),
         divider: true,
       },
       {
-        label: 'Delete session',
+        label: 'Delete agent',
         action: async () => {
           try {
             await api.sessions.delete(process.id);
             store.removeSession(process.id);
             routeAwayIfSelected(process.id);
             window.dispatchEvent(new Event('mt:past-sessions-refresh'));
-            toast.success('Session deleted');
+            toast.success('Agent deleted');
           } catch {
-            toast.error('Failed to delete session');
+            toast.error('Failed to delete agent');
           }
         },
         divider: true,
@@ -317,50 +307,19 @@ export function ProjectSidebarItem({ project }: Props) {
     <div
       style={{
         position: 'relative',
-        margin: '14px 8px 2px',
+        margin: '10px 0 2px',
       }}
     >
-      {/* Folder tab — protruding colored chip anchoring the card to the project's color */}
-      <div
-        aria-hidden
-        style={{
-          position: 'absolute',
-          top: -5,
-          left: 16,
-          width: 44,
-          height: 7,
-          backgroundColor: color.stripe,
-          borderRadius: '4px 4px 0 0',
-          boxShadow: focused
-            ? `0 -2px 6px color-mix(in srgb, ${color.stripe} 55%, transparent)`
-            : `0 -1px 2px color-mix(in srgb, ${color.stripe} 30%, transparent)`,
-          transition: 'box-shadow var(--dur-med) var(--ease-out), top var(--dur-med) var(--ease-out)',
-        }}
-      />
-      {/* Second tab, slightly offset — adds depth like stacked folder tabs */}
-      <div
-        aria-hidden
-        style={{
-          position: 'absolute',
-          top: -3,
-          left: 68,
-          width: 18,
-          height: 5,
-          backgroundColor: `color-mix(in srgb, ${color.stripe} 55%, transparent)`,
-          borderRadius: '3px 3px 0 0',
-        }}
-      />
-      {/* Card body */}
+      {/* Project card body — structural group container; stays at radius-none so the
+          top accent rule runs edge-to-edge. */}
       <div
         style={{
           position: 'relative',
-          borderRadius: 'var(--radius-lg)',
+          borderRadius: 'var(--radius-none)',
           overflow: 'hidden',
-          backgroundColor: 'color-mix(in srgb, var(--bg-elevated) 58%, transparent)',
-          boxShadow: focused
-            ? `var(--shadow-md), inset 4px 0 0 ${color.stripe}, inset 0 0 0 1px color-mix(in srgb, ${color.stripe} 40%, transparent), 0 0 0 2px color-mix(in srgb, ${color.stripe} 16%, transparent)`
-            : `var(--shadow-sm), inset 4px 0 0 ${color.stripe}, inset 0 0 0 1px color-mix(in srgb, ${color.stripe} 22%, var(--border))`,
-          transition: 'box-shadow var(--dur-med) var(--ease-out)',
+          backgroundColor: 'transparent',
+          borderTop: `1px solid ${focused ? color.stripe : 'transparent'}`,
+          transition: 'border-color var(--dur-med) var(--ease-out)',
         }}
       >
       <ProjectHeader
@@ -380,9 +339,7 @@ export function ProjectSidebarItem({ project }: Props) {
       {expanded && (
         <>
           <SidebarSection
-            title="SESSIONS"
-            running={runningSessions}
-            total={projectSessions.length}
+            title="AGENTS"
             onAdd={() => {
               store.setFocusedProject(project.id);
               store.setAddAgentModalOpen(true);
@@ -393,7 +350,6 @@ export function ProjectSidebarItem({ project }: Props) {
                 <SidebarItem
                   key={session.id}
                   process={session}
-                  subtitle={(session as any).claudeState?.label || undefined}
                   isSelected={selectedProcessId === session.id}
                   onClick={() => handleSelectProcess(session)}
                   onContextMenu={(e) => {
@@ -404,17 +360,12 @@ export function ProjectSidebarItem({ project }: Props) {
               ))
             ) : (
               <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                No sessions yet
+                No agents yet
               </div>
             )}
           </SidebarSection>
 
-          <SidebarSection
-            title="TERMINALS"
-            running={runningTerminals}
-            total={projectTerminals.length}
-            onAdd={handleAddTerminal}
-          >
+          <SidebarSection title="TERMINALS" onAdd={handleAddTerminal}>
             {projectTerminals.length > 0 ? (
               projectTerminals.map((term) => (
                 <SidebarItem
@@ -435,12 +386,7 @@ export function ProjectSidebarItem({ project }: Props) {
             )}
           </SidebarSection>
 
-          <SidebarSection
-            title="COMMANDS"
-            running={runningCommands}
-            total={projectCommands.length}
-            onAdd={() => setShowAddCommand(true)}
-          >
+          <SidebarSection title="COMMANDS" onAdd={() => setShowAddCommand(true)}>
             {projectCommands.length > 0 ? (
               projectCommands.map((cmd) => (
                 <SidebarItem

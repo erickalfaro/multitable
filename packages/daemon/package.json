@@ -1,6 +1,6 @@
 {
   "name": "@multitable/daemon",
-  "version": "0.1.0",
+  "version": "0.8.0",
   "private": true,
   "main": "dist/index.js",
   "bin": {
@@ -12,24 +12,25 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "express": "^4.19.0",
-    "ws": "^8.17.0",
-    "node-pty": "^1.0.0",
-    "better-sqlite3": "^11.5.0",
+    "@anthropic-ai/claude-agent-sdk": "0.2.119",
+    "better-sqlite3": "^12.9.0",
     "chokidar": "^3.6.0",
-    "simple-git": "^3.24.0",
+    "env-paths": "^2.0.0",
+    "express": "^4.19.0",
     "glob": "^10.3.0",
+    "node-pty": "^1.1.0",
+    "simple-git": "^3.24.0",
     "uuid": "^9.0.0",
-    "yaml": "^2.4.0",
-    "env-paths": "^2.0.0"
+    "ws": "^8.17.0",
+    "yaml": "^2.4.0"
   },
   "devDependencies": {
-    "tsx": "^4.7.0",
-    "typescript": "^5.4.0",
-    "@types/express": "^4.17.0",
-    "@types/ws": "^8.5.0",
     "@types/better-sqlite3": "^7.6.0",
+    "@types/express": "^4.17.0",
+    "@types/node": "^20.0.0",
     "@types/uuid": "^9.0.0",
-    "@types/node": "^20.0.0"
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
   }
 }

@@ -79,15 +79,14 @@ export function ProjectHeader({
       style={{
         display: 'flex',
         alignItems: 'center',
-        padding: '8px 12px',
-        borderBottom: '1px solid var(--border)',
+        padding: '6px 10px',
         cursor: editing ? 'text' : 'pointer',
         userSelect: 'none',
         WebkitUserSelect: 'none',
         backgroundColor: focused
-          ? 'var(--bg-hover)'
+          ? 'var(--bg-elevated)'
           : hover
-            ? 'color-mix(in srgb, var(--bg-hover) 55%, transparent)'
+            ? 'var(--bg-hover)'
             : 'transparent',
         transition: 'background-color var(--dur-fast) var(--ease-out)',
       }}
@@ -152,7 +151,7 @@ export function ProjectHeader({
             color: 'var(--text-primary)',
             background: 'var(--bg-input, var(--bg-elevated))',
             border: '1px solid var(--border)',
-            borderRadius: 2,
+            borderRadius: 'var(--radius-snug)',
             padding: '1px 4px',
             margin: 0,
             outline: 'none',
@@ -168,8 +167,8 @@ export function ProjectHeader({
             onEditingChange?.(true);
           }}
           style={{
-            fontSize: 15,
-            fontWeight: 600,
+            fontSize: 12.5,
+            fontWeight: 500,
             color: 'var(--text-primary)',
             flex: 1,
             overflow: 'hidden',
