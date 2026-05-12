@@ -1,6 +1,14 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import type { ElicitationPrompt } from '../types.js';
+import { trackedTimeout, type TrackedTimer } from '../devLog.js';
+
+// Same rationale as PROMPT_TIMEOUT_MS in PermissionManager: the turn watchdog
+// in AgentSessionManager re-arms while an elicitation is pending, so without
+// an upper bound a forgotten URL-mode auth prompt (e.g. user signed in
+// externally and never came back to click Done) holds the session "Running…"
+// indefinitely. Auto-cancel after 10 minutes so the watchdog can fire.
+const PROMPT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export type ElicitAction = 'accept' | 'decline' | 'cancel';
 
@@ -29,6 +37,7 @@ interface Pending {
   prompt: ElicitationPrompt;
   resolve: (r: ElicitResolution) => void;
   abortCleanup?: () => void;
+  expiryTimer: TrackedTimer;
 }
 
 /**
@@ -66,6 +75,7 @@ export class ElicitationManager extends EventEmitter {
       const onAbort = () => {
         const p = this.pending.get(id);
         if (!p) return;
+        p.expiryTimer.cancel();
         this.pending.delete(id);
         this.emit('elicitation:resolved', id);
         resolve({ action: 'cancel' });
@@ -73,7 +83,26 @@ export class ElicitationManager extends EventEmitter {
       signal.addEventListener('abort', onAbort);
       const abortCleanup = () => signal.removeEventListener('abort', onAbort);
 
-      this.pending.set(id, { prompt, resolve, abortCleanup });
+      const expiryTimer = trackedTimeout(
+        () => {
+          const p = this.pending.get(id);
+          if (!p) return;
+          p.abortCleanup?.();
+          this.pending.delete(id);
+          this.emit('elicitation:expired', id);
+          resolve({ action: 'cancel' });
+        },
+        {
+          label: 'elicitation prompt expiry',
+          ms: PROMPT_TIMEOUT_MS,
+          category: 'elicitation',
+          detail: `session ${sessionId.slice(0, 8)} · ${request.serverName}`,
+          logFire: true,
+          logCancel: true,
+        },
+      );
+
+      this.pending.set(id, { prompt, resolve, abortCleanup, expiryTimer });
       this.emit('elicitation:prompt', prompt);
     });
   }
@@ -86,6 +115,7 @@ export class ElicitationManager extends EventEmitter {
     const p = this.pending.get(id);
     if (!p) return;
     p.abortCleanup?.();
+    p.expiryTimer.cancel();
     this.pending.delete(id);
     this.emit('elicitation:resolved', id);
     p.resolve({ action, content });
@@ -98,6 +128,7 @@ export class ElicitationManager extends EventEmitter {
     for (const [id, p] of this.pending) {
       if (p.prompt.sessionId === sessionId) {
         p.abortCleanup?.();
+        p.expiryTimer.cancel();
         this.pending.delete(id);
         this.emit('elicitation:resolved', id);
         p.resolve({ action: 'cancel' });

@@ -3,6 +3,15 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { Response } from 'express';
 import type { PermissionPrompt, AskQuestion } from '../types.js';
+import { trackedTimeout, type TrackedTimer } from '../devLog.js';
+
+// Absolute ceiling on how long a permission card may sit pending before we
+// auto-deny and clear it. The turn watchdog re-arms while a prompt is pending,
+// so without this cap a forgotten or orphaned prompt (e.g. user walked away
+// mid-OAuth) holds the session in "Running…" forever. 10 minutes is long
+// enough to cover real-world OAuth/device-code flows and short enough that a
+// silent stuck session unblocks on its own.
+const PROMPT_TIMEOUT_MS = 10 * 60 * 1000;
 
 // Tools that are always approved without prompting the user
 const AUTO_DEFER_TOOLS = new Set([
@@ -81,6 +90,10 @@ interface PendingPermission {
   sdkResolvers: Array<{ resolve: SdkResolver; abortCleanup?: () => void }>;
   sessionId: string;
   dedupKey: string;
+  // Auto-expiry timer. Fires after PROMPT_TIMEOUT_MS to unblock the turn
+  // watchdog when the user never responds. Cancelled in respond /
+  // respondAskQuestion / clearForSession.
+  expiryTimer: TrackedTimer;
 }
 
 function makeDedupKey(sessionId: string, toolName: string, toolInput: Record<string, any>): string {
@@ -314,14 +327,45 @@ export class PermissionManager extends EventEmitter {
         : { kind: 'permission' as const }),
     };
 
-    this.pending.set(id, {
+    const entry: PendingPermission = {
       prompt,
       responders: [{ res, eventName }],
       sdkResolvers: [],
       sessionId,
       dedupKey,
-    });
+      expiryTimer: this.armExpiry(id, sessionId, tool_name),
+    };
+    this.pending.set(id, entry);
     this.emit('permission:prompt', prompt);
+  }
+
+  /**
+   * Arm the auto-expiry timer for a freshly-created prompt. When it fires we
+   * treat the prompt as denied — deny all attached SDK Promises + HTTP
+   * responders, emit `permission:expired` so the UI clears the card and
+   * Telegram crosses out the message, and surface an alert so the user
+   * understands why the turn aborted.
+   */
+  private armExpiry(id: string, sessionId: string, toolName: string): TrackedTimer {
+    return trackedTimeout(
+      () => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        const reason = `Permission prompt for ${toolName} timed out (no response in ${PROMPT_TIMEOUT_MS / 60_000} min).`;
+        sendAll(entry, (eventName) => buildDenyBody(eventName, reason));
+        resolveAllSdk(entry, { kind: 'deny', message: reason });
+        this.emit('permission:expired', id);
+      },
+      {
+        label: 'permission prompt expiry',
+        ms: PROMPT_TIMEOUT_MS,
+        category: 'permission',
+        detail: `session ${sessionId.slice(0, 8)} · ${toolName}`,
+        logFire: true,
+        logCancel: true,
+      },
+    );
   }
 
   /**
@@ -332,6 +376,7 @@ export class PermissionManager extends EventEmitter {
     if (!entry) return;
 
     this.pending.delete(id);
+    entry.expiryTimer.cancel();
 
     if (decision === 'always-allow') {
       let set = this.sessionAllowList.get(entry.sessionId);
@@ -369,6 +414,7 @@ export class PermissionManager extends EventEmitter {
     }
 
     this.pending.delete(id);
+    entry.expiryTimer.cancel();
 
     const body = buildAskQuestionResponse(entry.prompt, answers);
     sendAll(entry, () => body);
@@ -414,6 +460,7 @@ export class PermissionManager extends EventEmitter {
   clearForSession(sessionId: string): void {
     for (const [id, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
+        entry.expiryTimer.cancel();
         sendAll(entry, (eventName) => buildAllowBody(eventName));
         // SDK side: deny pending Promises with a descriptive message so the
         // SDK's tool call fails cleanly rather than silently allowing after
@@ -519,6 +566,7 @@ export class PermissionManager extends EventEmitter {
       sdkResolvers: [],
       sessionId,
       dedupKey,
+      expiryTimer: this.armExpiry(id, sessionId, toolName),
     };
     this.pending.set(id, entry);
 
@@ -548,6 +596,7 @@ export class PermissionManager extends EventEmitter {
       if (entry.sdkResolvers.length === 0 && entry.responders.length === 0) {
         if (this.pending.get(entry.prompt.id) === entry) {
           this.pending.delete(entry.prompt.id);
+          entry.expiryTimer.cancel();
           this.emit('permission:resolved', entry.prompt.id);
         }
       }
