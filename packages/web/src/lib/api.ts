@@ -146,7 +146,10 @@ export const api = {
     update: (id: string, data: Partial<Session>) => put<Session>(`/api/sessions/${id}`, data),
     delete: (id: string) => del(`/api/sessions/${id}`),
     reset: (id: string) => post<{ ok: boolean; session: Session }>(`/api/sessions/${id}/reset`),
-    setMode: (id: string, mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only') =>
+    // `mode` is a provider-native string — Claude `PermissionMode` or Codex
+    // `SandboxMode`. The daemon validates against the adapter's declared
+    // `capabilities.modes` and returns 400 on mismatch.
+    setMode: (id: string, mode: string) =>
       post<{ ok: boolean; mode: string }>(`/api/sessions/${id}/mode`, { mode }),
     setThinkingEffort: (
       id: string,
@@ -158,7 +161,6 @@ export const api = {
       ),
     stop: (id: string) => post<{ ok: boolean }>(`/api/sessions/${id}/stop`),
     renameAi: (id: string) => post<{ session: Session; name: string }>(`/api/sessions/${id}/rename-ai`),
-    diff: (id: string) => get<{ diff: string }>(`/api/sessions/${id}/diff`),
     cost: (id: string) => get<{
       tokensIn: number;
       tokensOut: number;
@@ -291,6 +293,10 @@ export const api = {
       post<{ ok: true; summary: string }>(`/api/projects/${projectId}/git/pull`, opts ?? {}),
     push: (projectId: string, opts?: { setUpstream?: boolean; remote?: string; branch?: string }) =>
       post<{ ok: true; summary: string }>(`/api/projects/${projectId}/git/push`, opts ?? {}),
+    deleteBranch: (projectId: string, name: string, force = false) =>
+      del(`/api/projects/${projectId}/git/branches/${encodeURIComponent(name)}${force ? '?force=1' : ''}`),
+    aiCommitMessage: (projectId: string) =>
+      post<{ message: string }>(`/api/projects/${projectId}/git/ai-commit-message`, {}),
   },
   search: (q: string) =>
     get<Array<{ sessionId: string; name: string; snippet: string }>>(

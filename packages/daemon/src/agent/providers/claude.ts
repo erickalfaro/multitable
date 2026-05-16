@@ -7,7 +7,7 @@ import type {
   OnElicitation,
   PermissionMode,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { AgentSession, SessionMode } from '../types.js';
+import type { AgentSession } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
 import type { PermissionManager } from '../../hooks/permissionManager.js';
 import type { ElicitationManager } from '../../hooks/elicitationManager.js';
@@ -50,34 +50,46 @@ export function resolveClaudeCodeExecutable(): string | undefined {
   return undefined;
 }
 
-// === Mode → Claude permissionMode translation ==============================
+// === Native Claude permission modes ========================================
 //
-// SessionMode is the provider-agnostic enum the UI/store speaks. Each provider
-// adapter translates it to its own native primitive. For Claude the mapping is
-// almost direct since Claude has first-class plan / acceptEdits modes.
-function modeToPermissionMode(mode: SessionMode): PermissionMode {
-  switch (mode) {
-    case 'plan':
-      return 'plan';
-    case 'accept-edits':
-      return 'acceptEdits';
-    case 'auto':
-      return 'bypassPermissions';
-    case 'read-only':
-      // Claude has no native "read-only" mode; we approximate by leaving
-      // permissionMode at 'default' and rely on the per-call canUseTool gate
-      // (which already routes mutating tools through the UI). The web UI
-      // additionally hides the chat composer's destructive options.
-      return 'default';
-    case 'chat':
-      // Same approximation: default mode + the system already knows tools
-      // should rarely fire. (Future improvement: pass `disallowedTools`.)
-      return 'default';
-    case 'default':
-    default:
-      return 'default';
-  }
-}
+// The full SDK `PermissionMode` enum, with display strings lifted verbatim
+// from the SDK JSDoc (sdk.d.ts:1757). MultiTable does NOT translate or invent
+// modes — `session.mode` is one of these strings and goes straight to the
+// SDK as `permissionMode`.
+const CLAUDE_NATIVE_MODES = [
+  {
+    value: 'default' as PermissionMode,
+    label: 'Default',
+    description: 'Standard behavior, prompts for dangerous operations.',
+  },
+  {
+    value: 'acceptEdits' as PermissionMode,
+    label: 'Accept edits',
+    description: 'Auto-accept file edit operations.',
+  },
+  {
+    value: 'bypassPermissions' as PermissionMode,
+    label: 'Bypass permissions',
+    description: 'Bypass all permission checks (requires allowDangerouslySkipPermissions).',
+  },
+  {
+    value: 'plan' as PermissionMode,
+    label: 'Plan',
+    description: 'Planning mode, no actual tool execution.',
+  },
+  {
+    value: 'dontAsk' as PermissionMode,
+    label: 'Don’t ask',
+    description: "Don't prompt for permissions, deny if not pre-approved.",
+  },
+  {
+    value: 'auto' as PermissionMode,
+    label: 'Auto (classifier)',
+    description: 'Use a model classifier to approve/deny permission prompts.',
+  },
+] as const;
+
+export type { PermissionMode };
 
 // === ClaudeAdapter =========================================================
 //
@@ -112,7 +124,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     hooks: 'rich',
     streamingDeltaSemantics: 'additive',
     modelSwitchScope: 'per-turn',
-    modes: ['default', 'plan', 'accept-edits', 'auto', 'read-only', 'chat'],
+    modes: CLAUDE_NATIVE_MODES.map((m) => ({ ...m })),
     thinkingEffort: 'native',
   };
 
@@ -162,7 +174,9 @@ export class ClaudeAdapter implements ProviderAdapter {
         ...(s.model ? { model: s.model } : {}),
         ...(s.thinkingEffort ? { effort: s.thinkingEffort } : {}),
         settingSources: ['project', 'user'],
-        permissionMode: modeToPermissionMode(s.mode),
+        // Mode passthrough: `s.mode` is already a native `PermissionMode`
+        // value (validated by the API + DB migration). No translation.
+        permissionMode: s.mode as PermissionMode,
         canUseTool: this.makeCanUseTool(s),
         onElicitation: this.makeOnElicitation(s, cb),
         hooks: this.makeHooks(s, cb),

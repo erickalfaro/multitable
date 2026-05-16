@@ -1,27 +1,10 @@
 import React, { useEffect } from 'react';
-import { Sparkles } from 'lucide-react';
 import type { Session } from '../../../lib/types';
 import { useAppStore } from '../../../stores/appStore';
+import { cleanModelLabelFromCatalog } from '../../../lib/modelName';
 
 interface Props {
   session: Session;
-}
-
-// Strip provider prefixes and title-case the remainder so a raw model id like
-// `claude-opus-4-7` reads as `Opus 4.7` while the catalog is loading or when
-// the daemon returns an id we don't have a displayName for.
-function prettify(modelId: string): string {
-  const stripped = modelId.replace(/^(claude-|codex-)/, '');
-  const segments = stripped.split('-');
-  return segments
-    .map((seg) => {
-      if (/^\d/.test(seg)) return seg;
-      if (/^gpt$/i.test(seg)) return 'GPT';
-      if (seg.length === 0) return seg;
-      return seg.charAt(0).toUpperCase() + seg.slice(1);
-    })
-    .join(' ')
-    .replace(/\bGpt\b/gi, 'GPT');
 }
 
 export function ModelChip({ session }: Props) {
@@ -38,12 +21,11 @@ export function ModelChip({ session }: Props) {
 
   if (!session.model) return null;
 
-  const fromCatalog = catalog?.find((m) => m.id === session.model)?.displayName;
-  const label = fromCatalog ?? prettify(session.model);
+  const label = cleanModelLabelFromCatalog(session.model, catalog) ?? session.model;
 
   return (
     <span
-      title={`Model: ${session.model}`}
+      title={`Model: ${label}`}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -57,14 +39,13 @@ export function ModelChip({ session }: Props) {
         color: 'var(--text-secondary)',
         background: 'transparent',
         border: '1px solid var(--border)',
-        borderRadius: 999,
+        borderRadius: 'var(--radius-snug)',
         lineHeight: 1,
         userSelect: 'none',
         WebkitUserSelect: 'none',
         flexShrink: 0,
       }}
     >
-      <Sparkles size={11} strokeWidth={2.2} />
       <span style={{ lineHeight: 1 }}>{label}</span>
     </span>
   );

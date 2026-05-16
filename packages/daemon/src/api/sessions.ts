@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import simpleGit from 'simple-git';
 import {
   getSessionById,
   createSession,
@@ -8,9 +7,7 @@ import {
   deleteSession,
   getAllSessions,
   getSessionCostAggregate,
-  getProjectById,
 } from '../db/store.js';
-import { isGitRepo } from '../git/index.js';
 import { parseSessionCost } from '../hooks/costParser.js';
 import { parseSessionPrompts, parseAllProjectPrompts } from '../hooks/promptsParser.js';
 import { generateSessionLabel } from '../hooks/labeler.js';
@@ -342,23 +339,22 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
 
   // POST /api/sessions/:id/mode
   //
-  // Set the operating mode for the session (default / plan / accept-edits /
-  // auto / chat / read-only). Takes effect on the NEXT turn — the adapter
-  // assembles SDK options from session.mode at runTurn time. Validated against
-  // the current provider's declared capabilities.modes; rejects modes the
-  // provider doesn't implement.
+  // Set the operating mode for the session. The body's `mode` must be a
+  // native value from the session's provider — Claude `PermissionMode`
+  // (`default`, `acceptEdits`, `bypassPermissions`, `plan`, `dontAsk`,
+  // `auto`) or Codex `SandboxMode` (`read-only`, `workspace-write`,
+  // `danger-full-access`). The agent manager validates against the live
+  // adapter's `capabilities.modes`, so the API has no hardcoded enum here.
+  // Takes effect on the NEXT turn.
   router.post('/:id/mode', (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     const mode = req.body?.mode;
-    const VALID = ['default', 'plan', 'accept-edits', 'auto', 'chat', 'read-only'];
-    if (typeof mode !== 'string' || !VALID.includes(mode)) {
-      return res.status(400).json({
-        error: `Invalid mode. Must be one of: ${VALID.join(', ')}`,
-      });
+    if (typeof mode !== 'string') {
+      return res.status(400).json({ error: 'mode must be a string' });
     }
     try {
-      agentManager.setMode(req.params.id, mode as 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only');
+      agentManager.setMode(req.params.id, mode);
       res.json({ ok: true, mode });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
@@ -481,30 +477,6 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
     if (!updated) return res.status(500).json({ error: 'Failed to persist new name' });
     agentManager.emit('session-renamed', { sessionId: req.params.id });
     res.json({ session: updated, name });
-  });
-
-  // GET /api/sessions/:id/diff
-  // When the session has a captured baseline commit, returns the diff between
-  // that commit and the current working tree (everything the agent has
-  // touched since it was created). Falls back to a project-level working-tree
-  // diff when no baseline is recorded, preserving backwards compatibility.
-  router.get('/:id/diff', async (req: Request, res: Response) => {
-    const session = getSessionById(req.params.id);
-    if (!session) return res.status(404).json({ error: 'Session not found' });
-
-    const project = getProjectById(session.projectId);
-    const repoPath = (project && isGitRepo(project.path) ? project.path : null)
-      ?? (session.workingDirectory && isGitRepo(session.workingDirectory) ? session.workingDirectory : null);
-    if (!repoPath) {
-      return res.status(400).json({ error: 'Not a git repository', code: 'not-a-repo' });
-    }
-
-    try {
-      const diff = await simpleGit(repoPath).diff();
-      res.json({ diff });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to get diff' });
-    }
   });
 
   return router;
