@@ -4,7 +4,6 @@ import { useAppStore } from '../../stores/appStore';
 import { useIsMobile } from '../../lib/useIsMobile';
 import { SessionHeaderBar } from './SessionHeaderBar';
 import { ProcessBanner } from './ProcessBanner';
-import { SessionDetailPanel } from './SessionDetailPanel';
 import { PermissionBar } from '../permission/PermissionBar';
 import type { ManagedProcess, Session } from '../../lib/types';
 
@@ -34,8 +33,6 @@ export function TerminalView({ processId, process }: Props) {
     process &&
     (process.state === 'stopped' || process.state === 'errored');
 
-  const showDetailPanel = isSession && detailPanelOpen && session;
-
   return (
     <div
       style={{
@@ -59,16 +56,16 @@ export function TerminalView({ processId, process }: Props) {
       {/* Process banner (stopped/errored) */}
       {showBanner && process && <ProcessBanner process={process} />}
 
-      {/* Terminal + optional detail panel */}
+      {/* Terminal */}
       <div
         style={{
           flex: 1,
           display: 'flex',
-          flexDirection: isMobile ? 'column' : 'row',
           overflow: 'hidden',
+          minHeight: 0,
+          minWidth: 0,
         }}
       >
-        {/* Terminal container — hidden when session needs user action */}
         {terminalDisabled ? (
           <div
             style={{
@@ -86,7 +83,7 @@ export function TerminalView({ processId, process }: Props) {
         ) : (
           <div
             style={{
-              flex: showDetailPanel ? '1 1 60%' : '1',
+              flex: 1,
               backgroundColor: 'var(--bg-primary)',
               overflow: 'hidden',
               minHeight: 0,
@@ -102,24 +99,6 @@ export function TerminalView({ processId, process }: Props) {
             />
             {/* Session-scoped permission confirmations (overlay on terminal) */}
             {session && <PermissionBar sessionId={session.id} />}
-          </div>
-        )}
-
-        {/* Detail panel */}
-        {showDetailPanel && session && (
-          <div
-            style={{
-              flex: '0 0 40%',
-              minHeight: isMobile ? 120 : 0,
-              maxHeight: isMobile ? '60%' : undefined,
-              minWidth: isMobile ? undefined : 280,
-              overflow: 'hidden',
-              borderTop: isMobile ? '1px solid var(--border)' : 'none',
-              borderLeft: isMobile ? 'none' : '1px solid var(--border)',
-              backgroundColor: 'var(--bg-primary)',
-            }}
-          >
-            <SessionDetailPanel key={session.id} session={session} projectId={session.projectId} />
           </div>
         )}
       </div>

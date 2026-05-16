@@ -26,14 +26,13 @@ export function Sidebar() {
     <div
       className="mt-scroll"
       style={{
-        width: 300,
-        flexShrink: 0,
+        width: '100%',
+        height: '100%',
         backgroundColor: 'var(--bg-sidebar)',
         borderRight: '1px solid var(--border)',
         display: 'flex',
         flexDirection: 'column',
         overflowY: 'auto',
-        height: '100%',
       }}
     >
       <div

@@ -1,8 +1,15 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
-import { Menu } from 'lucide-react';
+import { Menu, ChevronRight, ChevronLeft } from 'lucide-react';
+import {
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+  type ImperativePanelHandle,
+} from 'react-resizable-panels';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { MainPane } from './components/main-pane/MainPane';
+import { SessionDetailPanel } from './components/main-pane/SessionDetailPanel';
 import { StatusBar } from './components/status-bar/StatusBar';
 import { CommandPalette } from './components/command-palette/CommandPalette';
 import { OptionSelector } from './components/option/OptionSelector';
@@ -29,6 +36,7 @@ import { ConnectionOverlay } from './components/ConnectionOverlay';
 import { NotificationCenter } from './components/notifications/NotificationCenter';
 import { ElicitationModalHost } from './components/elicitation/ElicitationModal';
 import { DevLogPanel } from './components/dev-log/DevLogPanel';
+import { deriveAttentionEvents, attentionPatchForToolResult } from './lib/attention';
 import type { Session } from './lib/types';
 
 // Slow safety-net poll for sessions that are mid-turn. The primary path is
@@ -549,8 +557,24 @@ function App() {
       wsClient.on('session:tool-event', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
         const messages = msg.payload?.messages;
-        if (pid && Array.isArray(messages) && messages.length > 0) {
-          store.appendMessages(pid, messages);
+        if (!pid || !Array.isArray(messages) || messages.length === 0) return;
+        store.appendMessages(pid, messages);
+        // Fan out to Attention Stream: tool_use → new event, tool_result →
+        // patch the matching event with output + error flag. Provider is read
+        // from the live store snapshot since this handler runs outside React.
+        const live = useAppStore.getState();
+        const session = live.sessions[pid];
+        const provider = session?.agentProvider ?? 'claude';
+        const events = deriveAttentionEvents(pid, provider, messages);
+        for (const e of events) live.pushAttention(e);
+        for (const m of messages) {
+          if (m && m.kind === 'tool_result' && typeof m.toolUseId === 'string') {
+            live.updateAttention(
+              pid,
+              m.toolUseId,
+              attentionPatchForToolResult(m.output ?? '', !!m.isError),
+            );
+          }
         }
       }),
       wsClient.on('session:user-message', (msg: any) => {
@@ -761,18 +785,68 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Global keybinding: Ctrl/Cmd+Shift+L toggles the Dev Log panel.
+  // Imperative refs to the resizable panels so keyboard shortcuts can
+  // collapse/expand them without re-rendering the whole app on a store flag.
+  const sidebarRef = useRef<ImperativePanelHandle>(null);
+  const contextRef = useRef<ImperativePanelHandle>(null);
+
+  // Mirror panel collapsed state in React so we can render edge rails that
+  // give the user a click target to expand them again (Cmd+B / Cmd+. aren't
+  // discoverable on their own).
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [contextCollapsed, setContextCollapsed] = useState(false);
+
+  // Global keybindings: Ctrl/Cmd+Shift+L → Dev Log, Ctrl/Cmd+B → sidebar,
+  // Ctrl/Cmd+. → context panel.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      if (e.shiftKey && e.key.toLowerCase() === 'l') {
         e.preventDefault();
         const { devLogOpen, setDevLogOpen } = useAppStore.getState();
         setDevLogOpen(!devLogOpen);
+        return;
+      }
+      if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        const p = sidebarRef.current;
+        if (p) (p.isCollapsed() ? p.expand() : p.collapse());
+        return;
+      }
+      if (!e.shiftKey && !e.altKey && e.key === '.') {
+        e.preventDefault();
+        const p = contextRef.current;
+        if (p) {
+          if (p.isCollapsed()) p.expand();
+          else p.collapse();
+        }
+        // Mirror state so SessionHeaderBar's toggle stays in sync.
+        const { detailPanelOpen, setDetailPanelOpen } = useAppStore.getState();
+        setDetailPanelOpen(!detailPanelOpen);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  // Keep the context panel's collapse state in lockstep with the store's
+  // `detailPanelOpen` flag so SessionHeaderBar's chevron button still works.
+  const detailPanelOpen = useAppStore((s) => s.detailPanelOpen);
+  useEffect(() => {
+    const p = contextRef.current;
+    if (!p) return;
+    if (detailPanelOpen && p.isCollapsed()) p.expand();
+    else if (!detailPanelOpen && !p.isCollapsed()) p.collapse();
+  }, [detailPanelOpen]);
+
+  // The right "Context UI" panel renders the SessionDetailPanel for sessions;
+  // for commands/terminals it shows a thin muted placeholder. Picking the
+  // session here (rather than inside the panel) keeps the panel's mount cycle
+  // tied to selection rather than to its parent's re-renders.
+  const selectedSession = useAppStore((s) =>
+    s.selectedProcessId ? s.sessions[s.selectedProcessId] ?? null : null,
+  );
 
   return (
     <div
@@ -844,10 +918,109 @@ function App() {
       )}
 
       {/* Main content area */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {!isMobile && <Sidebar />}
-        <MainPane />
-      </div>
+      {isMobile ? (
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          <MainPane />
+        </div>
+      ) : (
+        <div style={{ position: 'relative', flex: 1, overflow: 'hidden', display: 'flex' }}>
+        <PanelGroup
+          direction="horizontal"
+          autoSaveId="mt:layout"
+          style={{ flex: 1, overflow: 'hidden' }}
+        >
+          <Panel
+            id="sidebar"
+            order={1}
+            ref={sidebarRef}
+            defaultSize={20}
+            minSize={12}
+            maxSize={30}
+            collapsible
+            collapsedSize={0}
+            onCollapse={() => setSidebarCollapsed(true)}
+            onExpand={() => setSidebarCollapsed(false)}
+            style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+          >
+            <Sidebar />
+          </Panel>
+          <PanelResizeHandle className="mt-resize-handle" />
+          <Panel
+            id="chat"
+            order={2}
+            defaultSize={52}
+            minSize={28}
+            style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+          >
+            <MainPane />
+          </Panel>
+          <PanelResizeHandle className="mt-resize-handle" />
+          <Panel
+            id="context"
+            order={3}
+            ref={contextRef}
+            defaultSize={28}
+            minSize={18}
+            maxSize={50}
+            collapsible
+            collapsedSize={0}
+            onCollapse={() => setContextCollapsed(true)}
+            onExpand={() => setContextCollapsed(false)}
+            style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+          >
+            {selectedSession ? (
+              <SessionDetailPanel
+                key={selectedSession.id}
+                session={selectedSession}
+                projectId={selectedSession.projectId}
+              />
+            ) : (
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--text-faint)',
+                  fontSize: 11.5,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  borderLeft: '1px solid var(--border)',
+                  backgroundColor: 'var(--bg-primary)',
+                }}
+              >
+                No agent selected
+              </div>
+            )}
+          </Panel>
+        </PanelGroup>
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="mt-edge-rail mt-edge-rail-left"
+            title="Open sidebar (Cmd+B)"
+            onClick={() => sidebarRef.current?.expand()}
+          >
+            <ChevronRight size={14} />
+          </button>
+        )}
+        {contextCollapsed && (
+          <button
+            type="button"
+            className="mt-edge-rail mt-edge-rail-right"
+            title="Open context panel (Cmd+.)"
+            onClick={() => contextRef.current?.expand()}
+          >
+            <ChevronLeft size={14} />
+          </button>
+        )}
+        </div>
+      )}
+
+      {/* DevLogPanel renders inline above the status bar so it pushes the
+          main content up rather than overlaying it. Internally returns null
+          when closed, taking zero space. */}
+      <DevLogPanel />
 
       <OptionSelector />
       {!isMobile && <StatusBar />}
@@ -856,7 +1029,6 @@ function App() {
       <NotificationCenter />
       <ElicitationModalHost />
       <ConnectionOverlay />
-      <DevLogPanel />
       <Toaster
         position="top-right"
         toastOptions={{
