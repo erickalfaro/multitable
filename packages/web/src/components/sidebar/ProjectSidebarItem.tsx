@@ -3,6 +3,7 @@ import { useAppStore } from '../../stores/appStore';
 import { ProjectHeader } from './ProjectHeader';
 import { SidebarSection } from './SidebarSection';
 import { SidebarItem } from './SidebarItem';
+import { SidebarGitSection } from './SidebarGitSection';
 import { AddProcessModal } from '../modals/AddProcessModal';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuItem } from '../context-menu/ContextMenu';
@@ -470,6 +471,8 @@ export function ProjectSidebarItem({ project }: Props) {
               </div>
             )}
           </SidebarSection>
+
+          <SidebarGitSection projectId={project.id} />
         </>
       )}
       </div>

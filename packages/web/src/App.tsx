@@ -232,6 +232,18 @@ function App() {
           store.setCommands(allCommands);
           store.setTerminals(allTerminals);
 
+          // Seed git status for every project so the sidebar's SOURCE CONTROL
+          // section knows which projects are git repos and what their badge
+          // counts are. The daemon's GitWatcher only emits on change, so
+          // without this seed the section would be invisible until the first
+          // working-tree mutation. Failures are silent (non-git or missing).
+          for (const p of projects) {
+            api.git
+              .status(p.id)
+              .then((status) => useAppStore.getState().setGitStatus(p.id, status))
+              .catch(() => {});
+          }
+
           // Restore last-selected process so a refresh (or Chrome
           // backgrounding the tab on mobile) returns to the same screen
           // instead of dumping the user back on the dashboard. Only restore
@@ -295,6 +307,22 @@ function App() {
         } catch {
           // ignore quota/availability errors
         }
+      }
+    });
+
+    // Whenever a new project appears in the store (e.g. user added one via
+    // AddProjectModal, or one was imported by the past-agents flow), seed its
+    // git status so the sidebar SOURCE CONTROL section can render immediately.
+    const unsubSeedGit = useAppStore.subscribe((state, prev) => {
+      if (state.projects === prev.projects) return;
+      const known = new Set(prev.projects.map((p) => p.id));
+      for (const p of state.projects) {
+        if (known.has(p.id)) continue;
+        if (state.gitByProject[p.id]) continue;
+        api.git
+          .status(p.id)
+          .then((status) => useAppStore.getState().setGitStatus(p.id, status))
+          .catch(() => {});
       }
     });
 
@@ -827,6 +855,7 @@ function App() {
       window.removeEventListener('focus', syncOnFocus);
       unsubPersist();
       unsubPersistSelection();
+      unsubSeedGit();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
