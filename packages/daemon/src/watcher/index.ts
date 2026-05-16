@@ -1,4 +1,5 @@
 import chokidar from 'chokidar';
+import fs from 'fs';
 import path from 'path';
 
 type FSWatcher = ReturnType<typeof chokidar.watch>;
@@ -24,6 +25,13 @@ export class FileWatcher {
     }
 
     const mtYmlPath = path.join(projectPath, 'mt.yml');
+    // chokidar 3 on Windows crashes (`Cannot read properties of undefined
+    // (reading 'close')` inside nodefs-handler.js) when asked to watch a
+    // non-existent file with persistent:false — fs.watch returns undefined
+    // and chokidar dereferences it. Most projects don't have an mt.yml, so
+    // skip silently rather than throw an unhandled rejection at startup.
+    if (!fs.existsSync(mtYmlPath)) return;
+
     const watcher = chokidar.watch(mtYmlPath, {
       persistent: false,
       ignoreInitial: true,
@@ -32,6 +40,9 @@ export class FileWatcher {
 
     watcher.on('change', onChange);
     watcher.on('add', onChange);
+    watcher.on('error', (err) => {
+      console.error(`[watcher] mt.yml watcher error (${projectPath}):`, err);
+    });
 
     this.mtYmlWatchers.set(projectPath, watcher);
   }
@@ -75,6 +86,9 @@ export class FileWatcher {
     watcher.on('change', debounced);
     watcher.on('add', debounced);
     watcher.on('unlink', debounced);
+    watcher.on('error', (err) => {
+      console.error(`[watcher] pattern watcher error (${processId}):`, err);
+    });
 
     this.processWatchers.set(processId, entry);
   }

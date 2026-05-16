@@ -130,57 +130,13 @@ export class ClaudeAdapter implements ProviderAdapter {
     this.streamingBlockIndex.delete(s.id);
   }
 
-  /**
-   * Mint a fresh claudeSessionId without running a real turn. The SDK only
-   * emits `system:init` (which carries the id) from inside query(), so we
-   * fire a minimal placeholder query and abort the moment init lands. Hooks /
-   * canUseTool / onElicitation are intentionally omitted — provisioning never
-   * reaches a tool gate. Worst case: a few tokens billed and a near-empty
-   * entry in the JSONL before the abort takes effect.
-   */
-  async provisionSession(
-    s: AgentSession,
-    ctrl: AbortController,
-    cb: AdapterCallbacks,
-  ): Promise<void> {
-    if (s.claudeSessionId) return;
-
-    const pathToClaudeCodeExecutable = resolveClaudeCodeExecutable();
-    const it = query({
-      prompt: ' ',
-      options: {
-        cwd: s.workingDir,
-        ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
-        ...(s.model ? { model: s.model } : {}),
-        settingSources: ['project', 'user'],
-        permissionMode: modeToPermissionMode(s.mode),
-        includePartialMessages: false,
-        abortController: ctrl,
-      },
-    });
-
-    try {
-      for await (const msg of it) {
-        const m = msg as { type?: string; subtype?: string };
-        if (m.type === 'system' && m.subtype === 'init') {
-          const info = sdkSystemInit(msg);
-          if (info?.claudeSessionId) {
-            cb.onSessionIdAssigned(info.claudeSessionId, s.claudeSessionIdHistory);
-          }
-          ctrl.abort();
-          break;
-        }
-      }
-    } catch (err) {
-      // The abort triggers an AbortError from the SDK — that's the success
-      // path here, not an error. Re-throw anything else (auth failure, network)
-      // so the manager can log it.
-      const name = err instanceof Error ? err.name : '';
-      const message = err instanceof Error ? err.message : String(err);
-      if (name === 'AbortError' || /aborted/i.test(message)) return;
-      throw err;
-    }
-  }
+  // Intentionally NO provisionSession for Claude. The SDK's `system:init` event
+  // hands us a claudeSessionId early, but the JSONL backing that id isn't
+  // written until the SDK actually processes a prompt — aborting the query
+  // right after init leaves us with a session id that has no on-disk
+  // transcript, and the next real turn's `resume: <id>` then fails with
+  // "No conversation found with session ID: …". The first real sendTurn
+  // assigns the id and creates the JSONL naturally; no eager mint is needed.
 
   async runTurn(
     s: AgentSession,
