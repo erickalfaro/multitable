@@ -17,12 +17,14 @@ const LABEL: Record<AgentProvider, string> = {
   claude: 'claude',
   codex: 'codex',
   copilot: 'copilot',
+  hermes: 'hermes',
 };
 
 const GLYPH: Record<AgentProvider, string> = {
   claude: 'C',
   codex: 'X',
   copilot: 'G',
+  hermes: 'H',
 };
 
 // Provider-distinct hue. Subtle in monochrome themes; the tint distinguishes
@@ -37,6 +39,9 @@ function tintFor(provider: AgentProvider): string {
     case 'copilot':
       // Subtle blue, distinct from amber/grey, matches GitHub's brand hint.
       return 'var(--accent-blue, #6384ff)';
+    case 'hermes':
+      // Subtle violet, distinct from amber/grey/blue. Hermes' brand colour.
+      return 'var(--accent-violet, #a48cff)';
     default:
       return 'var(--text-secondary)';
   }

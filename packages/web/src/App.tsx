@@ -287,7 +287,7 @@ function App() {
       .catalog()
       .then((snapshot) => {
         const setModelCatalog = useAppStore.getState().setModelCatalog;
-        for (const provider of ['claude', 'codex'] as const) {
+        for (const provider of ['claude', 'codex', 'hermes'] as const) {
           const entry = snapshot[provider];
           if (entry?.models?.length) setModelCatalog(provider, entry.models);
         }
@@ -795,7 +795,7 @@ function App() {
       wsClient.on('providers:catalog-updated', (msg: any) => {
         const { provider, models } = msg.payload || {};
         if (
-          (provider !== 'claude' && provider !== 'codex') ||
+          (provider !== 'claude' && provider !== 'codex' && provider !== 'hermes') ||
           !Array.isArray(models)
         ) {
           return;

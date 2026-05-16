@@ -52,11 +52,47 @@ export const CLAUDE_BASELINE: BaselineModel[] = [
 
 export const CODEX_BASELINE: BaselineModel[] = [];
 
-export function baselineFor(provider: 'claude' | 'codex'): BaselineModel[] {
+// Hermes (Grok) baseline. Hermes does not currently expose a `list models`
+// flag, so live discovery typically returns `[]` and this seed shows through
+// in the AddAgent picker. Reasoning effort levels are sourced from the
+// official Hermes slash-commands docs (the `/reasoning <level>` command lists
+// none / minimal / low / medium / high / xhigh; we expose only the upper four
+// tiers to match Claude/Codex's user-pickable surface).
+export const HERMES_BASELINE: BaselineModel[] = [
+  {
+    id: 'grok-4.3',
+    displayName: 'Grok 4.3',
+    isDefault: true,
+    supportsEffort: true,
+    effortLevels: ['low', 'medium', 'high', 'xhigh'],
+    defaultEffort: 'medium',
+  },
+  {
+    id: 'grok-4.20-0309-reasoning',
+    displayName: 'Grok 4.20 Reasoning',
+    supportsEffort: true,
+    effortLevels: ['low', 'medium', 'high', 'xhigh'],
+  },
+  {
+    id: 'grok-4.20-0309-non-reasoning',
+    displayName: 'Grok 4.20',
+    supportsEffort: false,
+  },
+  {
+    id: 'grok-4.20-multi-agent-0309',
+    displayName: 'Grok 4.20 Multi-agent',
+    supportsEffort: true,
+    effortLevels: ['low', 'medium', 'high'],
+  },
+];
+
+export function baselineFor(provider: 'claude' | 'codex' | 'hermes'): BaselineModel[] {
   switch (provider) {
     case 'claude':
       return CLAUDE_BASELINE;
     case 'codex':
       return CODEX_BASELINE;
+    case 'hermes':
+      return HERMES_BASELINE;
   }
 }

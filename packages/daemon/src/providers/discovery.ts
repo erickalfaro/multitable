@@ -122,6 +122,82 @@ export async function discoverCodex(env: NodeJS.ProcessEnv): Promise<DiscoveredM
   return models;
 }
 
+// === Hermes ================================================================
+//
+// Hermes (Grok) does not currently expose a JSON model-listing flag. The
+// shape below is forward-looking: if/when `hermes models --json` lands, we
+// parse it the same way as Codex. Until then, every spawn path here resolves
+// to `[]` so the catalog falls back to the shipped baseline.
+//
+// Failure semantics, kept deliberately permissive so a missing/unauthorised
+// Hermes CLI doesn't blow up the catalog refresh:
+//
+//   - Binary missing (`ENOENT`)          → return `[]` (baseline shows through)
+//   - CLI exits non-zero (e.g. unknown   → return `[]`  (ditto — Hermes simply
+//     `--json` flag, no auth, etc.)         doesn't have live data to share)
+//   - Soft timeout (5s)                  → return `[]`
+//   - JSON parse failure                 → return `[]`
+//
+// The function never throws — discovery is best-effort and the baseline is
+// the source of truth until Hermes ships a real listing API.
+export async function discoverHermes(env: NodeJS.ProcessEnv): Promise<DiscoveredModel[]> {
+  let stdout: string;
+  try {
+    stdout = await execStdout('hermes', ['models', '--json'], env, 5000);
+  } catch {
+    return [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+
+  // Accept either `{ models: [...] }` (Codex-shaped) or a bare array so we're
+  // resilient to whichever shape Hermes lands on. Each entry is mapped onto
+  // DiscoveredModel; unknown fields are ignored.
+  const raw: any[] = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray((parsed as any)?.models)
+      ? (parsed as any).models
+      : [];
+
+  const models: DiscoveredModel[] = raw
+    .filter((m: any) => m && typeof (m.id ?? m.slug) === 'string')
+    .map((m: any, idx: number) => {
+      const id = String(m.id ?? m.slug);
+      const rawLevels = Array.isArray(m.supported_reasoning_levels)
+        ? m.supported_reasoning_levels
+        : Array.isArray(m.effortLevels)
+          ? m.effortLevels
+          : [];
+      const effortLevels = rawLevels
+        .map((r: any) => clampEffort(typeof r === 'string' ? r : r?.effort))
+        .filter((x: EffortLevel | undefined): x is EffortLevel => !!x);
+      const supportsEffort =
+        typeof m.supportsEffort === 'boolean' ? m.supportsEffort : effortLevels.length > 0;
+      const defaultEffort = clampEffort(m.default_reasoning_level ?? m.defaultEffort);
+      return {
+        id,
+        displayName:
+          typeof m.display_name === 'string' && m.display_name
+            ? m.display_name
+            : typeof m.displayName === 'string' && m.displayName
+              ? m.displayName
+              : id,
+        description: typeof m.description === 'string' ? m.description : undefined,
+        ...(idx === 0 ? { isDefault: true } : {}),
+        supportsEffort,
+        ...(supportsEffort && effortLevels.length ? { effortLevels } : {}),
+        ...(defaultEffort ? { defaultEffort } : {}),
+      };
+    });
+
+  return models;
+}
+
 // === Claude ================================================================
 //
 // The Claude Agent SDK exposes the authoritative per-model metadata through
