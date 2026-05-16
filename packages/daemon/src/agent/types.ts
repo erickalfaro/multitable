@@ -1,7 +1,7 @@
 import type { ProcessState } from '../types.js';
 import type { SessionMode } from './providers/types.js';
 
-export type AgentProvider = 'claude' | 'codex';
+export type AgentProvider = 'claude' | 'codex' | 'hermes';
 
 export type { SessionMode };
 

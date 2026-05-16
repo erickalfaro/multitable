@@ -139,7 +139,7 @@ export const api = {
       data: {
         name: string;
         command: string;
-        agentProvider?: 'claude' | 'codex';
+        agentProvider?: 'claude' | 'codex' | 'hermes';
         model?: string;
       },
     ) => post<Session>(`/api/projects/${projectId}/sessions`, data),
@@ -190,7 +190,7 @@ export const api = {
     clearScrollback: (id: string) => del(`/api/processes/${id}/scrollback`),
   },
   providers: {
-    models: (provider: 'claude' | 'codex') =>
+    models: (provider: 'claude' | 'codex' | 'hermes') =>
       get<{
         provider: string;
         models: Array<{
