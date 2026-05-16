@@ -54,6 +54,9 @@ export function initDb(): void {
   try {
     db.exec("ALTER TABLE sessions ADD COLUMN mode TEXT DEFAULT 'default'");
   } catch {}
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN thinking_effort TEXT');
+  } catch {}
 
   // Sessions no longer use a PTY (they go through the Claude/Codex SDK). The
   // pre-SDK PTY scrollback column accumulated stale BLOBs that ballooned
@@ -245,6 +248,7 @@ export interface SessionRow {
   claude_session_id_history: string | null;
   tags: string | null;
   mode: string | null;
+  thinking_effort: string | null;
   scratchpad: string;
   created_at: number;
   last_active_at: number | null;
@@ -267,7 +271,7 @@ export interface SessionRecord {
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex' | 'hermes';
+  agentProvider: 'claude' | 'codex';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
@@ -275,6 +279,7 @@ export interface SessionRecord {
   claudeSessionIdHistory: string[];
   tags: string[];
   mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
+  thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   scratchpad: string;
   createdAt: number;
   lastActiveAt: number | null;
@@ -318,13 +323,23 @@ function parseSessionMode(
   return 'default';
 }
 
+const VALID_THINKING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+type ThinkingEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+function parseThinkingEffort(raw: string | null): ThinkingEffortLevel | null {
+  if (raw && VALID_THINKING_EFFORTS.has(raw)) {
+    return raw as ThinkingEffortLevel;
+  }
+  return null;
+}
+
 function rowToSession(row: SessionRow): SessionRecord {
-  const provider: 'claude' | 'codex' | 'hermes' =
-    row.agent_provider === 'codex'
-      ? 'codex'
-      : row.agent_provider === 'hermes'
-        ? 'hermes'
-        : 'claude';
+  // Older daemon versions persisted 'hermes' here. Those rows are orphaned
+  // (the adapter has been removed); re-map them to 'claude' so the daemon
+  // hydrates cleanly. The session won't actually run as Hermes — the UI
+  // hides Hermes from the provider picker entirely — but the daemon stays
+  // up and the user can delete the stale row.
+  const provider: 'claude' | 'codex' = row.agent_provider === 'codex' ? 'codex' : 'claude';
   const agentSessionId = row.agent_session_id ?? row.claude_session_id;
   const agentSessionIdHistory =
     parseClaudeSessionIdHistory(row.agent_session_id_history).length > 0
@@ -353,6 +368,7 @@ function rowToSession(row: SessionRow): SessionRecord {
     claudeSessionIdHistory: parseClaudeSessionIdHistory(row.claude_session_id_history),
     tags: parseStringArray(row.tags),
     mode: parseSessionMode(row.mode),
+    thinkingEffort: parseThinkingEffort(row.thinking_effort),
     scratchpad: row.scratchpad || '',
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
@@ -363,10 +379,9 @@ function rowToSession(row: SessionRow): SessionRecord {
 
 function inferAgentProvider(
   command: string | null | undefined,
-): 'claude' | 'codex' | 'hermes' {
+): 'claude' | 'codex' {
   const first = (command ?? '').trim().split(/\s+/, 1)[0]?.toLowerCase() ?? '';
   if (first === 'codex') return 'codex';
-  if (first === 'hermes') return 'hermes';
   return 'claude';
 }
 
@@ -399,7 +414,7 @@ export function createSession(data: {
   autorespawn?: boolean;
   terminalAlerts?: boolean;
   fileWatchPatterns?: string[];
-  agentProvider?: 'claude' | 'codex' | 'hermes';
+  agentProvider?: 'claude' | 'codex';
   model?: string | null;
   /**
    * Optional explicit loader variant. Used by the transcript-resume flow to
@@ -408,6 +423,7 @@ export function createSession(data: {
    */
   loaderVariant?: string;
   gitBaselineCommit?: string | null;
+  thinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
 }): SessionRecord {
   const id = uuidv4();
   const now = Date.now();
@@ -431,8 +447,9 @@ export function createSession(data: {
       id, project_id, name, command, working_directory, type,
       autostart, autorestart, autorestart_max, autorestart_delay_ms,
       autorestart_window_secs, autorespawn, terminal_alerts, file_watch_patterns,
-      agent_provider, model, scratchpad, created_at, loader_variant, git_baseline_commit
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
+      agent_provider, model, scratchpad, created_at, loader_variant, git_baseline_commit,
+      thinking_effort
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)
   `).run(
     id,
     data.projectId,
@@ -452,7 +469,8 @@ export function createSession(data: {
     data.model ?? null,
     now,
     loaderVariant,
-    data.gitBaselineCommit ?? null
+    data.gitBaselineCommit ?? null,
+    data.thinkingEffort ?? null
   );
   return getSessionById(id)!;
 }
@@ -475,7 +493,7 @@ export function updateSession(id: string, data: Partial<{
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex' | 'hermes';
+  agentProvider: 'claude' | 'codex';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
@@ -483,6 +501,7 @@ export function updateSession(id: string, data: Partial<{
   claudeSessionIdHistory: string[];
   tags: string[];
   mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
+  thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   scratchpad: string;
   lastActiveAt: number;
 }>): SessionRecord | null {
@@ -507,6 +526,7 @@ export function updateSession(id: string, data: Partial<{
     scratchpad: 'scratchpad',
     lastActiveAt: 'last_active_at',
     mode: 'mode',
+    thinkingEffort: 'thinking_effort',
   };
 
   for (const [key, col] of Object.entries(fieldMap)) {

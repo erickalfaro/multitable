@@ -1,5 +1,11 @@
 import { EventEmitter } from 'node:events';
-import type { AgentSession, SendTurnInput, AlertSeverity, SessionMode } from './types.js';
+import type {
+  AgentSession,
+  SendTurnInput,
+  AlertSeverity,
+  SessionMode,
+  ThinkingEffort,
+} from './types.js';
 import type { ProcessState } from '../types.js';
 import { parseCodexThread, listCodexThreads } from '../transcripts/codexParser.js';
 import type { PermissionManager } from '../hooks/permissionManager.js';
@@ -9,7 +15,6 @@ import { updateSession, insertCostRecord, getSessionById } from '../db/store.js'
 import { detectOptions } from '../hooks/optionDetector.js';
 import { CodexAdapter } from './providers/codex.js';
 import { ClaudeAdapter } from './providers/claude.js';
-import { HermesAdapter } from './providers/hermes.js';
 import { trackedTimeout, type TrackedTimer } from '../devLog.js';
 import type {
   AdapterCallbacks,
@@ -81,6 +86,7 @@ type RegisterInput = Omit<
       | 'provider'
       | 'model'
       | 'mode'
+      | 'thinkingEffort'
       | 'agentSessionId'
       | 'agentSessionIdHistory'
       | 'claudeSessionId'
@@ -101,7 +107,6 @@ export class AgentSessionManager extends EventEmitter {
     this.adapters = {
       claude: new ClaudeAdapter(permManager, elicitManager),
       codex: new CodexAdapter(),
-      hermes: new HermesAdapter(),
     };
   }
 
@@ -117,6 +122,7 @@ export class AgentSessionManager extends EventEmitter {
       provider: input.provider ?? 'claude',
       model: input.model ?? null,
       mode: input.mode ?? 'default',
+      thinkingEffort: input.thinkingEffort ?? null,
       agentSessionId: input.agentSessionId ?? input.claudeSessionId ?? null,
       agentSessionIdHistory: [
         ...(input.agentSessionIdHistory ?? input.claudeSessionIdHistory ?? []),
@@ -268,6 +274,26 @@ export class AgentSessionManager extends EventEmitter {
       console.error('[agent] failed to persist mode:', err);
     }
     this.emit('mode-changed', { sessionId, mode });
+  }
+
+  /**
+   * Update the reasoning-effort level for a session. The change takes effect on
+   * the next turn — Claude adapters read s.thinkingEffort when assembling
+   * query() options; Codex passes it on turn/start. Future providers may
+   * the field (capability flag advertises 'unsupported'; UI disables the
+   * badge). Emits `thinking-effort-changed` so the UI refreshes the badge.
+   */
+  setThinkingEffort(sessionId: string, effort: ThinkingEffort): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    if (s.thinkingEffort === effort) return;
+    s.thinkingEffort = effort;
+    try {
+      updateSession(sessionId, { thinkingEffort: effort });
+    } catch (err) {
+      console.error('[agent] failed to persist thinking effort:', err);
+    }
+    this.emit('thinking-effort-changed', { sessionId, thinkingEffort: effort });
   }
 
   /**
@@ -744,6 +770,7 @@ export class AgentSessionManager extends EventEmitter {
       agentSessionId: s.agentSessionId,
       claudeSessionId: s.claudeSessionId,
       mode: s.mode,
+      thinkingEffort: s.thinkingEffort,
       currentTool: s.currentTool,
       toolCount: s.toolCount,
       tokenCount: s.tokensIn + s.tokensOut + s.cacheCreationTokens + s.cacheReadTokens,

@@ -106,9 +106,10 @@
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-snap: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-fast: 120ms;
-  --dur-med: 160ms;
-  --dur-slow: 220ms;
+  --dur-fast: 80ms;
+  --dur-med: 130ms;
+  --dur-slow: 180ms;
+  --dur-instant: 0ms;
 
   /* Focus ring — 1px amber border, no halo */
   --focus-ring: 0 0 0 1px var(--accent-amber);
@@ -388,6 +389,40 @@ select:focus-visible,
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------- Sidebar item (CSS hover, contained layout) ----------
+ * High-frequency hover surface. The hover state was previously a per-item
+ * React useState which forced a re-render on every mouseenter/leave — with
+ * 20+ sessions in the tree that's a lot of churn for nothing. CSS :hover
+ * removes the React round-trip entirely. `contain: layout style` keeps any
+ * width/text reflow scoped to the row so streaming labels in one row can't
+ * trigger relayout of its neighbors.
+ */
+.mt-sidebar-item {
+  contain: layout style;
+  /* No bg/border transitions on the row itself — selection should SNAP
+     instantly; hover changes feel quicker without easing through. */
+}
+.mt-sidebar-item:not(.is-selected):not(.is-multi):hover {
+  background-color: var(--bg-hover);
+}
+/* Cross-fade between live metrics and the inline Stop action on row hover.
+   Faster than the JS opacity dance the component used to do. */
+.mt-sidebar-item-meta {
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.mt-sidebar-item:hover .mt-sidebar-item-meta.hide-on-hover {
+  opacity: 0;
+}
+.mt-sidebar-item-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.mt-sidebar-item:hover .mt-sidebar-item-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* ---------- Resizable panel handle ----------

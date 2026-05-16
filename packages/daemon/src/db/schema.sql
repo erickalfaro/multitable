@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   claude_session_id_history TEXT DEFAULT '[]',
   tags TEXT DEFAULT '[]',
   mode TEXT DEFAULT 'default',
+  thinking_effort TEXT,
   scratchpad TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   last_active_at INTEGER,

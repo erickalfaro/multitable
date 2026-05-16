@@ -1,185 +1,87 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { spawn } from 'child_process';
+import type { ProviderCatalog, Provider } from '../providers/catalog.js';
 
-// Discovered models we expose to the UI. Both providers populate this from a
-// runtime probe — never a hardcoded version list — so a model change on the
-// server side doesn't require a client release.
+// DiscoveredModel mirrors the shape ProviderCatalog produces and the
+// AddAgentModal consumes. Kept here as the wire-format type so the web client
+// can re-export it without depending on the catalog module.
 export interface DiscoveredModel {
   id: string;
   displayName: string;
   description?: string;
   isDefault?: boolean;
+  // Per-model effort metadata. effortLevels lists exactly which tiers the model
+  // accepts; the badge dropdown filters against this so the user can't pick a
+  // tier that the model would reject (e.g. `max` on Sonnet, `xhigh` on a Codex
+  // model that doesn't support it).
+  supportsEffort?: boolean;
+  effortLevels?: Array<'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
+  defaultEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 interface ProvidersDeps {
-  getDaemonEnv: () => NodeJS.ProcessEnv;
+  catalog: ProviderCatalog;
 }
 
-// Run a CLI helper and return its stdout. Bounded by a soft timeout so a stuck
-// child can never hang the HTTP request.
-function execStdout(
-  cmd: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  timeoutMs = 6000,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { env });
-    let out = '';
-    let err = '';
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {}
-      reject(new Error(`${cmd} ${args.join(' ')}: timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on('data', (b) => {
-      out += b.toString();
-    });
-    child.stderr.on('data', (b) => {
-      err += b.toString();
-    });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(out);
-      else reject(new Error(`${cmd} exited ${code}: ${err.trim() || out.trim()}`));
-    });
-  });
-}
+const VALID_PROVIDERS: Provider[] = ['claude', 'codex'];
 
-// Codex ships a `codex debug models` subcommand that prints the live model
-// catalog as JSON (the same data its TUI picker uses). This is the source of
-// truth — we don't keep a fallback list, since shipping a stale local list is
-// the exact failure mode the user asked us to avoid. If the call fails we
-// surface the error so the UI can say "couldn't load Codex models" instead of
-// silently substituting outdated entries.
-async function listCodexModels(env: NodeJS.ProcessEnv): Promise<DiscoveredModel[]> {
-  const stdout = await execStdout('codex', ['debug', 'models'], env);
-  const parsed = JSON.parse(stdout);
-  const raw = Array.isArray(parsed?.models) ? parsed.models : [];
-  return raw
-    .filter((m: any) => m && typeof m.slug === 'string' && m.visibility !== 'hide')
-    .map((m: any) => ({
-      id: String(m.slug),
-      displayName: typeof m.display_name === 'string' && m.display_name ? m.display_name : String(m.slug),
-      description: typeof m.description === 'string' ? m.description : undefined,
-    }));
-}
-
-// Hermes (Nous Research) routes Grok 4.3 + the grok-4.20 variants through its
-// xAI OAuth provider. There's no `hermes models --json` CLI surface today;
-// the live catalog ships with the `models.dev` cache referenced in the xAI
-// Grok OAuth docs (https://hermes-agent.nousresearch.com/docs/guides/xai-grok-oauth).
-// Return the canonical list xAI documents as the chat catalog — grok-4.3 is
-// pinned default. Legacy slugs (grok-4-1-fast, grok-4-fast, grok-code-fast-1)
-// redirect to grok-4.3 server-side as of 2026-05-15, so callers that picked
-// older ids continue to work.
-async function listHermesModels(_env: NodeJS.ProcessEnv): Promise<DiscoveredModel[]> {
-  return [
-    {
-      id: 'grok-4.3',
-      displayName: 'Grok 4.3',
-      description: 'xAI flagship. 1M context, agentic tool calling, reasoning.',
-      isDefault: true,
-    },
-    {
-      id: 'grok-4.20-0309-reasoning',
-      displayName: 'Grok 4.20 Reasoning',
-      description: 'Reasoning variant for harder problems.',
-    },
-    {
-      id: 'grok-4.20-0309-non-reasoning',
-      displayName: 'Grok 4.20',
-      description: 'Non-reasoning variant.',
-    },
-    {
-      id: 'grok-4.20-multi-agent-0309',
-      displayName: 'Grok 4.20 Multi-agent',
-      description: 'Multi-agent variant.',
-    },
-  ];
-}
-
-// Claude has no equivalent "list models" CLI subcommand. The closest live
-// source is the Anthropic REST API `/v1/models`, which only authenticates with
-// `ANTHROPIC_API_KEY` (OAuth tokens from `claude login` are rejected for that
-// endpoint). When the API key is set we fetch live; otherwise we return the
-// canonical alias set the Claude Code SDK accepts ('opus' / 'sonnet' /
-// 'haiku'). Aliases are *server-resolved* — they always point at the latest
-// version on Anthropic's side, so this isn't a frozen version list, it's a
-// stable indirection. This is the smallest surface that still lets the user
-// pick a tier without us baking in a specific model release.
-async function listClaudeModels(env: NodeJS.ProcessEnv): Promise<DiscoveredModel[]> {
-  const apiKey = env.ANTHROPIC_API_KEY;
-  if (apiKey) {
-    try {
-      const res = await fetch('https://api.anthropic.com/v1/models?limit=100', {
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-      });
-      if (res.ok) {
-        const body = (await res.json()) as { data?: Array<{ id: string; display_name?: string }> };
-        const data = Array.isArray(body.data) ? body.data : [];
-        if (data.length > 0) {
-          return data.map((m) => ({
-            id: m.id,
-            displayName: m.display_name || m.id,
-          }));
-        }
-      }
-    } catch {
-      /* fall through to alias set */
-    }
-  }
-  return [
-    {
-      id: 'opus',
-      displayName: 'Opus (latest)',
-      description: 'Most capable. Highest cost. Resolves to the latest Opus on each turn.',
-    },
-    {
-      id: 'sonnet',
-      displayName: 'Sonnet (latest)',
-      description: 'Balanced speed and capability. Resolves to the latest Sonnet on each turn.',
-      isDefault: true,
-    },
-    {
-      id: 'haiku',
-      displayName: 'Haiku (latest)',
-      description: 'Fastest and cheapest. Resolves to the latest Haiku on each turn.',
-    },
-  ];
+function isProvider(s: unknown): s is Provider {
+  return typeof s === 'string' && (VALID_PROVIDERS as string[]).includes(s);
 }
 
 export function createProvidersRouter(deps: ProvidersDeps): Router {
   const router = Router();
 
-  router.get('/:provider/models', async (req: Request, res: Response) => {
+  // GET /api/providers/:provider/models
+  //
+  // Serves the in-memory cached catalog. Never blocks on live discovery — the
+  // first /api/providers call after boot returns whatever's in the cache
+  // (baseline if first ever boot, last cached values otherwise). Discovery
+  // runs in the background and pushes updates over WS.
+  router.get('/:provider/models', (req: Request, res: Response) => {
     const provider = String(req.params.provider || '').toLowerCase();
-    try {
-      const env = deps.getDaemonEnv();
-      let models: DiscoveredModel[];
-      if (provider === 'codex') {
-        models = await listCodexModels(env);
-      } else if (provider === 'claude') {
-        models = await listClaudeModels(env);
-      } else if (provider === 'hermes') {
-        models = await listHermesModels(env);
-      } else {
-        return res.status(404).json({ error: `unknown provider: ${provider}` });
-      }
-      res.json({ provider, models });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(502).json({ error: message, provider });
+    if (!isProvider(provider)) {
+      return res.status(404).json({ error: `unknown provider: ${provider}` });
     }
+    const entry = deps.catalog.get(provider);
+    res.json({
+      provider,
+      models: entry.models,
+      lastRefreshed: entry.lastRefreshed,
+      lastError: entry.lastError,
+    });
+  });
+
+  // GET /api/providers/catalog
+  //
+  // Full snapshot across all providers — used by anything that wants to see
+  // when each catalog was last refreshed (e.g. a "last updated 5m ago" label).
+  router.get('/catalog', (_req: Request, res: Response) => {
+    res.json(deps.catalog.getAll());
+  });
+
+  // POST /api/providers/refresh
+  //
+  // Triggers live discovery. Body: `{ provider?: 'claude' | 'codex' }`.
+  // Omit the provider to refresh all three in parallel. De-duplicated by the
+  // catalog module — concurrent clicks share the same in-flight Promise.
+  // Returns 202 Accepted with the current snapshot; updates land async via WS.
+  router.post('/refresh', (req: Request, res: Response) => {
+    const provider = req.body?.provider;
+    if (provider !== undefined && !isProvider(provider)) {
+      return res
+        .status(400)
+        .json({ error: `invalid provider: ${provider}. Expected one of ${VALID_PROVIDERS.join(', ')}` });
+    }
+    if (provider) {
+      void deps.catalog.refresh(provider);
+    } else {
+      void deps.catalog.refreshAll();
+    }
+    res.status(202).json({
+      ok: true,
+      refreshing: provider ? [provider] : VALID_PROVIDERS,
+    });
   });
 
   return router;

@@ -23,6 +23,7 @@ import { createNotesRouter } from './api/notes.js';
 import { createIntegrationsRouter } from './api/integrations.js';
 import { createGitRouter } from './api/git.js';
 import { createProvidersRouter } from './api/providers.js';
+import type { ProviderCatalog } from './providers/catalog.js';
 import type { TelegramBridge } from './notifications/telegramBridge.js';
 import type { GitWatcher } from './git/watcher.js';
 import { getSessionById } from './db/store.js';
@@ -45,6 +46,7 @@ export function createServer(
   elicitManager: ElicitationManager,
   tgBridge: TelegramBridge,
   gitWatcher: GitWatcher,
+  catalog: ProviderCatalog,
 ): ServerInstance {
   const app = express();
   app.use(express.json({ limit: '10mb' }));
@@ -102,7 +104,7 @@ export function createServer(
   app.use('/api/notes', createNotesRouter());
   app.use('/api/integrations', createIntegrationsRouter(tgBridge, permManager, agentManager));
   app.use('/api/projects/:projectId/git', createGitRouter());
-  app.use('/api/providers', createProvidersRouter({ getDaemonEnv: () => process.env }));
+  app.use('/api/providers', createProvidersRouter({ catalog }));
 
   // ─── Internal agent-turn endpoint (Phase 2) ────────────────────────────────
   //
@@ -132,6 +134,8 @@ export function createServer(
         workingDir: row.workingDirectory || '',
         provider: row.agentProvider,
         model: row.model,
+        mode: row.mode,
+        thinkingEffort: row.thinkingEffort,
         agentSessionId: row.agentSessionId,
         agentSessionIdHistory: row.agentSessionIdHistory ?? [],
         claudeSessionId: row.claudeSessionId,
@@ -291,6 +295,7 @@ export function createServer(
       state: agent?.state ?? 'stopped',
       pid: null,
       mode: agent?.mode ?? session.mode ?? 'default',
+      thinkingEffort: agent?.thinkingEffort ?? session.thinkingEffort ?? null,
       capabilities,
     };
   };
@@ -384,6 +389,28 @@ export function createServer(
     'mode-changed',
     ({ sessionId, mode }: { sessionId: string; mode: string }) => {
       broadcast('session:mode-changed', { sessionId, mode });
+    },
+  );
+
+  // Thinking-effort change — same shape as mode-changed.
+  agentManager.on(
+    'thinking-effort-changed',
+    ({ sessionId, thinkingEffort }: { sessionId: string; thinkingEffort: string }) => {
+      broadcast('session:thinking-effort-changed', { sessionId, thinkingEffort });
+    },
+  );
+
+  // Provider catalog updates — broadcast on every refresh (success or error)
+  // so any open UI rerenders its model dropdowns without polling.
+  catalog.on(
+    'updated',
+    (payload: {
+      provider: 'claude' | 'codex';
+      models: unknown;
+      lastRefreshed: number | null;
+      lastError: string | null;
+    }) => {
+      broadcast('providers:catalog-updated', payload);
     },
   );
 

@@ -12,6 +12,9 @@ import { checkOrphanedPids } from './pids.js';
 import { loadProjectConfig } from './config/loader.js';
 import { TelegramBridge } from './notifications/telegramBridge.js';
 import { getTelegramToken } from './config/secrets.js';
+import { ProviderCatalog } from './providers/catalog.js';
+import { resolveClaudeCodeExecutable } from './agent/providers/claude.js';
+import os from 'node:os';
 import type { SpawnConfig, ProcessConfig } from './types.js';
 
 function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig {
@@ -109,7 +112,18 @@ async function main() {
     broadcastRef('git:status-changed', { projectId, status });
   });
 
-  // 5c. Express/WS server (mounts /api/integrations using the bridge above).
+  // 5c. Provider catalog — hydrate from on-disk cache BEFORE the server
+  // starts so the very first /api/providers call returns cached data instead
+  // of bare baselines. Background refresh is kicked off after the server is
+  // listening (see below).
+  const catalog = new ProviderCatalog({
+    getDaemonEnv: () => process.env,
+    resolveClaudeExecutable: resolveClaudeCodeExecutable,
+    discoveryCwd: os.tmpdir(),
+  });
+  await catalog.hydrate();
+
+  // 5d. Express/WS server (mounts /api/integrations using the bridge above).
   const serverInstance = createServer(
     config,
     manager,
@@ -118,6 +132,7 @@ async function main() {
     elicitManager,
     tgBridge,
     gitWatcher,
+    catalog,
   );
   const { server, broadcast } = serverInstance;
   broadcastRef = broadcast;
@@ -153,6 +168,7 @@ async function main() {
         provider: session.agentProvider,
         model: session.model,
         mode: session.mode,
+        thinkingEffort: session.thinkingEffort,
         agentSessionId: session.agentSessionId ?? null,
         agentSessionIdHistory: session.agentSessionIdHistory ?? [],
         claudeSessionId: session.claudeSessionId ?? null,
@@ -202,6 +218,11 @@ async function main() {
   server.listen(config.port, config.host, () => {
     console.log(`MultiTable daemon running at http://${config.host}:${config.port}`);
     console.log(`WebSocket endpoint: ws://${config.host}:${config.port}/ws`);
+    // Background catalog refresh — fires after the daemon is listening so the
+    // ~2-4s of discovery work doesn't delay first paint. Errors per provider
+    // are isolated; WS broadcast lets any open UI rerender model dropdowns
+    // when fresh results land.
+    void catalog.refreshAll();
   });
 
   // 10. Graceful shutdown — idempotent, force exits within 2s

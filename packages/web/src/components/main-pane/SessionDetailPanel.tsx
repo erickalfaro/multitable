@@ -324,10 +324,10 @@ function CostTab({ session }: { session: Session }) {
     );
   }
 
-  // Codex and Hermes expose only token counts — no USD field on Usage. Hiding
-  // the big cost figure for these providers until/unless we wire a model-rate
-  // lookup. Token usage and cache breakdown still render below.
-  const showDollarCost = provider !== 'codex' && provider !== 'hermes';
+  // Codex exposes only token counts — no USD field on Usage. Hiding the big
+  // cost figure for Codex until/unless we wire a model-rate lookup. Token
+  // usage and cache breakdown still render below.
+  const showDollarCost = provider !== 'codex';
 
   return (
     <div style={{ padding: 16 }}>
@@ -343,11 +343,7 @@ function CostTab({ session }: { session: Session }) {
           {showDollarCost ? formatCost(costUsd) : '—'}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-          {showDollarCost
-            ? 'Total session cost'
-            : provider === 'hermes'
-              ? 'Cost not tracked for Hermes'
-              : 'Cost not tracked for Codex'}
+          {showDollarCost ? 'Total session cost' : 'Cost not tracked for Codex'}
         </div>
       </div>
 
@@ -423,11 +419,7 @@ function CostTab({ session }: { session: Session }) {
           }}
         >
           <span style={{ color: 'var(--text-secondary)', flexShrink: 0 }}>
-            {provider === 'codex'
-              ? 'Thread ID'
-              : provider === 'hermes'
-                ? 'Hermes session ID'
-                : 'Session ID'}
+            {provider === 'codex' ? 'Thread ID' : 'Session ID'}
           </span>
           <button
             onClick={handleCopyId}

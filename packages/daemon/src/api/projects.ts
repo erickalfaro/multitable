@@ -384,14 +384,17 @@ export function createProjectsRouter(
     }
 
     try {
-      const provider: 'claude' | 'codex' | 'hermes' | undefined =
-        agentProvider === 'claude' ||
-        agentProvider === 'codex' ||
-        agentProvider === 'hermes'
-          ? agentProvider
-          : undefined;
+      const provider: 'claude' | 'codex' | undefined =
+        agentProvider === 'claude' || agentProvider === 'codex' ? agentProvider : undefined;
       const modelId =
         typeof model === 'string' && model.trim().length > 0 ? model.trim() : null;
+      // Seed thinking effort from the user's last choice so newly-created
+      // sessions inherit the sticky default. Falls back to 'medium' the first
+      // time anyone uses the feature. (GlobalConfig.lastThinkingEffort is
+      // updated by the /:id/thinking-effort endpoint on every flip.)
+      const cfg = loadGlobalConfig();
+      const seedEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' =
+        cfg.lastThinkingEffort ?? 'medium';
       const session = createSession({
         projectId: req.params.id,
         name,
@@ -406,6 +409,7 @@ export function createProjectsRouter(
         gitBaselineCommit,
         agentProvider: provider,
         model: modelId,
+        thinkingEffort: seedEffort,
       });
       // Register in the agent manager so the next session:send doesn't race
       // the DB write, and so capabilities are available for the response.
@@ -417,6 +421,7 @@ export function createProjectsRouter(
         provider: session.agentProvider,
         model: session.model,
         mode: session.mode,
+        thinkingEffort: session.thinkingEffort,
         agentSessionId: session.agentSessionId ?? null,
         agentSessionIdHistory: session.agentSessionIdHistory ?? [],
         claudeSessionId: session.claudeSessionId ?? null,

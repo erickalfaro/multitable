@@ -728,6 +728,32 @@ function App() {
         if (!session) return;
         useAppStore.getState().upsertSession({ ...session, mode } as Session);
       }),
+      // session:thinking-effort-changed — broadcast when the per-session
+      // reasoning-effort badge flips. Same shape/intent as mode-changed.
+      wsClient.on('session:thinking-effort-changed', (msg: any) => {
+        const { sessionId, thinkingEffort } = msg.payload || {};
+        if (typeof sessionId !== 'string' || typeof thinkingEffort !== 'string') return;
+        const session = useAppStore.getState().sessions[sessionId];
+        if (!session) return;
+        useAppStore.getState().upsertSession({
+          ...session,
+          thinkingEffort: thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+        } as Session);
+      }),
+      // providers:catalog-updated — daemon ran live discovery (or refreshed
+      // on user request). Replace the in-memory model catalog so model
+      // dropdowns rerender with fresh data and the per-model effort gating
+      // becomes accurate.
+      wsClient.on('providers:catalog-updated', (msg: any) => {
+        const { provider, models } = msg.payload || {};
+        if (
+          (provider !== 'claude' && provider !== 'codex') ||
+          !Array.isArray(models)
+        ) {
+          return;
+        }
+        useAppStore.getState().setModelCatalog(provider, models);
+      }),
       wsClient.on('session:state-updated', (msg: any) => {
         // The daemon's AgentSessionManager broadcasts a snapshot of cost,
         // tokens, currentTool, etc. on every SDK `result` and on each tool
