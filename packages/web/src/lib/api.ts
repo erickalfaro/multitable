@@ -265,6 +265,12 @@ export const api = {
       post<{ ok: true }>(`/api/projects/${projectId}/git/stash`, { message }),
     stashPop: (projectId: string) =>
       post<{ ok: true }>(`/api/projects/${projectId}/git/stash/pop`),
+    fetch: (projectId: string, remote?: string) =>
+      post<{ ok: true; summary: string }>(`/api/projects/${projectId}/git/fetch`, { remote }),
+    pull: (projectId: string, opts?: { remote?: string; branch?: string }) =>
+      post<{ ok: true; summary: string }>(`/api/projects/${projectId}/git/pull`, opts ?? {}),
+    push: (projectId: string, opts?: { setUpstream?: boolean; remote?: string; branch?: string }) =>
+      post<{ ok: true; summary: string }>(`/api/projects/${projectId}/git/push`, opts ?? {}),
   },
   search: (q: string) =>
     get<Array<{ sessionId: string; name: string; snippet: string }>>(

@@ -47,8 +47,8 @@ export function GitCommitComposer({
         onChange={(e) => setMessage(e.target.value)}
         placeholder={
           stagedCount === 0
-            ? 'Stage files to commit…'
-            : `Commit message (${stagedCount} staged)`
+            ? 'Stage files above, then write a commit message…'
+            : 'Commit message (Ctrl+Enter to commit)'
         }
         disabled={stagedCount === 0 || busy}
         rows={2}
@@ -82,7 +82,11 @@ export function GitCommitComposer({
             cursor: canCommit ? 'pointer' : 'not-allowed',
           }}
         >
-          {busy ? 'Committing…' : 'Commit'}
+          {busy
+            ? 'Committing…'
+            : stagedCount > 0
+            ? `Commit ${stagedCount} file${stagedCount === 1 ? '' : 's'}`
+            : 'Commit'}
         </button>
         <button
           type="button"
