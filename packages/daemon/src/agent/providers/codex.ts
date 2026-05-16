@@ -1,4 +1,4 @@
-import type { AgentSession, SessionMode } from '../types.js';
+import type { AgentSession } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
 import type { ProviderAdapter, ProviderCapabilities, AdapterCallbacks } from './types.js';
 import { CodexAppServerClient } from './codex-app-server/index.js';
@@ -22,31 +22,32 @@ import {
   codexCanonicalId,
 } from '../../transcripts/codexParser.js';
 
-// Translate provider-agnostic SessionMode → Codex sandbox knobs. Codex has no
-// per-call permission callback (approvalPolicy is set at thread/turn start
-// time and we hardcode "never" — see CodexAppServerClient), so the only way
-// to constrain its behavior is via the spawn-time sandbox.
+// === Native Codex sandbox modes ============================================
 //
-//   default    → workspace-write (normal operation)
-//   plan       → read-only (agent reads + reasons, can't mutate; user resumes
-//                with workspace-write to execute the plan)
-//   read-only  → read-only (no mutations)
-//   accept-edits / auto / chat → not advertised in capabilities.modes for
-//                                Codex; the manager's setMode rejects them.
-function modeToCodexSandbox(mode: SessionMode): SandboxMode {
-  switch (mode) {
-    case 'plan':
-    case 'read-only':
-      return 'read-only';
-    case 'auto':
-      return 'danger-full-access';
-    case 'default':
-    case 'accept-edits':
-    case 'chat':
-    default:
-      return 'workspace-write';
-  }
-}
+// The Codex protocol's `SandboxMode` enum (generated from the codex-app-server
+// schema). MultiTable passes `session.mode` straight through to `thread/start`
+// — no translation layer. Codex enforces these at the OS sandbox level;
+// approvalPolicy is hardcoded to "never" since per-call permission callbacks
+// don't exist in the Codex protocol (see CodexAppServerClient).
+const CODEX_NATIVE_MODES = [
+  {
+    value: 'workspace-write' as SandboxMode,
+    label: 'Workspace write',
+    description: 'Agent can read and edit files inside the workspace.',
+  },
+  {
+    value: 'read-only' as SandboxMode,
+    label: 'Read-only',
+    description: 'No file mutations; agent can read and reason only.',
+  },
+  {
+    value: 'danger-full-access' as SandboxMode,
+    label: 'Full access',
+    description: 'Full filesystem access outside the workspace — advanced.',
+  },
+] as const;
+
+export type { SandboxMode };
 
 // CodexAdapter — driven by the long-lived `codex app-server` JSON-RPC child.
 //
@@ -136,10 +137,10 @@ export class CodexAdapter implements ProviderAdapter {
     // Codex does not surface per-turn cost in USD — by design, codex pricing
     // is contract-specific. The UI hides the dollar row.
     costUsd: false,
-    // Plan mode is TUI-only in Codex; we approximate via sandbox swap
-    // (read-only thread → resume workspace-write) but the wiring lives in
-    // the manager today, not here. Mark as 'simulated' so UI gates accordingly.
-    planMode: 'simulated',
+    // Codex has no native plan mode — the sandbox enum is the only knob.
+    // The previous "simulated plan via read-only swap" UX was a MultiTable
+    // invention and got dropped along with the SessionMode translation layer.
+    planMode: 'none',
     // Sandbox enum, no per-call host approval — approvalPolicy is hardcoded
     // to "never" and Codex enforces the actual sandbox at the OS level.
     perCallApproval: 'sandbox',
@@ -155,17 +156,15 @@ export class CodexAdapter implements ProviderAdapter {
     // accumulates these and emits cumulative text to the WS layer.
     streamingDeltaSemantics: 'additive',
     modelSwitchScope: 'per-thread',
-    // Read-only and default we can simulate via sandbox. Plan is also
-    // simulated. Other modes (chat, accept-edits, auto) don't map cleanly to
-    // the codex sandbox enum — leave them out so the UI doesn't show them.
-    modes: ['default', 'plan', 'read-only'],
+    // Native SandboxMode values passed straight through to thread/start.
+    modes: CODEX_NATIVE_MODES.map((m) => ({ ...m })),
     thinkingEffort: 'native',
   };
 
   private client: CodexAppServerClient;
   // Per-session thread cache. Codex options are immutable post-thread-start;
   // we have to rebuild the thread on mode flip.
-  private threads = new Map<string, { threadId: string; mode: SessionMode }>();
+  private threads = new Map<string, { threadId: string; mode: string }>();
   private turnStates = new Map<string, TurnState>();
 
   constructor(client?: CodexAppServerClient) {
@@ -193,7 +192,8 @@ export class CodexAdapter implements ProviderAdapter {
     cb: AdapterCallbacks,
   ): Promise<void> {
     if (s.agentSessionId) return;
-    const sandbox = modeToCodexSandbox(s.mode);
+    // s.mode is already a native SandboxMode string (validated on write).
+    const sandbox = s.mode as SandboxMode;
     const threadId = await this.client.createThread({
       cwd: s.workingDir,
       sandbox,
@@ -371,7 +371,8 @@ export class CodexAdapter implements ProviderAdapter {
     const existing = this.threads.get(s.id);
     if (existing && existing.mode === s.mode) return existing.threadId;
 
-    const sandbox = modeToCodexSandbox(s.mode);
+    // s.mode is already a native SandboxMode string (validated on write).
+    const sandbox = s.mode as SandboxMode;
     let threadId: string;
     if (s.agentSessionId) {
       try {

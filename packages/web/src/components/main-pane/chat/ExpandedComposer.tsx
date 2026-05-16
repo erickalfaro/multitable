@@ -246,7 +246,7 @@ export function ExpandedComposer({
         activateOnTyping: true,
         defaultKeymap: true,
         maxRenderedOptions: 40,
-        icons: true,
+        icons: false,
       }),
       placeholder('Draft your message — Esc or Accept to save back to the composer'),
       keymap.of([...closeBracketsKeymap, ...completionKeymap]),

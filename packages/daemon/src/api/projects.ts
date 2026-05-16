@@ -19,7 +19,6 @@ import {
   createCommand,
   createTerminal,
 } from '../db/store.js';
-import { getCurrentCommit, isGitRepo } from '../git/index.js';
 import type { GitWatcher } from '../git/watcher.js';
 import { loadProjectConfig, loadGlobalConfig } from '../config/loader.js';
 import { removeAttachmentDir } from './attachments.js';
@@ -321,10 +320,22 @@ export function createProjectsRouter(
     const project = getProjectById(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const sessions = getSessionsByProject(req.params.id);
-    // Enrich with running state
+    // Match the shape of /api/sessions and /api/sessions/:id so the web client
+    // sees capabilities / mode / thinkingEffort on initial load. Without them,
+    // ModeBadge stays hidden until a later syncSession() lands (selection /
+    // running-state triggers it), producing a "the chip appears after I
+    // interact with the page" UX bug.
     const enriched = sessions.map((s) => {
       const agent = agentManager.get(s.id);
-      return { ...s, state: agent?.state ?? 'stopped', pid: null };
+      const capabilities = agentManager.getCapabilities(s.id);
+      return {
+        ...s,
+        state: agent?.state ?? 'stopped',
+        pid: null,
+        mode: agent?.mode ?? s.mode ?? 'default',
+        thinkingEffort: agent?.thinkingEffort ?? s.thinkingEffort ?? null,
+        capabilities,
+      };
     });
     res.json(enriched);
   });
@@ -374,15 +385,6 @@ export function createProjectsRouter(
       return res.status(400).json({ error: 'name and command are required' });
     }
 
-    // Capture HEAD now so the per-agent diff scope can show only what this
-    // agent touched. Failures are non-fatal — sessions still work without it.
-    let gitBaselineCommit: string | null = null;
-    if (isGitRepo(project.path)) {
-      try {
-        gitBaselineCommit = await getCurrentCommit(project.path);
-      } catch {}
-    }
-
     try {
       const provider: 'claude' | 'codex' | undefined =
         agentProvider === 'claude' || agentProvider === 'codex' ? agentProvider : undefined;
@@ -406,7 +408,6 @@ export function createProjectsRouter(
         autorespawn,
         terminalAlerts,
         fileWatchPatterns,
-        gitBaselineCommit,
         agentProvider: provider,
         model: modelId,
         thinkingEffort: seedEffort,

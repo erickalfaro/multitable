@@ -18,16 +18,15 @@ export interface DiscoveredModel {
   defaultEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
-// Provider-agnostic operating mode. Each adapter translates these to its own
-// native primitive (Claude permissionMode, Codex sandboxMode, Copilot system
-// prompt + onPreToolUse). UI gates which modes appear via ProviderCapabilities.
-export type SessionMode =
-  | 'default'
-  | 'plan'
-  | 'accept-edits'
-  | 'auto'
-  | 'chat'
-  | 'read-only';
+// Single entry in `ProviderCapabilities.modes`. The `value` is the literal
+// native SDK string the adapter declared (Claude `PermissionMode`, Codex
+// `SandboxMode`, etc.) — UI renders it verbatim, API/store passes it back
+// to the adapter unchanged. There is no MultiTable-side translation layer.
+export interface ModeOption {
+  value: string;
+  label: string;
+  description: string;
+}
 
 // Cross-provider reasoning-effort level. Mirrors daemon's ThinkingEffort and
 // the Claude SDK's EffortLevel enum (low / medium / high / xhigh / max).
@@ -50,7 +49,7 @@ export interface ProviderCapabilities {
   hooks: 'rich' | 'six' | 'none';
   streamingDeltaSemantics: 'additive' | 'cumulative';
   modelSwitchScope: 'per-turn' | 'per-thread' | 'per-session';
-  modes: SessionMode[];
+  modes: ModeOption[];
   // Cross-provider reasoning-effort toggle. 'native' = adapter passes the
   // value through to the SDK; 'unsupported' = UI renders the badge disabled.
   thinkingEffort: 'native' | 'unsupported';
@@ -111,9 +110,11 @@ export interface Session extends ManagedProcess {
   // user accepted the provider default. Sent on every turn so the daemon
   // pins the same model across resumes.
   model: string | null;
-  // Operating mode (default / plan / accept-edits / etc.). Persisted; takes
-  // effect on the next turn.
-  mode: SessionMode;
+  // Native operating mode for this session. The string is whatever the
+  // adapter declared in `capabilities.modes` (Claude `PermissionMode`, Codex
+  // `SandboxMode`) — passed straight through to the SDK by the daemon. The
+  // UI looks the value up in `capabilities.modes` for its label/description.
+  mode: string;
   // Reasoning-effort level (low / medium / high / xhigh / max). Null means
   // "use provider default". Persisted; flows through to the SDK on the next
   // turn for providers that support it. The two highest tiers are gated
@@ -132,7 +133,6 @@ export interface Session extends ManagedProcess {
   loaderVariant?: string | null; // dot-matrix loader assigned at session creation
   createdAt?: number;
   lastActiveAt?: number | null; // bumped per turn boundary so the sidebar can sort by recency
-  gitBaselineCommit?: string | null; // HEAD at session-create time; powers the per-agent diff scope
 }
 
 export interface Command extends ManagedProcess {

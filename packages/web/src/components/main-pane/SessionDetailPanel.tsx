@@ -17,7 +17,7 @@ interface Props {
 }
 
 const TABS: { id: DetailPanelTab; label: string }[] = [
-  { id: 'diff', label: 'Diff' },
+  { id: 'diff', label: 'Source Control' },
   { id: 'files', label: 'Files' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'cost', label: 'Cost' },
@@ -1003,7 +1003,7 @@ export function SessionDetailPanel({ session, projectId }: Props) {
         }}
       >
         {detailPanelTab === 'diff' && (
-          <GitPanel projectId={projectId} sessionId={session.id} />
+          <GitPanel projectId={projectId} />
         )}
         {detailPanelTab === 'files' && <FilesTab projectId={projectId} />}
         {detailPanelTab === 'tasks' && <TasksTab sessionId={session.id} />}

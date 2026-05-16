@@ -4,7 +4,6 @@ import simpleGit, { type SimpleGit, type StatusResult } from 'simple-git';
 import type {
   GitBranchList,
   GitFileEntry,
-  GitFileStatus,
   GitLogEntry,
   GitStatusSummary,
 } from '../types.js';
@@ -102,18 +101,43 @@ export async function getStatusSummary(projectPath: string): Promise<GitStatusSu
   };
 }
 
-// simple-git's bucket arrays overlap (e.g. a deleted-and-staged file appears
-// in both `staged` and `deleted`). Dedup by path while picking the more
-// specific status (renamed > added > deleted > modified).
+// simple-git's `status.deleted` and `status.created` mix index changes with
+// working-tree changes (e.g. a file deleted in the working tree but not
+// staged still appears in `status.deleted`). Read the per-file `index` flag
+// directly so we only surface real staged changes — symmetric to how
+// `collectUnstaged` reads `working_dir`.
 function collectStaged(status: StatusResult): GitFileEntry[] {
-  const byPath = new Map<string, GitFileEntry>();
-  for (const f of status.staged) byPath.set(f, { path: f, status: 'modified' });
-  for (const f of status.deleted) byPath.set(f, { path: f, status: 'deleted' });
-  for (const f of status.created) byPath.set(f, { path: f, status: 'added' });
-  for (const r of status.renamed) {
-    byPath.set(r.to, { path: r.to, oldPath: r.from, status: 'renamed' });
+  const renamed = new Map<string, string>(); // newPath → oldPath
+  for (const r of status.renamed) renamed.set(r.to, r.from);
+
+  const out: GitFileEntry[] = [];
+  for (const f of status.files) {
+    if (renamed.has(f.path)) {
+      out.push({ path: f.path, oldPath: renamed.get(f.path), status: 'renamed' });
+      continue;
+    }
+    switch (f.index) {
+      case 'M':
+        out.push({ path: f.path, status: 'modified' });
+        break;
+      case 'A':
+        out.push({ path: f.path, status: 'added' });
+        break;
+      case 'D':
+        out.push({ path: f.path, status: 'deleted' });
+        break;
+      case 'R':
+        out.push({ path: f.path, status: 'renamed' });
+        break;
+      case 'C':
+        out.push({ path: f.path, status: 'copied' });
+        break;
+      default:
+        // ' ' (no index change), '?' (untracked), 'U' (unmerged): skip.
+        break;
+    }
   }
-  return [...byPath.values()];
+  return out;
 }
 
 function collectUnstaged(status: StatusResult): GitFileEntry[] {

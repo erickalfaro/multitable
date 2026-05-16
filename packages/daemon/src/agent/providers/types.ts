@@ -108,24 +108,25 @@ export interface ToolDeltaPayload {
   isError: boolean;
 }
 
-// === SessionMode ===========================================================
+// === ModeOption ============================================================
 //
-// Provider-agnostic operating mode for a session. Each provider translates
-// these to its native primitives:
-//   - Claude   → permissionMode + system prompt
-//   - Codex    → sandboxMode + (system prompt at session level not exposed)
-//   - Copilot  → systemMessage + onPreToolUse shaping
-//
-// Adapters declare which modes they support via ProviderCapabilities.modes.
-// The UI hides modes the current provider can't honor.
+// A single entry in `ProviderCapabilities.modes`. Each adapter declares the
+// list of modes its provider natively supports — the `value` is the literal
+// string the SDK accepts (e.g. Claude's `PermissionMode` enum or Codex's
+// `SandboxMode` enum). MultiTable does NOT invent extra modes or translate
+// between provider primitives: whatever the adapter declares here is what
+// goes straight back to the SDK on the next turn.
 
-export type SessionMode =
-  | 'default'      // normal: tools execute, prompts on demand
-  | 'plan'         // read-only research: produce a plan, no edits
-  | 'accept-edits' // auto-approve all tool calls
-  | 'auto'         // bypass all permissions (advanced)
-  | 'chat'         // conversation only, no tool execution
-  | 'read-only';   // no mutations, but tools other than write run
+export interface ModeOption {
+  /** Native SDK value passed through verbatim (e.g. 'acceptEdits' for Claude,
+   * 'workspace-write' for Codex). */
+  value: string;
+  /** Display label — short, suitable for the dropdown trigger. */
+  label: string;
+  /** One-line description shown beneath the label in the dropdown.
+   * For Claude these are lifted from the SDK JSDoc verbatim. */
+  description: string;
+}
 
 // === ProviderCapabilities ==================================================
 //
@@ -159,8 +160,11 @@ export interface ProviderCapabilities {
   streamingDeltaSemantics: 'additive' | 'cumulative';
   // When the model id can be changed.
   modelSwitchScope: 'per-turn' | 'per-thread' | 'per-session';
-  // Modes the adapter actually implements. UI hides others.
-  modes: SessionMode[];
+  // Native modes the adapter accepts, with display metadata. The `value` of
+  // each entry is the literal string the SDK takes (no MultiTable translation
+  // layer); the UI renders them verbatim and the API validates against this
+  // list on `setMode`.
+  modes: ModeOption[];
   // Cross-provider reasoning-effort toggle. 'native' = adapter wires the value
   // through to the SDK (Claude `effort`, Codex `turn/start` effort field).
   // 'unsupported' = adapter ignores it; UI renders the toggle disabled.

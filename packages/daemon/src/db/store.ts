@@ -76,6 +76,48 @@ export function initDb(): void {
   // unique variant from the unused pool until all 60 are taken; further
   // assignments fall back to uniform random reuse.
   backfillSessionLoaderVariants();
+
+  // One-time remap of legacy `mode` values from the old unified SessionMode
+  // enum to each provider's native primitive. Idempotent — only touches rows
+  // that still hold a stale value, so re-runs are no-ops.
+  migrateLegacyModes();
+}
+
+// === Legacy mode migration =================================================
+//
+// The old SessionMode enum (`default | plan | accept-edits | auto | chat |
+// read-only`) was a MultiTable invention with two fake values that aliased
+// `default` and a misleading `auto` that mapped to `bypassPermissions` (not
+// the SDK's real classifier-based `auto`). Provider-native values are now
+// stored directly. This function rewrites any row whose `mode` is still a
+// legacy string to the closest honest native equivalent for its provider.
+function migrateLegacyModes(): void {
+  // Per-provider remap of legacy → native value. Anything already native
+  // (e.g. 'acceptEdits', 'workspace-write') falls through untouched.
+  const claudeRemap: Record<string, string> = {
+    'accept-edits': 'acceptEdits',
+    auto: 'bypassPermissions',
+    chat: 'default',
+    'read-only': 'default',
+  };
+  const codexRemap: Record<string, string> = {
+    'accept-edits': 'workspace-write',
+    auto: 'danger-full-access',
+    chat: 'workspace-write',
+    default: 'workspace-write',
+    plan: 'read-only',
+  };
+  const rows = db
+    .prepare('SELECT id, agent_provider, mode FROM sessions')
+    .all() as Array<{ id: string; agent_provider: string | null; mode: string | null }>;
+  const upd = db.prepare('UPDATE sessions SET mode = ? WHERE id = ?');
+  for (const row of rows) {
+    const current = row.mode ?? 'default';
+    const provider = row.agent_provider === 'codex' ? 'codex' : 'claude';
+    const remap = provider === 'codex' ? codexRemap : claudeRemap;
+    const next = remap[current];
+    if (next && next !== current) upd.run(next, row.id);
+  }
 }
 
 function backfillSessionLoaderVariants(): void {
@@ -253,7 +295,6 @@ export interface SessionRow {
   created_at: number;
   last_active_at: number | null;
   loader_variant: string | null;
-  git_baseline_commit: string | null;
 }
 
 export interface SessionRecord {
@@ -278,13 +319,12 @@ export interface SessionRecord {
   claudeSessionId: string | null;
   claudeSessionIdHistory: string[];
   tags: string[];
-  mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
+  mode: string;
   thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   scratchpad: string;
   createdAt: number;
   lastActiveAt: number | null;
   loaderVariant: string | null;
-  gitBaselineCommit: string | null;
 }
 
 // Parse the JSON-encoded chain of prior claude_session_ids the SDK has assigned
@@ -303,24 +343,6 @@ function parseStringArray(raw: string | null): string[] {
 
 function parseClaudeSessionIdHistory(raw: string | null): string[] {
   return parseStringArray(raw);
-}
-
-const VALID_SESSION_MODES = new Set([
-  'default',
-  'plan',
-  'accept-edits',
-  'auto',
-  'chat',
-  'read-only',
-]);
-
-function parseSessionMode(
-  raw: string | null,
-): 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only' {
-  if (raw && VALID_SESSION_MODES.has(raw)) {
-    return raw as 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
-  }
-  return 'default';
 }
 
 const VALID_THINKING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -367,13 +389,13 @@ function rowToSession(row: SessionRow): SessionRecord {
     claudeSessionId: row.claude_session_id,
     claudeSessionIdHistory: parseClaudeSessionIdHistory(row.claude_session_id_history),
     tags: parseStringArray(row.tags),
-    mode: parseSessionMode(row.mode),
+    // Mode is a native SDK string; adapter validates on register/setMode.
+    mode: row.mode ?? 'default',
     thinkingEffort: parseThinkingEffort(row.thinking_effort),
     scratchpad: row.scratchpad || '',
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
     loaderVariant: row.loader_variant,
-    gitBaselineCommit: row.git_baseline_commit,
   };
 }
 
@@ -422,7 +444,6 @@ export function createSession(data: {
    * is picked from the unused pool (random reuse once all 60 are taken).
    */
   loaderVariant?: string;
-  gitBaselineCommit?: string | null;
   thinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
 }): SessionRecord {
   const id = uuidv4();
@@ -442,14 +463,21 @@ export function createSession(data: {
   const preferred = data.loaderVariant;
   const loaderVariant =
     preferred && !used.has(preferred) ? preferred : pickLoaderVariant(used);
+  const resolvedProvider = data.agentProvider ?? inferAgentProvider(data.command);
+  // Initial `mode` must be a value the chosen provider's adapter actually
+  // accepts. The schema default `'default'` (a Claude PermissionMode value)
+  // would be rejected by Codex's `thread/start`. The agent manager has the
+  // authoritative list; we pick the right native string per provider here so
+  // the row never holds a wrong-provider mode.
+  const initialMode = resolvedProvider === 'codex' ? 'workspace-write' : 'default';
   getDb().prepare(`
     INSERT INTO sessions (
       id, project_id, name, command, working_directory, type,
       autostart, autorestart, autorestart_max, autorestart_delay_ms,
       autorestart_window_secs, autorespawn, terminal_alerts, file_watch_patterns,
-      agent_provider, model, scratchpad, created_at, loader_variant, git_baseline_commit,
+      agent_provider, model, mode, scratchpad, created_at, loader_variant,
       thinking_effort
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
   `).run(
     id,
     data.projectId,
@@ -465,20 +493,14 @@ export function createSession(data: {
     data.autorespawn !== false ? 1 : 0,
     data.terminalAlerts ? 1 : 0,
     JSON.stringify(data.fileWatchPatterns ?? []),
-    data.agentProvider ?? inferAgentProvider(data.command),
+    resolvedProvider,
     data.model ?? null,
+    initialMode,
     now,
     loaderVariant,
-    data.gitBaselineCommit ?? null,
     data.thinkingEffort ?? null
   );
   return getSessionById(id)!;
-}
-
-export function setSessionGitBaseline(id: string, sha: string | null): void {
-  getDb()
-    .prepare('UPDATE sessions SET git_baseline_commit = ? WHERE id = ?')
-    .run(sha, id);
 }
 
 export function updateSession(id: string, data: Partial<{
@@ -500,7 +522,7 @@ export function updateSession(id: string, data: Partial<{
   claudeSessionId: string | null;
   claudeSessionIdHistory: string[];
   tags: string[];
-  mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only';
+  mode: string;
   thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   scratchpad: string;
   lastActiveAt: number;

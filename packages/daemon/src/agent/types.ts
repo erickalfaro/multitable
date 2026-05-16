@@ -1,5 +1,4 @@
 import type { ProcessState } from '../types.js';
-import type { SessionMode } from './providers/types.js';
 
 export type AgentProvider = 'claude' | 'codex';
 
@@ -17,8 +16,6 @@ export type AgentProvider = 'claude' | 'codex';
 // can't surface a reasoning knob at all (both active providers — Claude and
 // Codex — declare 'native').
 export type ThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-
-export type { SessionMode };
 
 // What we emit on the WS for the session view.
 export type AgentMessageOut =
@@ -40,10 +37,12 @@ export interface AgentSession {
   // turn (Claude `query()` options.model, Codex `Thread` options.model). Null
   // means "let the provider use its own default".
   model: string | null;
-  // Operating mode for this session. Translates to provider-specific knobs
-  // (Claude permissionMode, Codex sandboxMode, etc.) inside the adapter.
-  // Defaults to 'default'. Persisted across daemon restarts.
-  mode: SessionMode;
+  // Native operating mode for this session. The string is whatever the
+  // adapter declared in `capabilities.modes` — passed straight through to
+  // the SDK (Claude's PermissionMode for `claude`, Codex's SandboxMode for
+  // `codex`). MultiTable does not invent values or translate between them.
+  // Persisted across daemon restarts.
+  mode: string;
   // Reasoning-effort level for this session. Persisted across restarts and
   // initialised from GlobalConfig.lastThinkingEffort on session create. Null
   // means "use provider default" (no `effort` field sent to the SDK).

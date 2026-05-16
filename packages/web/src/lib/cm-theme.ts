@@ -96,8 +96,6 @@ export function buildCmTheme(isDark: boolean): Extension {
       // EditorView.theme rules are scoped to the editor's generated class, so
       // they don't reach body-mounted fixed-position tooltips. Anything here
       // would be dead code that can confuse readers later.
-      '.cm-completionIcon-file::after': { content: '"\\1F4C4"' }, // 📄
-      '.cm-completionIcon-command::after': { content: '"\\002F"' }, // /
       // Rectangular selection marker
       '.cm-rectangularSelection': {
         backgroundColor: `color-mix(in srgb, ${accent} 16%, transparent)`,

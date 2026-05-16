@@ -82,6 +82,15 @@ To add a new provider: drop a `<provider>.ts` adapter under `agent/providers/`, 
 
 Mode changes surface as `session:mode-changed` over WS so the UI's `ModeBadge` updates instantly.
 
+### Thinking effort
+
+`AgentSession.thinkingEffort` is `'low' | 'medium' | 'high' | 'xhigh' | 'max' | null`. Both adapters honor it:
+
+- `ClaudeAdapter` passes `{ effort: s.thinkingEffort }` through SDK options when set.
+- `CodexAdapter` forwards it as `effort` to `turn/start` (with `'max'` collapsed to `undefined` when carried over from a Claude session, since Codex doesn't accept that tier).
+
+`GlobalConfig.lastThinkingEffort` seeds new sessions and is updated by `PUT /api/sessions/:id/thinking-effort` so the preference is sticky. `agentManager.setThinkingEffort()` emits `thinking-effort-changed`, rebroadcast as `session:thinking-effort-changed`; the UI's [ThinkingEffortBadge.tsx](packages/web/src/components/main-pane/ThinkingEffortBadge.tsx) filters dropdown choices by the current model's `effortLevels` (sourced from the provider catalog) so users can't pick a tier the model rejects.
+
 ### Codex specifics
 
 - **Approval policy is hardcoded to `'never'`** on every `thread/start` and `thread/resume` request. Tool gating happens via the spawn-time `sandbox` enum (`read-only` / `workspace-write` / `danger-full-access`). The client also auto-denies any approval ServerRequests defensively. `PermissionManager` stays Claude-only by design.
@@ -89,6 +98,17 @@ Mode changes surface as `session:mode-changed` over WS so the UI's `ModeBadge` u
 - **No USD cost field on `Usage`.** Token counts populate; the dollar row is hidden in the cost UI for Codex sessions.
 - **Thread persistence** is owned by the codex CLI under `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<thread_id>.jsonl`. `transcripts/codexParser.ts` reads these into the same `Message[]` shape the Claude JSONL parser produces. `AgentSessionManager.register` hydrates `s.messages` from disk on startup; `/api/sessions/:id/messages` re-hydrates if the in-memory cache is empty.
 - **Past Codex threads** are listed via `GET /api/transcripts/codex` and resumed via `POST /api/transcripts/codex/:threadId/resume`. The AddAgentModal renders them as a separate section under "Or resume a Codex thread".
+
+## Provider catalog
+
+`packages/daemon/src/providers/` is the (top-level, separate from `agent/providers/`) live model-catalog system. It feeds the AddAgentModal's model picker and the ThinkingEffortBadge's effort-tier filter.
+
+- `baselines.ts` — `BaselineModel` shape + shipped seed catalogs. Claude baseline holds the canonical alias triple (`opus` / `sonnet` / `haiku`); Codex starts empty (no baseline — `codex debug models` is the only source of truth).
+- `discovery.ts` — `discoverClaude(...)` probes the SDK via `Query.initializationResult()`; `discoverCodex(...)` shells out to `codex debug models`. Each returns `DiscoveredModel[]` or throws.
+- `catalog.ts` — `ProviderCatalog` is an EventEmitter that layers baseline → on-disk cache (`~/.cache/multitable/models.json`) → live discovery. Emits `updated { provider, models, lastRefreshed }`; `server.ts` rebroadcasts as `providers:catalog-updated`.
+- `api/providers.ts` — `GET /api/providers/:provider/models` (cached snapshot, never blocks), `GET /api/providers/catalog` (full snapshot for "last refreshed" labels), `POST /api/providers/refresh { provider? }` (triggers async discovery, returns 202; concurrent calls share an in-flight Promise).
+
+Discovery runs in the background at boot and on user-triggered refresh. **Don't reintroduce per-request CLI calls** in the API handlers — they're served from the in-memory cache by design. The web client stores results in `modelCatalog` + `modelCatalogStatus` (Zustand) and updates them off the `providers:catalog-updated` WS message.
 
 ## Telegram bridge
 
@@ -178,6 +198,7 @@ Key modules:
 - **`pty/stream.ts`** — the WS message router (`handleWsMessage`). Routes `subscribe`/`unsubscribe`/`pty-input`/`pty-resize` for commands and terminals; routes `session:send` to `agentManager.sendTurn`; routes `permission:respond`, `permission:answer-question`, `session:elicitation:respond`, and `option:dismiss`. For session subscribes, it auto-registers the session from the DB if missing and emits `process-state-changed`; sessions never trigger PTY spawn.
 - **`db/store.ts`** — better-sqlite3, synchronous. Exported functions are the DB API; routers call them directly rather than going through a service layer.
 - **`api/*.ts`** — one router per resource (`projects`, `sessions`, `commands`, `terminals`, `processes`, `config`, `search`, `transcripts`, `notes`, `integrations`, `git`, `providers`). Each is a factory; `sessions` and `processes` receive both `manager` (PtyManager) and `agentManager`. Sessions auto-register from the DB on `_internal/agent/turn` and on `session:send` so newly-created or post-boot rows always work.
+- **`api/attachments.ts`** — image upload helper, not mounted as its own router. Exports `rawAttachmentBody` (raw-body parser, 20 MB cap, mime-type allowlist) + `createAttachmentHandler` + `removeAttachmentDir`. Sessions and terminals both mount it at `POST /:id/attachments`; files land under `${dataDir}/attachments/<resourceId>/`.
 - **`hooks/permissionManager.ts`** — holds pending permission prompts until the UI (or Telegram, or auto-allow) resolves them. Exposes `requestFromSdk(sessionId, ..., signal, extras)` that Claude's `canUseTool` callback awaits. Reuses the existing dedup, allowlist (`always-allow`), auto-defer, and 110s timeout. The HTTP `/api/hooks/*` receiver is **gone** — Phase 6 retired it.
 - **`hooks/elicitationManager.ts`** — separate from permissions; handles MCP `elicitInput` schema/url prompts (see [Elicitation](#elicitation-distinct-from-permissions)).
 - **`hooks/costParser.ts`, `labeler.ts`, `optionDetector.ts`, `promptsParser.ts`** — JSONL-driven utilities still used by the `/cost`, `/prompts`, label generation, and option detection paths. They read the same `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` files the SDK writes.
@@ -203,7 +224,7 @@ Routers mounted in `server.ts`:
 - `/api/transcripts` — Claude JSONL + Codex rollout browsing; `GET /api/transcripts/codex` lists past Codex threads, `POST /api/transcripts/codex/:threadId/resume` re-attaches one.
 - `/api/integrations` — Telegram config (token, chat IDs, per-event toggles).
 - `/api/projects/:projectId/git` — full git workflow (status, diff, file diff, log, branches, stage/unstage, commit, discard, branch create/switch/delete, stash, fetch, pull, push). Short-circuits 400 if the project isn't a git repo.
-- `/api/providers` — `GET /api/providers/models` discovers live model catalogs (Codex via `codex debug models`; Anthropic via `/v1/models` if `ANTHROPIC_API_KEY` is set; fallback to canonical aliases on timeout or failure).
+- `/api/providers` — serves the cached `ProviderCatalog` (see [Provider catalog](#provider-catalog)). `GET /:provider/models`, `GET /catalog`, `POST /refresh { provider? }`. All read from the in-memory cache; live discovery runs in the background and pushes updates over WS.
 - `/api/_internal/agent/turn` — internal turn dispatch used by tooling/CLI.
 
 ### Session vs Command vs Terminal
@@ -267,6 +288,7 @@ Single endpoint: `/ws`. Messages are JSON `{ type, processId?, payload }`. One c
 - `session:idle` — session has finished any in-flight work and is ready for the next turn.
 - `session:state-updated` `{ sessionId, state }` — live cost / token / currentTool snapshot. Mirrored onto `Session.claudeState` (Claude) or the provider-agnostic state in the store.
 - `session:mode-changed` `{ sessionId, mode }` — mode flip acknowledged.
+- `session:thinking-effort-changed` `{ sessionId, thinkingEffort }` — effort tier flipped via `PUT /api/sessions/:id/thinking-effort`; `ThinkingEffortBadge` refreshes from this.
 - `session:reconciled` `{ sessionId }` — adapter has finished merging persisted disk state with in-memory state (Codex rollout reconciliation).
 - `session:message-rekeyed` `{ sessionId, oldId, newId }` — synthetic in-flight id replaced by the persisted id.
 - `session:notification` `{ sessionId, payload }` — replaces the old `hook:Notification`; surfaces a toast + chime.
@@ -279,6 +301,7 @@ Single endpoint: `/ws`. Messages are JSON `{ type, processId?, payload }`. One c
 - `permission:prompt` / `permission:resolved` / `permission:expired` — permission flow.
 - `session:elicitation:prompt` / `:resolved` / `:expired` — elicitation flow.
 - `git:status-changed` `{ projectId, status: GitStatusSummary }` — broadcast by the daemon's `GitWatcher` (debounced 500ms) on any working-tree change. The web GitPanel reads this off the `gitByProject` slice and re-renders without polling.
+- `providers:catalog-updated` `{ provider, models, lastRefreshed }` — `ProviderCatalog` emitted a change (boot hydration, discovery success, or user-triggered refresh). The web store updates `modelCatalog[provider]` + flips `modelCatalogStatus[provider]` to `'ready'`.
 - `pty-output` / `scrollback` — commands and terminals only.
 
 Single-delivery rule: `pty-output` is sent directly to the subscribed client in `pty/stream.ts`'s `handleSubscribe` data listener. Do **not** also broadcast it from `server.ts` — there's a load-bearing comment about the double-delivery bug this caused.
@@ -298,7 +321,7 @@ Custom commands flow through `wsClient.sendTurn` → SDK `query()`; the SDK read
 A note on terminology: **the UI says "agent" wherever it used to say "session"** (sidebar, modals, "Add Agent", "Past Agents"). The internal types still say `Session` / `AgentSession` because that's the on-disk and on-the-wire shape — don't rename them when you're working in code.
 
 - `main.tsx` → `App.tsx` — single root. `App.tsx` wires WebSocket events to the Zustand store; re-fetches everything on `ws:reconnected`. Uses `useAppStore.getState()` inside WS handlers (not the closure's stale `store`) so updates always read live state.
-- `stores/appStore.ts` — the single Zustand store. Beyond the original slices (projects, processes, permissions, options, themes, modals, selection, `messagesBySession`), it now also owns: `alerts` + `unreadBySession` + `notificationCenterOpen`, `pendingElicitations`, `gitByProject`, `tasksBySession`, `toolProgressBySession`, `statusBySession`, `streamingBySession`, `modelCatalog` + `modelCatalogStatus`, `devLogOpen` (persisted to localStorage). `detailPanelTab` is `'brainstorm' | 'tasks' | 'prompts' | 'cost' | 'diff' | 'files'`.
+- `stores/appStore.ts` — the single Zustand store. Beyond the original slices (projects, processes, permissions, options, themes, modals, selection, `messagesBySession`), it now also owns: `alerts` + `unreadBySession` + `notificationCenterOpen`, `pendingElicitations`, `gitByProject`, `tasksBySession`, `toolProgressBySession`, `statusBySession`, `streamingBySession`, `modelCatalog` + `modelCatalogStatus`, `attentionBySession` + `attentionFilters` (Attention Stream rows, FIFO-trimmed at 500 per session; `AttentionKind` = `'read' | 'edit' | 'command' | 'search' | 'mcp' | 'reasoning'`), `devLogOpen` (persisted to localStorage). `detailPanelTab` is `'brainstorm' | 'tasks' | 'prompts' | 'cost' | 'diff' | 'files'`.
 - `lib/ws.ts`, `lib/api.ts` — WS client (with reconnect) and fetch wrapper. UI code talks to these, not `fetch` directly. `wsClient.sendTurn(processId, text)` is the only way to send a session message; commands and terminals still use `wsClient.sendInput`.
 - `lib/cm-completions.ts` — CodeMirror autocompletion sources for `@` file mentions (fuzzy-matched against the project file index, `filter: false` because labels don't share the `@` prefix) and `/` slash commands.
 - `lib/cm-theme.ts` — CM6 theme bound to live CSS variables via `getComputedStyle`. Tooltip styles (autocomplete popup) live in `globals.css` because fixed-position tooltips mount on `document.body` and don't inherit the editor's themed class scope.
@@ -306,7 +329,8 @@ A note on terminology: **the UI says "agent" wherever it used to say "session"**
 - Other `lib/`: `notify.ts` (toasts + audio), `browserNotifications.ts` (OS notifications), `sound.ts`, `tabBadge.ts`, `notificationPrefs.ts` (per-category + per-severity prefs), `devLog.ts` + `devLogCapture.ts` (in-app ring buffer), `markdown.tsx` (custom Streamdown components), `pastAgents.ts` (resume + project resolution), `processState.ts` (`isProcessActive`), `rafBatch.ts` (rAF-coalesced setState), `nodeColor.ts`, `relativeTime.ts`.
 - `components/main-pane/chat/` — `SessionChat` (orchestrator), `MessageList` (turn-grouped list + loaders), `AssistantMessage` (Streamdown markdown + shiki), `UserMessage`, `ToolCallCard` (collapsible tool I/O with icon registry), `ReasoningCard` (collapsible CoT, live + canonical), `CodeBlock` (shiki + copy), `ChatInputCM` (CodeMirror 6 composer; `handleNativeSlash` intercepts `/clear` and `/cost`), `ExpandedComposer` (modal for long drafts + image attachments), `ModelChip` (current model with catalog prettifier), `LoaderNode` (project-colored dot-matrix avatar that animates during turns), `TurnRow` (dot/line rail geometry), `ChatScroller` (ResizeObserver-driven sticky scroll), `TasksTab` (live task list from `session:task-event`), `StreamingContext`, `turnGrouping.ts`.
 - `components/main-pane/git/` — `GitPanel` (top-level, watches `gitByProject[projectId]`), `GitFileList` (staged / unstaged / untracked / conflicted with icons), `GitDiffPane`, `GitBranchPicker`, `GitCommitComposer`, `DiffFileSection`.
-- `components/main-pane/MainPane.tsx` — branches on `process.type === 'session'` to mount `SessionChat`; everything else mounts `TerminalView` (xterm). Other main-pane surfaces: `DashboardView`, `ProjectOverview`, `ProjectMonitor`, `SessionDetailPanel`, `SessionHeaderBar`, `ModeBadge`, `ProcessBanner`.
+- `components/main-pane/MainPane.tsx` — branches on `process.type === 'session'` to mount `SessionChat`; everything else mounts `TerminalView` (xterm). Other main-pane surfaces: `DashboardView`, `ProjectOverview`, `ProjectMonitor`, `SessionDetailPanel` (3-panel IDE shell — hosts the `AttentionStream` context pane), `SessionHeaderBar`, `ModeBadge`, `ThinkingEffortBadge`, `AttachButton` (image upload entry point), `ProcessBanner`.
+- `components/main-pane/context/` — `AttentionStream` (live, filterable log of edits / reads / commands / searches / MCP calls / reasoning, fed by `attentionBySession`), `ProviderCapabilityStrip` (capability badges + detail-panel tab switcher).
 - `components/sidebar/` — `Sidebar`, `SidebarItem`, `ProjectSidebarItem`, `ProjectHeader`, `SidebarSection`, `StatusDot`, `SessionStatusLoader`, **`PastAgentsList`** (replaces the old `PastSessions`), `LogoArt`.
 - `components/modals/` — `AddAgentModal` (provider picker — Claude / Codex / scaffolds for Gemini / Copilot / opencode), `AddProjectModal`, `GlobalSettingsModal`, `IntegrationsSection` (Telegram), `NotificationsSection` (per-category + per-severity prefs), `PastAgentsBrowser` (deep transcript browser merging `useTranscripts` + `useCodexTranscripts`).
 - `components/elicitation/ElicitationModal.tsx` — schema-driven JSON form (type-aware inputs, enum dropdowns, defaults).
@@ -315,6 +339,8 @@ A note on terminology: **the UI says "agent" wherever it used to say "session"**
 - `components/permission/` — `PermissionBar`, `ToolInputPreview` (renders the optional `title`/`displayName`/`subtitle`/`blockedPath` fields from `PermissionPrompt`).
 - `components/ui/dotmatrix-core.tsx` + `dotmatrix-hooks.ts` + 60 `dotm-{square,circular,triangle}-{1..20}.tsx` — the project loader/avatar system. Patterns: `diamond`, `full`, `outline`, `rose`, `cross`, `rings`; phases: `idle`, `collapse`, `hoverRipple`, `loadingRipple`. Variant assignment happens server-side via `loaders.ts:pickLoaderVariant` so a project keeps its avatar across reloads.
 - `components/command-palette/`, `components/option/`, `components/status-bar/`, `components/mobile/`, `components/ui/` (primitives) — organized by area.
+- `components/ConnectionOverlay.tsx` — full-screen overlay shown when the WS disconnects; auto-dismisses on `ws:reconnected`. Mounted once at the root of `App.tsx`.
+- `components/context-menu/ContextMenu.tsx` — generic right-click menu primitive. Used by `ProjectSidebarItem` (and others) via `<ContextMenu items={...}>`.
 - `hooks/useTheme.ts`, `lib/themes.ts` — theme system; CSS variables on `:root` drive colors. Inline styles throughout the codebase use `var(--...)` tokens.
 - Styling: Tailwind is set up, but most components use inline `style={{ ... }}` with CSS variables. Follow the existing pattern in the file you're editing rather than mixing approaches.
 

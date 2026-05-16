@@ -9,6 +9,7 @@ import { useCodexTranscripts } from '../../hooks/useCodexTranscripts';
 import { resumePastSession, resumePastCodexThread, selectPinnedSession } from '../../lib/pastAgents';
 import { relativeTime } from '../../lib/relativeTime';
 import type { AgentProvider, DiscoveredModel } from '../../lib/types';
+import { cleanModelLabel } from '../../lib/modelName';
 
 type AgentProviderOption = 'claude' | 'codex' | undefined;
 
@@ -490,11 +491,12 @@ function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPi
         >
           {state.models.map((m) => {
             const isSelected = selected === m.id;
+            const cleanedName = cleanModelLabel(m);
             return (
               <button
                 key={m.id}
                 onClick={() => onSelect(m.id)}
-                title={m.description || m.displayName}
+                title={cleanedName}
                 style={{
                   padding: '8px 10px',
                   borderRadius: 'var(--radius-md)',
@@ -524,22 +526,8 @@ function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPi
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {m.displayName}
+                  {cleanedName}
                 </span>
-                {m.description && (
-                  <span
-                    style={{
-                      fontSize: 10.5,
-                      fontWeight: 400,
-                      color: 'var(--text-muted)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {m.description}
-                  </span>
-                )}
               </button>
             );
           })}

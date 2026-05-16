@@ -632,10 +632,6 @@ select:focus-visible,
   color: var(--accent-amber);
   font-weight: 700;
 }
-.cm-completionIcon {
-  opacity: 0.85;
-  margin-right: 4px;
-}
 
 /* ---------- Shiki code blocks ----------
  * Shiki renders <pre class="shiki ..."><code>...</code></pre> with no padding

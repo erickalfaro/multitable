@@ -2,7 +2,6 @@ import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Paperclip, X, Clock, Square, Maximize2 } from 'lucide-react';
 
 import { ModeBadge } from '../ModeBadge';
-import { ThinkingEffortBadge } from '../ThinkingEffortBadge';
 import { ExpandedComposer, type ImageAttachment } from './ExpandedComposer';
 import { ModelChip } from './ModelChip';
 
@@ -525,7 +524,7 @@ export const ChatInputCM = memo(function ChatInputCM({
         activateOnTyping: true,
         defaultKeymap: true,
         maxRenderedOptions: 40,
-        icons: true,
+        icons: false,
       }),
       // Placeholder — empty by default; callers can still override.
       placeholder(placeholderText ?? ''),
@@ -854,7 +853,6 @@ export const ChatInputCM = memo(function ChatInputCM({
             </button>
 
             {session && <ModeBadge session={session} />}
-            {session && <ThinkingEffortBadge session={session} />}
           </div>
 
           {active ? (

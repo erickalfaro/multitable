@@ -3,7 +3,6 @@ import type {
   AgentSession,
   SendTurnInput,
   AlertSeverity,
-  SessionMode,
   ThinkingEffort,
 } from './types.js';
 import type { ProcessState } from '../types.js';
@@ -114,14 +113,35 @@ export class AgentSessionManager extends EventEmitter {
   register(input: RegisterInput): AgentSession {
     const existing = this.sessions.get(input.id);
     if (existing) return existing;
+    const provider = input.provider ?? 'claude';
+    // Mode resolution: the input may carry a legacy or wrong-provider value
+    // (e.g. the DB schema default `'default'` on a freshly-created Codex
+    // session). Validate against the adapter's native list and fall back to
+    // the adapter's first declared mode if the value isn't honest. We also
+    // persist the corrected value so the row converges on something the
+    // adapter will accept.
+    const adapter = this.adapters[provider];
+    const validModes = adapter?.capabilities.modes.map((m) => m.value) ?? [];
+    const adapterDefault = adapter?.capabilities.modes[0]?.value ?? 'default';
+    const requested = input.mode;
+    const resolvedMode =
+      requested && validModes.includes(requested) ? requested : adapterDefault;
+    if (requested && requested !== resolvedMode) {
+      // Coerce the persisted value so the next boot doesn't repeat this dance.
+      try {
+        updateSession(input.id, { mode: resolvedMode });
+      } catch (err) {
+        console.error('[agent] failed to coerce stale mode on register:', err);
+      }
+    }
     const session: AgentSession = {
       id: input.id,
       projectId: input.projectId,
       name: input.name,
       workingDir: input.workingDir,
-      provider: input.provider ?? 'claude',
+      provider,
       model: input.model ?? null,
-      mode: input.mode ?? 'default',
+      mode: resolvedMode,
       thinkingEffort: input.thinkingEffort ?? null,
       agentSessionId: input.agentSessionId ?? input.claudeSessionId ?? null,
       agentSessionIdHistory: [
@@ -246,15 +266,15 @@ export class AgentSessionManager extends EventEmitter {
    * next turn (modes drive provider option assembly inside runTurn). Emits
    * `mode-changed` so the UI can refresh the badge.
    */
-  setMode(sessionId: string, mode: SessionMode): void {
+  setMode(sessionId: string, mode: string): void {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     if (s.mode === mode) return;
     const adapter = this.adapters[s.provider];
-    if (adapter && !adapter.capabilities.modes.includes(mode)) {
+    if (adapter && !adapter.capabilities.modes.some((o) => o.value === mode)) {
+      const supported = adapter.capabilities.modes.map((o) => o.value).join(', ');
       throw new Error(
-        `Provider ${s.provider} does not support mode '${mode}'. ` +
-          `Supported: ${adapter.capabilities.modes.join(', ')}`,
+        `Provider ${s.provider} does not support mode '${mode}'. Supported: ${supported}`,
       );
     }
     s.mode = mode;
