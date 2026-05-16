@@ -74,7 +74,7 @@ interface AppState {
   globalSettingsOpen: boolean;
   projectSettingsOpen: boolean;
   detailPanelOpen: boolean;
-  detailPanelTab: 'files' | 'diff' | 'cost' | 'prompts' | 'brainstorm' | 'tasks';
+  detailPanelTab: DetailPanelTab;
   connectionState: 'connected' | 'reconnecting' | 'disconnected';
   projectOverviewOpen: boolean;
   contextMenu: { type: string; id: string; x: number; y: number } | null;
@@ -94,7 +94,18 @@ interface AppState {
   setGlobalSettingsOpen: (open: boolean) => void;
   setProjectSettingsOpen: (open: boolean) => void;
   setDetailPanelOpen: (open: boolean) => void;
-  setDetailPanelTab: (tab: 'files' | 'diff' | 'cost' | 'prompts' | 'brainstorm' | 'tasks') => void;
+  setDetailPanelTab: (tab: DetailPanelTab) => void;
+
+  // Attention Stream — derived from session:tool-event + session:tool-delta,
+  // owned by App.tsx's WS handler block. Each entry is one agent action
+  // (read / edit / command / search / MCP call) with optional expandable
+  // detail. Keyed by itemId (toolUseId) so deltas can update in place.
+  attentionBySession: Record<string, AttentionEvent[]>;
+  attentionFilters: Record<string, AttentionKind[]>;
+  pushAttention: (event: AttentionEvent) => void;
+  updateAttention: (sessionId: string, itemId: string, patch: Partial<AttentionEvent>) => void;
+  clearAttention: (sessionId: string) => void;
+  toggleAttentionFilter: (sessionId: string, kind: AttentionKind) => void;
   setConnectionState: (state: 'connected' | 'reconnecting' | 'disconnected') => void;
   setProjectOverviewOpen: (open: boolean) => void;
   setContextMenu: (menu: { type: string; id: string; x: number; y: number } | null) => void;
@@ -210,6 +221,26 @@ interface AppState {
   modelCatalogStatus: Record<AgentProvider, 'idle' | 'loading' | 'ready' | 'error'>;
   loadModelCatalog: (provider: AgentProvider) => void;
 }
+
+export type DetailPanelTab = 'diff' | 'files' | 'tasks' | 'cost' | 'prompt-builder';
+
+export type AttentionKind = 'read' | 'edit' | 'command' | 'search' | 'mcp' | 'reasoning';
+
+export interface AttentionEvent {
+  id: string;             // unique row id; equals itemId for tool rows
+  sessionId: string;
+  provider: AgentProvider;
+  kind: AttentionKind;
+  label: string;          // e.g. "Edit src/agent/manager.ts" or "$ npm run build"
+  detail?: string;        // expandable body (last 50 lines of stdout, diff hunk, MCP response, ...)
+  isError?: boolean;
+  itemId: string;         // toolUseId — used to update an in-flight row in place
+  timestamp: number;
+}
+
+// Cap attention history per session so an idle user doesn't grow it
+// unbounded. 500 covers very long turns; older entries get FIFO-trimmed.
+const MAX_ATTENTION_PER_SESSION = 500;
 
 export type TaskState = 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'stopped' | 'unknown';
 
@@ -450,8 +481,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   addProjectModalOpen: false,
   globalSettingsOpen: false,
   projectSettingsOpen: false,
-  detailPanelOpen: false,
-  detailPanelTab: 'brainstorm',
+  detailPanelOpen: true,
+  detailPanelTab: 'diff',
   // Start optimistic. The fullscreen "Cannot connect to daemon" overlay is
   // intrusive — only show it after a real connect attempt has failed, never
   // during the initial mount window. ws.connect() flips this to 'reconnecting'
@@ -528,6 +559,61 @@ export const useAppStore = create<AppState>((set, get) => ({
   setProjectSettingsOpen: (open) => set({ projectSettingsOpen: open }),
   setDetailPanelOpen: (open) => set({ detailPanelOpen: open }),
   setDetailPanelTab: (tab) => set({ detailPanelTab: tab }),
+
+  // Attention Stream slice — live feed of agent actions per session.
+  attentionBySession: {},
+  attentionFilters: {},
+  pushAttention: (event) =>
+    set((s) => {
+      const existing = s.attentionBySession[event.sessionId] ?? [];
+      // Idempotency: if an event with this id already exists, treat it as an
+      // update rather than a duplicate insert (handles the rare case where
+      // tool-event fires twice for the same toolUseId).
+      const idx = existing.findIndex((e) => e.id === event.id);
+      let next: AttentionEvent[];
+      if (idx >= 0) {
+        next = existing.slice();
+        next[idx] = { ...next[idx], ...event };
+      } else {
+        next = [...existing, event];
+        if (next.length > MAX_ATTENTION_PER_SESSION) {
+          next = next.slice(next.length - MAX_ATTENTION_PER_SESSION);
+        }
+      }
+      return {
+        attentionBySession: { ...s.attentionBySession, [event.sessionId]: next },
+      };
+    }),
+  updateAttention: (sessionId, itemId, patch) =>
+    set((s) => {
+      const existing = s.attentionBySession[sessionId];
+      if (!existing) return s;
+      const idx = existing.findIndex((e) => e.itemId === itemId);
+      if (idx < 0) return s;
+      const next = existing.slice();
+      next[idx] = { ...next[idx], ...patch };
+      return {
+        attentionBySession: { ...s.attentionBySession, [sessionId]: next },
+      };
+    }),
+  clearAttention: (sessionId) =>
+    set((s) => {
+      if (!s.attentionBySession[sessionId]) return s;
+      const next = { ...s.attentionBySession };
+      delete next[sessionId];
+      return { attentionBySession: next };
+    }),
+  toggleAttentionFilter: (sessionId, kind) =>
+    set((s) => {
+      const current = s.attentionFilters[sessionId] ?? [];
+      const next = current.includes(kind)
+        ? current.filter((k) => k !== kind)
+        : [...current, kind];
+      return {
+        attentionFilters: { ...s.attentionFilters, [sessionId]: next },
+      };
+    }),
+
   setConnectionState: (state) => set({ connectionState: state }),
   setProjectOverviewOpen: (open) => set({ projectOverviewOpen: open }),
   setContextMenu: (menu) => set({ contextMenu: menu }),

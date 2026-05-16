@@ -1,28 +1,27 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Folder, File, Plus, MessageSquare, Check, Copy, Sparkles, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
+import type { DetailPanelTab } from '../../stores/appStore';
 import { api } from '../../lib/api';
-import { wsClient } from '../../lib/ws';
 import { copyToClipboard } from '../../lib/clipboard';
 import type { Session, Note } from '../../lib/types';
-import { IconButton, Badge, Spinner } from '../ui';
+import { IconButton, Spinner } from '../ui';
 import { TasksTab } from './chat/TasksTab';
 import { GitPanel } from './git/GitPanel';
+import { AttentionStream } from './context/AttentionStream';
+import { ProviderCapabilityStrip } from './context/ProviderCapabilityStrip';
 
 interface Props {
   session: Session;
   projectId: string;
 }
 
-type TabId = 'files' | 'diff' | 'cost' | 'prompts' | 'brainstorm' | 'tasks';
-
-const TABS: { id: TabId; label: string }[] = [
+const TABS: { id: DetailPanelTab; label: string }[] = [
+  { id: 'diff', label: 'Diff' },
   { id: 'files', label: 'Files' },
-  { id: 'diff', label: 'Git' },
-  { id: 'cost', label: 'Cost' },
-  { id: 'prompts', label: 'Prompts' },
-  { id: 'brainstorm', label: 'Brainstorm' },
   { id: 'tasks', label: 'Tasks' },
+  { id: 'cost', label: 'Cost' },
+  { id: 'prompt-builder', label: 'Prompt Builder' },
 ];
 
 interface FileEntry {
@@ -460,173 +459,6 @@ function CostTab({ session }: { session: Session }) {
   );
 }
 
-function PromptsTab({ session }: { session: Session }) {
-  const [prompts, setPrompts] = useState<Array<{ text: string; timestamp: number | null }>>([]);
-  const [loading, setLoading] = useState(true);
-  const [query, setQuery] = useState('');
-
-  const fetchPrompts = () => {
-    return api.sessions
-      .prompts(session.id)
-      .then((res) => {
-        setPrompts(res.prompts);
-      })
-      .catch(() => {});
-  };
-
-  useEffect(() => {
-    setLoading(true);
-    fetchPrompts().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id]);
-
-  // Live-refresh whenever a new user prompt arrives. After the SDK migration
-  // (Phase 4+) the user-prompt signal is `session:user-message`, emitted by
-  // AgentSessionManager when sendTurn pushes the user's text. Refetch so we
-  // pick up the full text from the JSONL/prompts endpoint.
-  useEffect(() => {
-    const off = wsClient.on('session:user-message', (msg: any) => {
-      const pid = msg?.processId || msg?.payload?.processId;
-      if (pid === session.id) {
-        fetchPrompts();
-      }
-    });
-    return off;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id]);
-
-  const filtered = useMemo(() => {
-    if (!query.trim()) return prompts;
-    const q = query.toLowerCase();
-    return prompts.filter((p) => p.text.toLowerCase().includes(q));
-  }, [prompts, query]);
-
-  const formatTime = (ts: number | null, idx: number) => {
-    if (ts) {
-      const d = new Date(ts);
-      return d.toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    }
-    return `#${idx + 1}`;
-  };
-
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, color: 'var(--text-muted)', fontSize: 13, padding: 24 }}>
-        <Spinner size="sm" /> Loading prompts...
-      </div>
-    );
-  }
-
-  if (prompts.length === 0) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, color: 'var(--text-muted)', padding: 24 }}>
-        <MessageSquare size={32} style={{ opacity: 0.4 }} />
-        <span style={{ fontSize: 14, fontWeight: 500 }}>No prompts yet</span>
-        <span style={{ fontSize: 12, textAlign: 'center' }}>
-          User prompts in this session will appear here.
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      {/* Search + count */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '8px 12px',
-          borderBottom: '1px solid var(--border)',
-          flexShrink: 0,
-          backgroundColor: 'var(--bg-primary)',
-        }}
-      >
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filter prompts…"
-          style={{
-            flex: 1,
-            fontSize: 12,
-            padding: '4px 8px',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-            backgroundColor: 'var(--bg-elevated)',
-            color: 'var(--text-primary)',
-            outline: 'none',
-          }}
-        />
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
-          {query.trim() ? `${filtered.length} / ${prompts.length}` : `${prompts.length} prompt${prompts.length === 1 ? '' : 's'}`}
-        </span>
-      </div>
-
-      {/* Prompt list */}
-      <div className="mt-scroll" style={{ flex: 1, overflow: 'auto', padding: 8 }}>
-        {filtered.map((p, i) => {
-          const idx = prompts.indexOf(p);
-          return (
-            <div
-              key={idx}
-              style={{
-                padding: '8px 10px',
-                marginBottom: 6,
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border)',
-                backgroundColor: 'var(--bg-elevated)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <span
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 600,
-                    color: 'var(--text-muted)',
-                    fontVariantNumeric: 'tabular-nums',
-                    backgroundColor: 'color-mix(in srgb, var(--bg-sidebar) 70%, transparent)',
-                    padding: '2px 6px',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
-                >
-                  {formatTime(p.timestamp, idx)}
-                </span>
-                <div style={{ flex: 1 }} />
-                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                  {p.text.length.toLocaleString()} chars
-                </span>
-              </div>
-              <div
-                style={{
-                  fontSize: 13,
-                  color: 'var(--text-primary)',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  lineHeight: 1.45,
-                }}
-              >
-                {p.text}
-              </div>
-            </div>
-          );
-        })}
-        {filtered.length === 0 && query.trim() && (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
-            No prompts match "{query}"
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function NoteCard({
   note,
   onChange,
@@ -908,7 +740,7 @@ function NoteCard({
   );
 }
 
-function BrainstormTab({ session }: { session: Session }) {
+function PromptBuilderTab({ session }: { session: Session }) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'session' | 'project'>('all');
@@ -1078,7 +910,18 @@ function BrainstormTab({ session }: { session: Session }) {
 }
 
 export function SessionDetailPanel({ session, projectId }: Props) {
-  const { detailPanelTab, setDetailPanelTab, setDetailPanelOpen } = useAppStore();
+  const detailPanelTab = useAppStore((s) => s.detailPanelTab);
+  const setDetailPanelTab = useAppStore((s) => s.setDetailPanelTab);
+  const setDetailPanelOpen = useAppStore((s) => s.setDetailPanelOpen);
+
+  // Migrate any legacy detailPanelTab values to the new id set so existing
+  // sessions (in-memory store state from before the rename) don't render an
+  // empty tab body. Runs once per mount and is a no-op for fresh stores.
+  useEffect(() => {
+    const tab = detailPanelTab as string;
+    if (tab === 'brainstorm') setDetailPanelTab('prompt-builder');
+    else if (tab === 'prompts') setDetailPanelTab('diff');
+  }, [detailPanelTab, setDetailPanelTab]);
 
   return (
     <div
@@ -1087,21 +930,31 @@ export function SessionDetailPanel({ session, projectId }: Props) {
         flexDirection: 'column',
         overflow: 'hidden',
         height: '100%',
+        borderLeft: '1px solid var(--border)',
+        backgroundColor: 'var(--bg-primary)',
       }}
     >
-      {/* Tab bar */}
+      {/* Top: Attention Stream — the headline differentiator. Lives at ~45%
+          of the panel height so it never crowds the tab content out. */}
+      <div style={{ flex: '0 0 45%', minHeight: 120, display: 'flex', flexDirection: 'column' }}>
+        <AttentionStream sessionId={session.id} />
+      </div>
+
+      {/* Mini tab bar */}
       <div
         style={{
-          height: 38,
+          height: 32,
           display: 'flex',
           alignItems: 'center',
           backgroundColor: 'var(--bg-sidebar)',
           borderTop: '1px solid var(--border)',
           flexShrink: 0,
-          paddingLeft: 8,
+          paddingLeft: 4,
           paddingRight: 6,
           position: 'relative',
+          overflowX: 'auto',
         }}
+        className="mt-scroll"
       >
         {TABS.map((tab) => {
           const active = detailPanelTab === tab.id;
@@ -1109,60 +962,65 @@ export function SessionDetailPanel({ session, projectId }: Props) {
             <button
               key={tab.id}
               onClick={() => setDetailPanelTab(tab.id)}
+              className="mt-toolbar-button"
               style={{
                 position: 'relative',
-                background: 'none',
+                background: 'transparent',
                 border: 'none',
                 color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontSize: 13,
+                fontSize: 11.5,
                 fontWeight: active ? 600 : 500,
-                padding: '0 14px',
+                padding: '0 10px',
                 height: '100%',
                 cursor: 'pointer',
-                transition: 'color var(--dur-fast) var(--ease-out)',
-              }}
-              onMouseEnter={(e) => {
-                if (!active) (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
-              }}
-              onMouseLeave={(e) => {
-                if (!active) (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
+                whiteSpace: 'nowrap',
               }}
             >
               {tab.label}
               <span
                 style={{
                   position: 'absolute',
-                  left: 12,
-                  right: 12,
+                  left: 10,
+                  right: 10,
                   bottom: 0,
                   height: 2,
-                  backgroundColor: 'var(--accent-blue)',
-                  borderRadius: 'var(--radius-snug) var(--radius-snug) 0 0',
+                  backgroundColor: 'var(--accent-amber)',
                   transform: active ? 'scaleX(1)' : 'scaleX(0)',
                   transformOrigin: 'center',
-                  transition: 'transform var(--dur-med) var(--ease-out)',
+                  transition: 'transform var(--dur-fast) var(--ease-snap)',
                 }}
               />
             </button>
           );
         })}
         <div style={{ flex: 1 }} />
-        <IconButton size="sm" onClick={() => setDetailPanelOpen(false)} label="Close detail panel">
+        <IconButton size="sm" onClick={() => setDetailPanelOpen(false)} label="Close panel (Cmd+.)">
           <X size={13} />
         </IconButton>
       </div>
 
-      {/* Content */}
-      <div className="mt-scroll" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-        {detailPanelTab === 'files' && <FilesTab projectId={projectId} />}
+      {/* Tab content */}
+      <div
+        className="mt-scroll"
+        style={{
+          flex: 1,
+          overflow: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+        }}
+      >
         {detailPanelTab === 'diff' && (
           <GitPanel projectId={projectId} sessionId={session.id} />
         )}
-        {detailPanelTab === 'cost' && <CostTab session={session} />}
-        {detailPanelTab === 'prompts' && <PromptsTab session={session} />}
-        {detailPanelTab === 'brainstorm' && <BrainstormTab session={session} />}
+        {detailPanelTab === 'files' && <FilesTab projectId={projectId} />}
         {detailPanelTab === 'tasks' && <TasksTab sessionId={session.id} />}
+        {detailPanelTab === 'cost' && <CostTab session={session} />}
+        {detailPanelTab === 'prompt-builder' && <PromptBuilderTab session={session} />}
       </div>
+
+      {/* Footer: Provider Capability Strip */}
+      <ProviderCapabilityStrip session={session} />
     </div>
   );
 }

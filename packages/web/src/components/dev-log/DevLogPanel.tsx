@@ -323,21 +323,18 @@ export function DevLogPanel() {
   return (
     <div
       style={{
-        position: 'fixed',
-        left: 0,
-        right: 0,
-        bottom: 0,
+        position: 'relative',
         height,
-        zIndex: 850,
+        flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
         backgroundColor: 'var(--bg-elevated)',
         borderTop: '1px solid var(--border-strong)',
-        boxShadow: 'var(--shadow-lg)',
         userSelect: 'none',
       }}
     >
-      {/* Resize handle */}
+      {/* Resize handle — sits at the very top of the panel so dragging
+          upward grows it and pushes the rest of the app up. */}
       <div
         onMouseDown={startResize}
         style={{
