@@ -73,6 +73,18 @@ export function MessageList({
 }: Props) {
   const resultsByUseId = useMemo(() => indexResults(messages), [messages]);
   const blocks = useMemo<ChatBlock[]>(() => groupIntoBlocks(messages), [messages]);
+  // Total user-message count for prev/next navigation. We don't track ids
+  // here because Codex resumed sessions can produce user messages whose
+  // canonical ids (`codex:{thread}:t{turn}:user:{seq}`) collide across
+  // hydration + live event flow — id-based lookups would then return the
+  // wrong DOM node. Instead, each user message is tagged below with its
+  // position in the user-message sequence (`data-user-message-index`),
+  // which is always unique by construction and matches DOM order.
+  const userMessageCount = useMemo<number>(() => {
+    let n = 0;
+    for (const m of messages) if (m.kind === 'user') n++;
+    return n;
+  }, [messages]);
 
   // Cross-render swap anchors: when a streaming preview is replaced by its
   // canonical message in `messages`, the canonical's id is mapped here to the
@@ -275,7 +287,13 @@ export function MessageList({
     <>
       {renderableEmpty && !loading && emptyHint}
 
-      {renderBlocks.map((block, bi) => {
+      {(() => {
+        // Walk the blocks once and assign each user block a stable
+        // position-based index. Captured in a counter rather than re-derived
+        // per-block so we don't depend on message ids (which can collide for
+        // Codex resumed sessions).
+        let userBlockIdx = -1;
+        return renderBlocks.map((block, bi) => {
         const isLastBlock = bi === renderBlocks.length - 1;
         // The TrailingLoader pulls itself up by -TURN_GAP_END unconditionally
         // so the loader's screen position is invariant when the first delta
@@ -285,12 +303,22 @@ export function MessageList({
         // them). When they are NOT last, no compensation is needed — the
         // following turn block has its own top spacing.
         if (block.kind === 'user') {
+          userBlockIdx++;
+          const myIdx = userBlockIdx;
+          const hasPrev = myIdx > 0;
+          const hasNext = myIdx < userMessageCount - 1;
           return (
             <div
               key={block.message.id}
+              data-user-message-index={myIdx}
               style={isLastBlock ? { paddingBottom: TURN_GAP_END } : undefined}
             >
-              <UserMessage text={block.message.text} />
+              <UserMessage
+                text={block.message.text}
+                index={myIdx}
+                hasPrev={hasPrev}
+                hasNext={hasNext}
+              />
             </div>
           );
         }
@@ -344,7 +372,8 @@ export function MessageList({
             </TurnRow>
           </div>
         );
-      })}
+        });
+      })()}
 
       {/* The loader avatar is rendered exactly ONCE here, in a stable
           position. Keeping it mounted across block transitions prevents
