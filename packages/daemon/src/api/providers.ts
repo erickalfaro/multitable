@@ -23,7 +23,7 @@ interface ProvidersDeps {
   catalog: ProviderCatalog;
 }
 
-const VALID_PROVIDERS: Provider[] = ['claude', 'codex'];
+const VALID_PROVIDERS: Provider[] = ['claude', 'codex', 'hermes'];
 
 function isProvider(s: unknown): s is Provider {
   return typeof s === 'string' && (VALID_PROVIDERS as string[]).includes(s);
@@ -62,8 +62,8 @@ export function createProvidersRouter(deps: ProvidersDeps): Router {
 
   // POST /api/providers/refresh
   //
-  // Triggers live discovery. Body: `{ provider?: 'claude' | 'codex' }`.
-  // Omit the provider to refresh all three in parallel. De-duplicated by the
+  // Triggers live discovery. Body: `{ provider?: 'claude' | 'codex' | 'hermes' }`.
+  // Omit the provider to refresh every provider in parallel. De-duplicated by the
   // catalog module — concurrent clicks share the same in-flight Promise.
   // Returns 202 Accepted with the current snapshot; updates land async via WS.
   router.post('/refresh', (req: Request, res: Response) => {

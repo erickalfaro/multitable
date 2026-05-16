@@ -186,7 +186,7 @@ export interface ProviderCapabilities {
 // speak only this interface upward and the SDK API downward.
 
 export interface ProviderAdapter {
-  readonly name: 'claude' | 'codex' | 'copilot';
+  readonly name: 'claude' | 'codex' | 'copilot' | 'hermes';
   readonly capabilities: ProviderCapabilities;
 
   // Drive one user turn. The adapter must respect `ctrl` for cancellation.

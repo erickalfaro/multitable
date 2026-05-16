@@ -312,7 +312,7 @@ export interface SessionRecord {
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex';
+  agentProvider: 'claude' | 'codex' | 'hermes';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
@@ -356,12 +356,15 @@ function parseThinkingEffort(raw: string | null): ThinkingEffortLevel | null {
 }
 
 function rowToSession(row: SessionRow): SessionRecord {
-  // Older daemon versions persisted 'hermes' here. Those rows are orphaned
-  // (the adapter has been removed); re-map them to 'claude' so the daemon
-  // hydrates cleanly. The session won't actually run as Hermes — the UI
-  // hides Hermes from the provider picker entirely — but the daemon stays
-  // up and the user can delete the stale row.
-  const provider: 'claude' | 'codex' = row.agent_provider === 'codex' ? 'codex' : 'claude';
+  // Provider hydration. `agent_provider` is free-text in the schema, so we
+  // narrow to the known adapter set here. Unknown values fall back to Claude
+  // (the original default) so a stale row can't take the daemon down.
+  const provider: 'claude' | 'codex' | 'hermes' =
+    row.agent_provider === 'codex'
+      ? 'codex'
+      : row.agent_provider === 'hermes'
+        ? 'hermes'
+        : 'claude';
   const agentSessionId = row.agent_session_id ?? row.claude_session_id;
   const agentSessionIdHistory =
     parseClaudeSessionIdHistory(row.agent_session_id_history).length > 0
@@ -401,9 +404,10 @@ function rowToSession(row: SessionRow): SessionRecord {
 
 function inferAgentProvider(
   command: string | null | undefined,
-): 'claude' | 'codex' {
+): 'claude' | 'codex' | 'hermes' {
   const first = (command ?? '').trim().split(/\s+/, 1)[0]?.toLowerCase() ?? '';
   if (first === 'codex') return 'codex';
+  if (first === 'hermes') return 'hermes';
   return 'claude';
 }
 
@@ -436,7 +440,7 @@ export function createSession(data: {
   autorespawn?: boolean;
   terminalAlerts?: boolean;
   fileWatchPatterns?: string[];
-  agentProvider?: 'claude' | 'codex';
+  agentProvider?: 'claude' | 'codex' | 'hermes';
   model?: string | null;
   /**
    * Optional explicit loader variant. Used by the transcript-resume flow to
@@ -515,7 +519,7 @@ export function updateSession(id: string, data: Partial<{
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex';
+  agentProvider: 'claude' | 'codex' | 'hermes';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];

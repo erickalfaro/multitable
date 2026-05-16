@@ -4,7 +4,12 @@ import path from 'node:path';
 import envPaths from 'env-paths';
 import type { BaselineModel } from './baselines.js';
 import { baselineFor } from './baselines.js';
-import { discoverClaude, discoverCodex, type DiscoveredModel } from './discovery.js';
+import {
+  discoverClaude,
+  discoverCodex,
+  discoverHermes,
+  type DiscoveredModel,
+} from './discovery.js';
 
 // Provider-catalog cache.
 //
@@ -25,7 +30,7 @@ import { discoverClaude, discoverCodex, type DiscoveredModel } from './discovery
 //     a provider's catalog (boot hydration, discovery success, user refresh).
 //     server.ts subscribes and broadcasts `providers:catalog-updated`.
 
-export type Provider = 'claude' | 'codex';
+export type Provider = 'claude' | 'codex' | 'hermes';
 
 interface CatalogEntry {
   models: DiscoveredModel[];
@@ -59,7 +64,7 @@ export class ProviderCatalog extends EventEmitter {
     this.cachePath = path.join(paths.cache, 'models.json');
     // Seed every provider with its baseline. Codex's baseline is empty by
     // design — the UI will see an empty Codex catalog until first discovery.
-    for (const provider of ['claude', 'codex'] as const) {
+    for (const provider of ['claude', 'codex', 'hermes'] as const) {
       this.state.set(provider, {
         models: cloneBaseline(baselineFor(provider)),
         lastRefreshed: null,
@@ -84,9 +89,12 @@ export class ProviderCatalog extends EventEmitter {
         console.warn('[catalog] cache schema version mismatch, ignoring');
         return;
       }
-      for (const provider of ['claude', 'codex'] as const) {
+      for (const provider of ['claude', 'codex', 'hermes'] as const) {
         const entry = parsed.entries?.[provider];
-        if (entry && Array.isArray(entry.models)) {
+        // Only hydrate when the cache actually has models — an empty array
+        // means a prior discovery returned no live data, and the seeded
+        // baseline is more useful than blanking the picker.
+        if (entry && Array.isArray(entry.models) && entry.models.length > 0) {
           this.state.set(provider, {
             models: entry.models,
             lastRefreshed: entry.lastRefreshed ?? null,
@@ -117,6 +125,7 @@ export class ProviderCatalog extends EventEmitter {
     return {
       claude: this.get('claude'),
       codex: this.get('codex'),
+      hermes: this.get('hermes'),
     };
   }
 
@@ -142,7 +151,11 @@ export class ProviderCatalog extends EventEmitter {
    * the boot path. Errors per provider are isolated.
    */
   async refreshAll(): Promise<void> {
-    await Promise.allSettled([this.refresh('claude'), this.refresh('codex')]);
+    await Promise.allSettled([
+      this.refresh('claude'),
+      this.refresh('codex'),
+      this.refresh('hermes'),
+    ]);
   }
 
   private async runDiscovery(provider: Provider): Promise<void> {
@@ -151,8 +164,19 @@ export class ProviderCatalog extends EventEmitter {
       let models: DiscoveredModel[];
       if (provider === 'codex') {
         models = await discoverCodex(this.opts.getDaemonEnv());
+      } else if (provider === 'hermes') {
+        models = await discoverHermes(this.opts.getDaemonEnv());
       } else {
         models = await discoverClaude(this.opts.discoveryCwd, this.opts.resolveClaudeExecutable);
+      }
+      // If discovery returned no live data but we have a baseline (e.g. Hermes
+      // until `hermes models --json` lands), keep the baseline so the picker
+      // isn't empty. `discoverHermes` is intentionally permissive and resolves
+      // to `[]` rather than throwing; without this guard it would clobber the
+      // seeded baseline on every refresh.
+      if (models.length === 0) {
+        const baseline = cloneBaseline(baselineFor(provider));
+        if (baseline.length > 0) models = baseline;
       }
       const now = Date.now();
       this.state.set(provider, {
@@ -184,7 +208,7 @@ export class ProviderCatalog extends EventEmitter {
       version: CACHE_SCHEMA_VERSION,
       entries: {},
     };
-    for (const provider of ['claude', 'codex'] as const) {
+    for (const provider of ['claude', 'codex', 'hermes'] as const) {
       const entry = this.state.get(provider);
       if (entry && entry.lastRefreshed !== null) {
         payload.entries[provider] = {
