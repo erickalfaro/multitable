@@ -226,10 +226,6 @@ async function main() {
   process.on('uncaughtException', (err) => {
     console.error('Uncaught exception:', err);
   });
-
-  process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled rejection:', reason);
-  });
 }
 
 main().catch((err) => {

@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { GitCommit, RefreshCw } from 'lucide-react';
+import {
+  ArrowDownCircle,
+  ArrowDownToLine,
+  ArrowUpCircle,
+  GitCommit,
+  RefreshCw,
+} from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useAppStore } from '../../../stores/appStore';
 import type { GitFileEntry, GitStatusSummary } from '../../../lib/types';
@@ -27,7 +33,7 @@ export function GitPanel({ projectId, sessionId }: Props) {
   const setGitStatus = useAppStore((s) => s.setGitStatus);
   const session = useAppStore((s) => (sessionId ? s.sessions[sessionId] : null));
 
-  const [scope, setScope] = useState<Scope>(sessionId ? 'agent' : 'project');
+  const [scope, setScope] = useState<Scope>('project');
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedBucket, setSelectedBucket] = useState<'staged' | 'unstaged' | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -186,6 +192,53 @@ export function GitPanel({ projectId, sessionId }: Props) {
     }
   };
 
+  const handleFetch = async () => {
+    const t = toast.loading('Fetching…');
+    try {
+      const r = await api.git.fetch(projectId);
+      toast.success(r.summary, { id: t });
+    } catch (err: any) {
+      toast.error(err?.message || 'Fetch failed', { id: t });
+    }
+  };
+
+  const handlePull = async () => {
+    const t = toast.loading('Pulling…');
+    try {
+      const r = await api.git.pull(projectId);
+      toast.success(r.summary, { id: t });
+    } catch (err: any) {
+      toast.error(err?.message || 'Pull failed', { id: t });
+    }
+  };
+
+  const handlePush = async () => {
+    const t = toast.loading('Pushing…');
+    try {
+      const r = await api.git.push(projectId);
+      toast.success(r.summary, { id: t });
+    } catch (err: any) {
+      const msg = err?.message || '';
+      // First push of a new branch: simple-git surfaces a "no upstream" error.
+      // Retry once with --set-upstream origin <current branch>.
+      if (status.branch && /no upstream|set-upstream/i.test(msg)) {
+        try {
+          const r = await api.git.push(projectId, {
+            setUpstream: true,
+            remote: 'origin',
+            branch: status.branch,
+          });
+          toast.success(`Published to origin/${status.branch} · ${r.summary}`, { id: t });
+          return;
+        } catch (err2: any) {
+          toast.error(err2?.message || 'Push failed', { id: t });
+          return;
+        }
+      }
+      toast.error(msg || 'Push failed', { id: t });
+    }
+  };
+
   const handleSwitchBranch = async (branch: string) => {
     try {
       await api.git.checkout(projectId, branch);
@@ -254,12 +307,38 @@ export function GitPanel({ projectId, sessionId }: Props) {
         )}
         <button
           type="button"
-          onClick={() => void refresh()}
-          title="Refresh"
+          onClick={() => void handleFetch()}
+          title="Fetch from origin"
+          style={{ ...iconBtn, marginLeft: sessionId ? 0 : 'auto' }}
+        >
+          <ArrowDownToLine size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => void handlePull()}
+          disabled={status.behind === 0}
+          title={status.behind > 0 ? `Pull ${status.behind} commit${status.behind === 1 ? '' : 's'}` : 'Nothing to pull'}
           style={{
             ...iconBtn,
-            marginLeft: sessionId ? 0 : 'auto',
+            opacity: status.behind === 0 ? 0.4 : 1,
+            cursor: status.behind === 0 ? 'default' : 'pointer',
           }}
+        >
+          <ArrowDownCircle size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => void handlePush()}
+          title={status.ahead > 0 ? `Push ${status.ahead} commit${status.ahead === 1 ? '' : 's'}` : 'Push'}
+          style={iconBtn}
+        >
+          <ArrowUpCircle size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          title="Refresh"
+          style={iconBtn}
         >
           <RefreshCw size={12} />
         </button>

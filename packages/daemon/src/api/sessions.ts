@@ -10,7 +10,7 @@ import {
   getSessionCostAggregate,
   getProjectById,
 } from '../db/store.js';
-import { getDiffSinceCommit, isGitRepo } from '../git/index.js';
+import { isGitRepo } from '../git/index.js';
 import { parseSessionCost } from '../hooks/costParser.js';
 import { parseSessionPrompts, parseAllProjectPrompts } from '../hooks/promptsParser.js';
 import { generateSessionLabel } from '../hooks/labeler.js';
@@ -459,9 +459,7 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
     }
 
     try {
-      const diff = session.gitBaselineCommit
-        ? await getDiffSinceCommit(repoPath, session.gitBaselineCommit)
-        : await simpleGit(repoPath).diff();
+      const diff = await simpleGit(repoPath).diff();
       res.json({ diff });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to get diff' });
