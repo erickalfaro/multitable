@@ -264,6 +264,26 @@ function App() {
 
     loadData();
 
+    // Seed the model catalog from the daemon's cached snapshot so model
+    // pickers (AddAgentModal, ModeBadge, ThinkingEffortBadge) render
+    // instantly without round-tripping. The daemon's `ProviderCatalog`
+    // hydrates from baseline + on-disk cache at boot and runs live
+    // discovery in the background — by the time the UI mounts, this
+    // endpoint already has data. Subsequent updates land via the
+    // `providers:catalog-updated` WS event.
+    api.providers
+      .catalog()
+      .then((snapshot) => {
+        const setModelCatalog = useAppStore.getState().setModelCatalog;
+        for (const provider of ['claude', 'codex'] as const) {
+          const entry = snapshot[provider];
+          if (entry?.models?.length) setModelCatalog(provider, entry.models);
+        }
+      })
+      .catch(() => {
+        // Daemon may not be running yet; WS reconnect path will refetch.
+      });
+
     // Persist expandedProjectIds to localStorage on every change
     const unsubPersist = useAppStore.subscribe((state, prev) => {
       if (state.expandedProjectIds !== prev.expandedProjectIds) {
