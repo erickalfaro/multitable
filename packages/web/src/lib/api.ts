@@ -215,6 +215,27 @@ export const api = {
         lastRefreshed: number | null;
         lastError: string | null;
       }>(`/api/providers/${provider}/models`),
+    // Full snapshot across all providers. Used once at app boot to seed the
+    // in-memory model catalog so model pickers render instantly.
+    catalog: () =>
+      get<
+        Record<
+          'claude' | 'codex',
+          {
+            models: Array<{
+              id: string;
+              displayName: string;
+              description?: string;
+              isDefault?: boolean;
+              supportsEffort?: boolean;
+              effortLevels?: Array<'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
+              defaultEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+            }>;
+            lastRefreshed: number | null;
+            lastError: string | null;
+          }
+        >
+      >('/api/providers/catalog'),
     // Trigger live discovery. Server returns 202; the actual catalog lands
     // via the `providers:catalog-updated` WS event.
     refresh: (provider?: 'claude' | 'codex') =>
