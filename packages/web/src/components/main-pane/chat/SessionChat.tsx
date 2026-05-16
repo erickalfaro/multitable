@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Session } from '../../../lib/types';
 import { useAppStore } from '../../../stores/appStore';
 import { wsClient } from '../../../lib/ws';
@@ -10,6 +10,7 @@ import { PermissionBar } from '../../permission/PermissionBar';
 import { MessageList } from './MessageList';
 import { ChatScroller } from './ChatScroller';
 import { ChatInputCM } from './ChatInputCM';
+import { PinnedUserPrompt } from './PinnedUserPrompt';
 
 // Stable empty-array reference so the selector below doesn't hand a fresh
 // [] to Zustand on every unrelated store update — without this, every metrics
@@ -144,6 +145,17 @@ export function SessionChat({ sessionId, session }: Props) {
   // ready state, no banner needed. Only surface the banner on actual error.
   const showBanner = session.state === 'errored';
 
+  // Ordered list of every user prompt in the chat — fed to PinnedUserPrompt
+  // so it can render whichever prompt is the closest one above the current
+  // viewport, updating live as the user scrolls.
+  const userMessages = useMemo(() => {
+    const list: Array<{ id: string; text: string }> = [];
+    for (const m of messages) {
+      if (m.kind === 'user') list.push({ id: m.id, text: m.text });
+    }
+    return list;
+  }, [messages]);
+
   return (
     <div
       style={{
@@ -175,7 +187,11 @@ export function SessionChat({ sessionId, session }: Props) {
           backgroundColor: 'var(--bg-primary)',
         }}
       >
-        <ChatScroller>
+        <ChatScroller
+          pinnedHeader={
+            userMessages.length > 0 ? <PinnedUserPrompt userMessages={userMessages} /> : null
+          }
+        >
           <MessageList
             messages={messages}
             loading={loading}

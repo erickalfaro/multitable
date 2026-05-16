@@ -31,6 +31,8 @@ import { ChevronDown } from 'lucide-react';
 interface ChatScrollerContextValue {
   isAtBottom: boolean;
   scrollToBottom(opts?: { smooth?: boolean }): void;
+  scrollRoot: HTMLDivElement | null;
+  scrollToElement(el: HTMLElement, opts?: { smooth?: boolean }): void;
 }
 
 const ChatScrollerContext = createContext<ChatScrollerContextValue | null>(null);
@@ -41,6 +43,8 @@ export function useChatScroller(): ChatScrollerContextValue {
     return {
       isAtBottom: true,
       scrollToBottom: () => {},
+      scrollRoot: null,
+      scrollToElement: () => {},
     };
   }
   return ctx;
@@ -54,11 +58,13 @@ interface Props {
   children: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  pinnedHeader?: React.ReactNode;
 }
 
-export function ChatScroller({ children, className, style }: Props) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+export function ChatScroller({ children, className, style, pinnedHeader }: Props) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const [scrollRootEl, setScrollRootEl] = useState<HTMLDivElement | null>(null);
   const [atBottom, setAtBottom] = useState(true);
   // Mirror in a ref so the ResizeObserver callback (which has its own closure)
   // sees the up-to-date value without re-attaching on each state change.
@@ -85,6 +91,38 @@ export function ChatScroller({ children, className, style }: Props) {
     }
     atBottomRef.current = true;
     setAtBottom(true);
+  }, []);
+
+  // Smooth-scroll a specific descendant element so its top sits near the
+  // top of the scroll viewport. Used by PinnedUserPrompt's jump button and
+  // by every UserMessage's prev/next chevrons.
+  //
+  // We compute scrollTop manually rather than using `el.scrollIntoView()`
+  // because the latter scrolls *all* ancestor scrollables, which can yank
+  // the composer/header out of place when the chat lives in a nested
+  // layout.
+  //
+  // Critical: we forcibly release the "stuck to bottom" flag here. Otherwise
+  // a forward jump (or any jump) made while atBottomRef is true would be
+  // immediately reversed by the ResizeObserver snap on the next content
+  // resize — that's why "next" appeared broken when the user was at the
+  // bottom and streaming was active.
+  const scrollToElement = useCallback((el: HTMLElement, opts?: { smooth?: boolean }) => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const rootRect = root.getBoundingClientRect();
+    const targetRect = el.getBoundingClientRect();
+    const delta = targetRect.top - rootRect.top;
+    const maxScroll = Math.max(0, root.scrollHeight - root.clientHeight);
+    const next = Math.min(maxScroll, Math.max(0, root.scrollTop + delta - 8));
+    programmaticUntilRef.current = performance.now() + 600;
+    atBottomRef.current = false;
+    setAtBottom(false);
+    if (opts?.smooth) {
+      root.scrollTo({ top: next, behavior: 'smooth' });
+    } else {
+      root.scrollTop = next;
+    }
   }, []);
 
   // User-driven scroll listener.
@@ -133,8 +171,13 @@ export function ChatScroller({ children, className, style }: Props) {
   }, []);
 
   const ctx = useMemo<ChatScrollerContextValue>(
-    () => ({ isAtBottom: atBottom, scrollToBottom }),
-    [atBottom, scrollToBottom],
+    () => ({
+      isAtBottom: atBottom,
+      scrollToBottom,
+      scrollRoot: scrollRootEl,
+      scrollToElement,
+    }),
+    [atBottom, scrollToBottom, scrollRootEl, scrollToElement],
   );
 
   // Hide the "Jump to latest" affordance when there's nothing to scroll to —
@@ -158,7 +201,10 @@ export function ChatScroller({ children, className, style }: Props) {
         }}
       >
         <div
-          ref={scrollRef}
+          ref={(el) => {
+            scrollRef.current = el;
+            setScrollRootEl(el);
+          }}
           className={`mt-scroll mt-chat-scroller ${className ?? ''}`}
           style={{
             flex: 1,
@@ -175,6 +221,21 @@ export function ChatScroller({ children, className, style }: Props) {
             {children}
           </div>
         </div>
+
+        {pinnedHeader && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              zIndex: 12,
+              pointerEvents: 'none',
+            }}
+          >
+            {pinnedHeader}
+          </div>
+        )}
 
         {showJumpToLatest && (
           <button
