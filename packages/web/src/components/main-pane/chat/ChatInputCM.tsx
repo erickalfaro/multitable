@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Paperclip, X, Clock, Square, Maximize2 } from 'lucide-react';
+import { ArrowUp, Paperclip, X, Clock, Square, Maximize2, File as FileIcon } from 'lucide-react';
 
 import { ModeBadge } from '../ModeBadge';
 import { ExpandedComposer, type ImageAttachment } from './ExpandedComposer';
@@ -8,6 +8,7 @@ import { ModelChip } from './ModelChip';
 // Stable empty array so the pending-sends selector doesn't churn on
 // unrelated store updates.
 const EMPTY_PENDING: string[] = [];
+const EMPTY_FILES: string[] = [];
 import { toast } from 'react-hot-toast';
 import { wsClient } from '../../../lib/ws';
 import { api } from '../../../lib/api';
@@ -194,6 +195,12 @@ export const ChatInputCM = memo(function ChatInputCM({
   );
   const enqueueSend = useAppStore((s) => s.enqueueSend);
   const removePendingSend = useAppStore((s) => s.removePendingSend);
+  const selectedFiles = useAppStore(
+    (s) => s.selectedFilesBySession[processId] ?? EMPTY_FILES,
+  );
+  const toggleSelectedFile = useAppStore((s) => s.toggleSelectedFile);
+  const selectedFilesRef = useRef(selectedFiles);
+  selectedFilesRef.current = selectedFiles;
   // Live session for the mode dropdown. ModeBadge self-hides when the
   // adapter only supports one mode, so it's safe to render unconditionally.
   const session = useAppStore((s) => s.sessions[processId]);
@@ -326,6 +333,7 @@ export const ChatInputCM = memo(function ChatInputCM({
       // Try a native slash-command handler first. If consumed, clear the
       // editor and don't forward to the SDK. Otherwise fall through (custom
       // slash commands and regular prompts both go through wsClient.sendTurn).
+      // Native slash commands run untouched — selected files do not apply.
       if (handleNativeSlash(text)) {
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: '' },
@@ -334,6 +342,14 @@ export const ChatInputCM = memo(function ChatInputCM({
         clearDraft(processId);
         return true;
       }
+
+      // Prepend file mentions picked from the Files tab. Matches the `@path`
+      // syntax produced by the file-mention completion source so the SDK
+      // resolves them identically.
+      const pinned = selectedFilesRef.current;
+      const finalText = pinned.length
+        ? `${pinned.map((p) => `@${p}`).join(' ')}\n\n${text}`
+        : text;
 
       // If a turn is in flight, queue the message client-side. SessionChat
       // drains the queue when the daemon flips state back to 'stopped'.
@@ -350,14 +366,14 @@ export const ChatInputCM = memo(function ChatInputCM({
       const queueHasHead = !!live.pendingSendsBySession?.[processId]?.length;
       const isIdle = session?.state === 'stopped' && !queueHasHead;
       if (!isIdle) {
-        live.enqueueSend(processId, text);
+        live.enqueueSend(processId, finalText);
       } else {
         // Optimistically flip the local state to 'running' so a follow-up
         // doSend in the same render frame sees in-flight and queues. The
         // daemon's process-state-changed event will overwrite this shortly
         // (idempotent — same value).
         live.updateProcessState(processId, 'running');
-        wsClient.sendTurn(processId, text);
+        wsClient.sendTurn(processId, finalText);
       }
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: '' },
@@ -365,6 +381,7 @@ export const ChatInputCM = memo(function ChatInputCM({
       // The text was sent (or queued); the registry references that text and
       // is no longer useful. Revoke blob URLs to free memory.
       clearImageAttachments();
+      live.clearSelectedFiles(processId);
       clearDraft(processId);
       return true;
     };
@@ -789,6 +806,72 @@ export const ChatInputCM = memo(function ChatInputCM({
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {selectedFiles.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 4,
+            }}
+          >
+            {selectedFiles.map((path) => {
+              const slash = path.lastIndexOf('/');
+              const label = slash >= 0 ? path.slice(slash + 1) : path;
+              return (
+                <div
+                  key={path}
+                  title={path}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '2px 6px',
+                    fontSize: 11.5,
+                    color: 'var(--accent-blue)',
+                    backgroundColor: 'color-mix(in srgb, var(--accent-blue) 12%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--accent-blue) 40%, transparent)',
+                    borderRadius: 'var(--radius-snug)',
+                    maxWidth: 220,
+                  }}
+                >
+                  <FileIcon size={11} style={{ flexShrink: 0 }} />
+                  <span
+                    style={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {label}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleSelectedFile(processId, path)}
+                    title="Remove from chat context"
+                    aria-label={`Remove ${label} from chat context`}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 16,
+                      height: 16,
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      padding: 0,
+                    }}
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 

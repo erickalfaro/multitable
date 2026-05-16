@@ -64,6 +64,10 @@ interface AppState {
 
   // UI
   selectedProcessId: string | null;
+  // When set, the main pane shows the per-project Source Control view instead
+  // of any selected process. Mutually exclusive with `selectedProcessId` and
+  // `projectOverviewOpen` — setting any one clears the others.
+  selectedGitProjectId: string | null;
   // Multi-selected session ids for bulk operations (e.g. group remove). Sidebar
   // toggles entries via Cmd/Ctrl+click and Shift+click range select. Cleared
   // whenever a plain (un-modified) click sets a new primary selection.
@@ -86,6 +90,7 @@ interface AppState {
   devLogOpen: boolean;
   setDevLogOpen: (open: boolean) => void;
   setSelectedProcess: (id: string | null) => void;
+  setSelectedGitProject: (projectId: string | null) => void;
   setMultiSelectedSessions: (ids: string[]) => void;
   toggleMultiSelectedSession: (id: string) => void;
   clearMultiSelectedSessions: () => void;
@@ -220,6 +225,12 @@ interface AppState {
   popPendingSend: (sessionId: string) => string | undefined;
   clearPendingSends: (sessionId: string) => void;
 
+  // Per-session set of file paths the user has pinned from the Files tab as
+  // extra context for the next turn. Cleared after a successful send.
+  selectedFilesBySession: Record<string, string[]>;
+  toggleSelectedFile: (sessionId: string, path: string) => void;
+  clearSelectedFiles: (sessionId: string) => void;
+
   // Per-provider model catalog. Lazily fetched the first time a ModelChip
   // mounts for a session whose model is non-default — the daemon endpoint
   // probes the provider CLI on each call so we cache aggressively. Status
@@ -233,7 +244,7 @@ interface AppState {
   setModelCatalog: (provider: AgentProvider, models: DiscoveredModel[]) => void;
 }
 
-export type DetailPanelTab = 'diff' | 'files' | 'tasks' | 'cost' | 'prompt-builder';
+export type DetailPanelTab = 'files' | 'tasks' | 'cost' | 'prompt-builder';
 
 export type AttentionKind = 'read' | 'edit' | 'command' | 'search' | 'mcp' | 'reasoning';
 
@@ -477,6 +488,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // UI
   selectedProcessId: null,
+  selectedGitProjectId: null,
   multiSelectedSessionIds: [],
   sidebarCollapsed: false,
   customThemes: loadCustomThemesFromStorage(),
@@ -494,7 +506,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   globalSettingsOpen: false,
   projectSettingsOpen: false,
   detailPanelOpen: true,
-  detailPanelTab: 'diff',
+  detailPanelTab: 'files',
   // Start optimistic. The fullscreen "Cannot connect to daemon" overlay is
   // intrusive — only show it after a real connect attempt has failed, never
   // during the initial mount window. ws.connect() flips this to 'reconnecting'
@@ -522,10 +534,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       if (id === null) return { selectedProcessId: null };
       const proc = s.sessions[id] || s.commands[id] || s.terminals[id];
-      if (!proc) return { selectedProcessId: id };
+      if (!proc) return { selectedProcessId: id, selectedGitProjectId: null };
       return {
         selectedProcessId: id,
         focusedProjectId: proc.projectId,
+        selectedGitProjectId: null,
+      };
+    }),
+  setSelectedGitProject: (projectId) =>
+    set(() => {
+      if (projectId === null) return { selectedGitProjectId: null };
+      return {
+        selectedGitProjectId: projectId,
+        selectedProcessId: null,
+        projectOverviewOpen: false,
+        focusedProjectId: projectId,
       };
     }),
   setMultiSelectedSessions: (ids) => set({ multiSelectedSessionIds: ids }),
@@ -638,7 +661,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
 
   setConnectionState: (state) => set({ connectionState: state }),
-  setProjectOverviewOpen: (open) => set({ projectOverviewOpen: open }),
+  setProjectOverviewOpen: (open) =>
+    set(() => (open ? { projectOverviewOpen: true, selectedGitProjectId: null } : { projectOverviewOpen: false })),
   setContextMenu: (menu) => set({ contextMenu: menu }),
   setMobileDrawerOpen: (open) => set({ mobileDrawerOpen: open }),
 
@@ -1017,6 +1041,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearPendingSends: (sessionId) =>
     set((s) => ({
       pendingSendsBySession: { ...s.pendingSendsBySession, [sessionId]: [] },
+    })),
+
+  selectedFilesBySession: {},
+  toggleSelectedFile: (sessionId, path) =>
+    set((s) => {
+      const current = s.selectedFilesBySession[sessionId] ?? [];
+      const next = current.includes(path)
+        ? current.filter((p) => p !== path)
+        : [...current, path];
+      return {
+        selectedFilesBySession: { ...s.selectedFilesBySession, [sessionId]: next },
+      };
+    }),
+  clearSelectedFiles: (sessionId) =>
+    set((s) => ({
+      selectedFilesBySession: { ...s.selectedFilesBySession, [sessionId]: [] },
     })),
 
   // Model catalog cache. The daemon route is `claude` / `codex` today;
