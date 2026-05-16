@@ -25,7 +25,25 @@ const DEFAULT_CONFIG: GlobalConfig = {
   host: '127.0.0.1',
   projects: [],
   integrations: {},
+  lastThinkingEffort: 'medium',
 };
+
+// Trailing-debounce wrapper around saveGlobalConfig. Rapid toggles of the
+// per-session effort badge would otherwise rewrite the YAML on every click;
+// 250ms is well below human "is this saved?" perception and small enough that
+// a daemon shutdown won't lose meaningful state.
+let pendingConfig: GlobalConfig | null = null;
+let saveTimer: NodeJS.Timeout | null = null;
+export function saveGlobalConfigDebounced(config: GlobalConfig): void {
+  pendingConfig = config;
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    const next = pendingConfig;
+    saveTimer = null;
+    pendingConfig = null;
+    if (next) saveGlobalConfig(next);
+  }, 250);
+}
 
 export function loadGlobalConfig(): GlobalConfig {
   const configPath = path.join(getConfigDir(), 'config.yml');

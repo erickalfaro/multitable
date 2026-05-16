@@ -1,6 +1,6 @@
 export type ProcessType = 'session' | 'terminal' | 'command';
 export type ProcessState = 'running' | 'idle' | 'stopped' | 'errored';
-export type AgentProvider = 'claude' | 'codex' | 'copilot' | 'hermes';
+export type AgentProvider = 'claude' | 'codex' | 'copilot';
 
 // Mirrors the daemon's `/api/providers/:provider/models` row shape. Lives here
 // so both AddAgentModal (one-shot fetch on session create) and the appStore
@@ -10,6 +10,12 @@ export interface DiscoveredModel {
   displayName: string;
   description?: string;
   isDefault?: boolean;
+  // Per-model reasoning-effort support. The badge gates its dropdown by
+  // these fields: `supportsEffort=false` disables the badge entirely; an
+  // `effortLevels` array filters which levels are shown.
+  supportsEffort?: boolean;
+  effortLevels?: Array<'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
+  defaultEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 // Provider-agnostic operating mode. Each adapter translates these to its own
@@ -22,6 +28,12 @@ export type SessionMode =
   | 'auto'
   | 'chat'
   | 'read-only';
+
+// Cross-provider reasoning-effort level. Mirrors daemon's ThinkingEffort and
+// the Claude SDK's EffortLevel enum (low / medium / high / xhigh / max).
+// Each model exposes the subset it supports via DiscoveredModel.effortLevels;
+// the badge filters its dropdown to that subset.
+export type ThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 // Mirrors daemon's ProviderCapabilities — what the adapter can do, used by the
 // React layer to gate UI without provider-name branching.
@@ -39,6 +51,9 @@ export interface ProviderCapabilities {
   streamingDeltaSemantics: 'additive' | 'cumulative';
   modelSwitchScope: 'per-turn' | 'per-thread' | 'per-session';
   modes: SessionMode[];
+  // Cross-provider reasoning-effort toggle. 'native' = adapter passes the
+  // value through to the SDK; 'unsupported' = UI renders the badge disabled.
+  thinkingEffort: 'native' | 'unsupported';
 }
 
 export interface ProcessConfig {
@@ -99,6 +114,11 @@ export interface Session extends ManagedProcess {
   // Operating mode (default / plan / accept-edits / etc.). Persisted; takes
   // effect on the next turn.
   mode: SessionMode;
+  // Reasoning-effort level (low / medium / high / xhigh / max). Null means
+  // "use provider default". Persisted; flows through to the SDK on the next
+  // turn for providers that support it. The two highest tiers are gated
+  // per-model via DiscoveredModel.effortLevels.
+  thinkingEffort?: ThinkingEffort | null;
   // Adapter-declared capability bag. UI gates features on this rather than
   // branching on provider name. Null until the daemon attaches it.
   capabilities?: ProviderCapabilities | null;

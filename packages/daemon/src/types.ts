@@ -136,6 +136,13 @@ export interface GlobalConfig {
   host: string;
   projects: Array<{ path: string; shortcut?: number }>;
   integrations?: IntegrationsConfig;
+  // Sticky default for the per-session thinking-effort badge. Updated every
+  // time the user flips the toggle on any session so the next new session
+  // inherits their last choice. 'medium' is the seed value. The two higher
+  // tiers (xhigh / max) are honored if the user lands here from a Claude
+  // Opus session; new sessions on models that don't support them are clamped
+  // to the model's max at session-create time by the UI.
+  lastThinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 export interface ProjectConfig {

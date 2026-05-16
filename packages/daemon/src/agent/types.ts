@@ -1,7 +1,22 @@
 import type { ProcessState } from '../types.js';
 import type { SessionMode } from './providers/types.js';
 
-export type AgentProvider = 'claude' | 'codex' | 'hermes';
+export type AgentProvider = 'claude' | 'codex';
+
+// Cross-provider reasoning-effort level. Mirrors Claude SDK's full `EffortLevel`
+// enum (sdk.d.ts:465): low / medium / high / xhigh / max. The two highest tiers
+// have model gating —
+//   • `xhigh` — Opus 4.7 only on the Claude side; falls back to `high` on
+//     unsupported models. Codex accepts `xhigh` on every reasoning-capable model.
+//   • `max`   — Opus 4.6/4.7 only on the Claude side. Codex's enum has no
+//     `max` — the Codex adapter skips sending effort when this is set so the
+//     server's default reasoning level kicks in instead of erroring.
+// Each model declares which levels it actually supports via
+// DiscoveredModel.effortLevels — the badge filters its dropdown to that subset.
+// The capability flag 'unsupported' is reserved for future providers that
+// can't surface a reasoning knob at all (both active providers — Claude and
+// Codex — declare 'native').
+export type ThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type { SessionMode };
 
@@ -29,6 +44,10 @@ export interface AgentSession {
   // (Claude permissionMode, Codex sandboxMode, etc.) inside the adapter.
   // Defaults to 'default'. Persisted across daemon restarts.
   mode: SessionMode;
+  // Reasoning-effort level for this session. Persisted across restarts and
+  // initialised from GlobalConfig.lastThinkingEffort on session create. Null
+  // means "use provider default" (no `effort` field sent to the SDK).
+  thinkingEffort: ThinkingEffort | null;
   // === provider link ===
   agentSessionId: string | null; // mirrored to DB; Claude session id or Codex thread id
   agentSessionIdHistory: string[];

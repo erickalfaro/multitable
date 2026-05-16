@@ -34,7 +34,7 @@ function isMuslRuntime(): boolean {
   return process.platform === 'linux' && !report?.header?.glibcVersionRuntime;
 }
 
-function resolveClaudeCodeExecutable(): string | undefined {
+export function resolveClaudeCodeExecutable(): string | undefined {
   if (process.platform !== 'linux') return undefined;
   const arch = process.arch;
   const libcSuffix = isMuslRuntime() ? '-musl' : '';
@@ -113,6 +113,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     streamingDeltaSemantics: 'additive',
     modelSwitchScope: 'per-turn',
     modes: ['default', 'plan', 'accept-edits', 'auto', 'read-only', 'chat'],
+    thinkingEffort: 'native',
   };
 
   // Per-session live state the adapter needs to track within a single turn.
@@ -159,6 +160,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         ...(s.claudeSessionId ? { resume: s.claudeSessionId } : {}),
         ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
         ...(s.model ? { model: s.model } : {}),
+        ...(s.thinkingEffort ? { effort: s.thinkingEffort } : {}),
         settingSources: ['project', 'user'],
         permissionMode: modeToPermissionMode(s.mode),
         canUseTool: this.makeCanUseTool(s),

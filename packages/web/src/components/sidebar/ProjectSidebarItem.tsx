@@ -71,7 +71,66 @@ export function ProjectSidebarItem({ project }: Props) {
     store.toggleProjectExpanded(project.id);
   };
 
-  const handleSelectProcess = (proc: ManagedProcess) => {
+  const handleSelectProcess = (proc: ManagedProcess, e?: React.MouseEvent) => {
+    // Modifier-aware selection for sessions only. Cmd/Ctrl+click toggles the
+    // session in the multi-select set; Shift+click selects a range within
+    // this project's session list; a plain click clears multi-select and
+    // sets the primary selection. Commands and terminals don't participate.
+    if (proc.type === 'session' && e) {
+      const cmdOrCtrl = e.metaKey || e.ctrlKey;
+      const shift = e.shiftKey;
+
+      if (cmdOrCtrl) {
+        const current = store.multiSelectedSessionIds;
+        const alreadyInMulti = current.includes(proc.id);
+
+        if (alreadyInMulti) {
+          // Removing from the group. Don't promote this id to primary —
+          // the user explicitly dropped it from the context. If primary
+          // happened to point here, shift it to another remaining group
+          // member (or clear it if none left) so the active chat doesn't
+          // keep showing a "deselected" session.
+          store.toggleMultiSelectedSession(proc.id);
+          if (selectedProcessId === proc.id) {
+            const remaining = current.filter((id) => id !== proc.id);
+            setSelectedProcess(remaining[remaining.length - 1] ?? null);
+          }
+          return;
+        }
+
+        // Adding to the group. Seed with the existing primary the first
+        // time so the prior plain-click selection stays part of the context.
+        if (
+          current.length === 0 &&
+          selectedProcessId &&
+          selectedProcessId !== proc.id &&
+          sessions[selectedProcessId]
+        ) {
+          store.setMultiSelectedSessions([selectedProcessId, proc.id]);
+        } else {
+          store.toggleMultiSelectedSession(proc.id);
+        }
+        setSelectedProcess(proc.id);
+        return;
+      }
+
+      if (shift && selectedProcessId) {
+        const ids = projectSessions.map((s) => s.id);
+        const startIdx = ids.indexOf(selectedProcessId);
+        const endIdx = ids.indexOf(proc.id);
+        if (startIdx >= 0 && endIdx >= 0) {
+          const [a, b] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+          const range = ids.slice(a, b + 1);
+          store.setMultiSelectedSessions(range);
+          setSelectedProcess(proc.id);
+          return;
+        }
+      }
+
+      // Plain click — drop any active multi-select.
+      store.clearMultiSelectedSessions();
+    }
+
     const needsReselect = selectedProcessId === proc.id && proc.state !== 'running';
     if (needsReselect) {
       setSelectedProcess(null);
@@ -100,14 +159,40 @@ export function ProjectSidebarItem({ project }: Props) {
     }
   };
 
+  const removeSessionsById = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const results = await Promise.allSettled(ids.map((id) => api.sessions.delete(id)));
+    const failed: string[] = [];
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') {
+        store.removeSession(ids[i]);
+        routeAwayIfSelected(ids[i]);
+      } else {
+        failed.push(ids[i]);
+      }
+    });
+    window.dispatchEvent(new Event('mt:past-sessions-refresh'));
+    store.clearMultiSelectedSessions();
+    if (failed.length === 0) {
+      toast.success(ids.length === 1 ? 'Session removed' : `${ids.length} sessions removed`);
+    } else {
+      toast.error(`Failed to remove ${failed.length} session${failed.length === 1 ? '' : 's'}`);
+    }
+  };
+
   const getSessionMenuItems = (process: ManagedProcess): MenuItem[] => {
     const isRunning = process.state === 'running';
+    const bulk =
+      store.multiSelectedSessionIds.length >= 2 &&
+      store.multiSelectedSessionIds.includes(process.id);
+    const bulkIds = bulk ? store.multiSelectedSessionIds : [process.id];
+
     return [
       // Sessions auto-start on the first turn (sending a message IS starting),
       // so the Start path doesn't apply — only show Stop while a turn is in
       // flight. Stop here means "abort the in-flight SDK turn" via
       // /api/sessions/:id/stop, NOT the PTY route.
-      ...(isRunning
+      ...(isRunning && !bulk
         ? [
             {
               label: 'Stop',
@@ -115,29 +200,15 @@ export function ProjectSidebarItem({ project }: Props) {
                 stopProcessByType(process as Parameters<typeof stopProcessByType>[0]).catch(() =>
                   toast.error('Failed to stop'),
                 ),
+              divider: true,
             } as MenuItem,
           ]
         : []),
       {
-        label: 'Clear output',
-        action: () => api.processes.clearScrollback(process.id).catch(() => toast.error('Failed to clear')),
-        divider: true,
-      },
-      {
-        label: 'Delete agent',
-        action: async () => {
-          try {
-            await api.sessions.delete(process.id);
-            store.removeSession(process.id);
-            routeAwayIfSelected(process.id);
-            window.dispatchEvent(new Event('mt:past-sessions-refresh'));
-            toast.success('Agent deleted');
-          } catch {
-            toast.error('Failed to delete agent');
-          }
+        label: bulk ? `Remove ${bulkIds.length} sessions` : 'Remove session',
+        action: () => {
+          void removeSessionsById(bulkIds);
         },
-        divider: true,
-        danger: true,
       },
     ];
   };
@@ -159,10 +230,6 @@ export function ProjectSidebarItem({ project }: Props) {
           toast.success('Command copied');
         },
         divider: true,
-      },
-      {
-        label: 'Clear output',
-        action: () => api.processes.clearScrollback(process.id).catch(() => toast.error('Failed to clear')),
       },
       {
         label: 'Delete command',
@@ -196,12 +263,6 @@ export function ProjectSidebarItem({ project }: Props) {
             action: () =>
               api.processes.start(process.id).catch(() => toast.error('Failed to start')),
           },
-      {
-        label: 'Clear output',
-        action: () =>
-          api.processes.clearScrollback(process.id).catch(() => toast.error('Failed to clear')),
-        divider: true,
-      },
       {
         label: 'Close terminal',
         action: async () => {
@@ -351,7 +412,8 @@ export function ProjectSidebarItem({ project }: Props) {
                   key={session.id}
                   process={session}
                   isSelected={selectedProcessId === session.id}
-                  onClick={() => handleSelectProcess(session)}
+                  isMultiSelected={store.multiSelectedSessionIds.includes(session.id)}
+                  onClick={(e) => handleSelectProcess(session, e)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setContextMenu({ type: 'session', id: session.id, x: e.clientX, y: e.clientY, process: session });
@@ -373,6 +435,7 @@ export function ProjectSidebarItem({ project }: Props) {
                   process={term}
                   isSelected={selectedProcessId === term.id}
                   onClick={() => handleSelectProcess(term)}
+                  // terminals don't participate in session multi-select
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setContextMenu({ type: 'terminal', id: term.id, x: e.clientX, y: e.clientY, process: term });

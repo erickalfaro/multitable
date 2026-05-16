@@ -12,6 +12,7 @@ import type { TurnStartResponse } from '../codex-protocol/v2/TurnStartResponse.j
 import type { TurnInterruptParams } from '../codex-protocol/v2/TurnInterruptParams.js';
 import type { SandboxMode } from '../codex-protocol/v2/SandboxMode.js';
 import type { AskForApproval } from '../codex-protocol/v2/AskForApproval.js';
+import type { ReasoningEffort } from '../codex-protocol/ReasoningEffort.js';
 
 // CodexAppServerClient — singleton wrapper over a long-lived `codex app-server`
 // child. One per daemon. Lazy-spawned on first use so daemons that never use
@@ -46,6 +47,13 @@ export interface ResumeThreadOptions {
 export interface StartTurnOptions {
   threadId: string;
   prompt: string;
+  /**
+   * Override the reasoning effort for this turn (and subsequent turns on the
+   * same thread). Codex's TurnStartParams.effort docs spell this out — it's a
+   * per-turn override, not a thread-immutable option, so we don't have to
+   * rebuild the thread when the user flips the badge.
+   */
+  effort?: ReasoningEffort | null;
 }
 
 export interface CodexClientOptions extends TransportOptions {
@@ -238,6 +246,7 @@ export class CodexAppServerClient {
     const params: TurnStartParams = {
       threadId: opts.threadId,
       input: [{ type: 'text', text: opts.prompt, text_elements: [] }],
+      ...(opts.effort ? { effort: opts.effort } : {}),
     };
     const res = await transport.request<TurnStartResponse>('turn/start', params);
     return { turnId: res.turn.id };

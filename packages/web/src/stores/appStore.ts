@@ -64,6 +64,10 @@ interface AppState {
 
   // UI
   selectedProcessId: string | null;
+  // Multi-selected session ids for bulk operations (e.g. group remove). Sidebar
+  // toggles entries via Cmd/Ctrl+click and Shift+click range select. Cleared
+  // whenever a plain (un-modified) click sets a new primary selection.
+  multiSelectedSessionIds: string[];
   sidebarCollapsed: boolean;
   customThemes: Theme[];
   activeThemeId: string;
@@ -82,6 +86,9 @@ interface AppState {
   devLogOpen: boolean;
   setDevLogOpen: (open: boolean) => void;
   setSelectedProcess: (id: string | null) => void;
+  setMultiSelectedSessions: (ids: string[]) => void;
+  toggleMultiSelectedSession: (id: string) => void;
+  clearMultiSelectedSessions: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setActiveTheme: (id: string) => void;
   addCustomTheme: (theme: Theme) => void;
@@ -220,6 +227,10 @@ interface AppState {
   modelCatalog: Record<AgentProvider, DiscoveredModel[] | null>;
   modelCatalogStatus: Record<AgentProvider, 'idle' | 'loading' | 'ready' | 'error'>;
   loadModelCatalog: (provider: AgentProvider) => void;
+  // Replace the cached model list for one provider — called from the
+  // `providers:catalog-updated` WS handler after the daemon's background
+  // discovery (or a user-triggered refresh) returns.
+  setModelCatalog: (provider: AgentProvider, models: DiscoveredModel[]) => void;
 }
 
 export type DetailPanelTab = 'diff' | 'files' | 'tasks' | 'cost' | 'prompt-builder';
@@ -466,6 +477,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // UI
   selectedProcessId: null,
+  multiSelectedSessionIds: [],
   sidebarCollapsed: false,
   customThemes: loadCustomThemesFromStorage(),
   activeThemeId: (() => {
@@ -516,6 +528,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         focusedProjectId: proc.projectId,
       };
     }),
+  setMultiSelectedSessions: (ids) => set({ multiSelectedSessionIds: ids }),
+  toggleMultiSelectedSession: (id) =>
+    set((s) => {
+      const exists = s.multiSelectedSessionIds.includes(id);
+      return {
+        multiSelectedSessionIds: exists
+          ? s.multiSelectedSessionIds.filter((x) => x !== id)
+          : [...s.multiSelectedSessionIds, id],
+      };
+    }),
+  clearMultiSelectedSessions: () => set({ multiSelectedSessionIds: [] }),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
   setActiveTheme: (id) =>
     set(() => {
@@ -996,15 +1019,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       pendingSendsBySession: { ...s.pendingSendsBySession, [sessionId]: [] },
     })),
 
-  // Model catalog cache. The daemon route is `claude` / `codex` / `hermes`
-  // today; copilot is `comingSoon` and short-circuits to a no-op so the chip
-  // falls back to its prettifier without firing a 404.
-  modelCatalog: { claude: null, codex: null, copilot: null, hermes: null },
+  // Model catalog cache. The daemon route is `claude` / `codex` today;
+  // copilot is `comingSoon` and short-circuits to a no-op so the chip falls
+  // back to its prettifier without firing a 404.
+  modelCatalog: { claude: null, codex: null, copilot: null },
   modelCatalogStatus: {
     claude: 'idle',
     codex: 'idle',
     copilot: 'idle',
-    hermes: 'idle',
   },
   loadModelCatalog: (provider) => {
     const status = get().modelCatalogStatus[provider];
@@ -1026,6 +1048,13 @@ export const useAppStore = create<AppState>((set, get) => ({
           modelCatalogStatus: { ...s.modelCatalogStatus, [provider]: 'error' },
         }));
       });
+  },
+  setModelCatalog: (provider, models) => {
+    if (provider === 'copilot') return;
+    set((s) => ({
+      modelCatalog: { ...s.modelCatalog, [provider]: models },
+      modelCatalogStatus: { ...s.modelCatalogStatus, [provider]: 'ready' },
+    }));
   },
 }));
 

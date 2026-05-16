@@ -2,6 +2,7 @@ import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Paperclip, X, Clock, Square, Maximize2 } from 'lucide-react';
 
 import { ModeBadge } from '../ModeBadge';
+import { ThinkingEffortBadge } from '../ThinkingEffortBadge';
 import { ExpandedComposer, type ImageAttachment } from './ExpandedComposer';
 import { ModelChip } from './ModelChip';
 
@@ -672,6 +673,25 @@ export const ChatInputCM = memo(function ChatInputCM({
       }}
     >
       <div
+        // Clicking anywhere on the composer card's padding / border / inert
+        // surface should focus the editor. CodeMirror handles its own clicks
+        // inside `.cm-editor`; buttons and inputs handle their own. For every
+        // other pixel (card padding, gap between editor + toolbar, the
+        // toolbar's empty middle), forward focus to the editor so the user
+        // can type immediately. preventDefault keeps the click from
+        // collapsing the editor's existing selection.
+        onMouseDown={(e) => {
+          const target = e.target as HTMLElement;
+          if (
+            target.closest('button, input, textarea, select, a, .cm-editor, [role="button"]')
+          ) {
+            return;
+          }
+          const view = viewRef.current;
+          if (!view) return;
+          e.preventDefault();
+          view.focus();
+        }}
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -681,6 +701,7 @@ export const ChatInputCM = memo(function ChatInputCM({
           border: `1px solid ${focused ? 'var(--border-strong)' : 'var(--border)'}`,
           borderRadius: 'var(--radius-composer)',
           boxShadow: 'var(--shadow-composer)',
+          cursor: 'text',
           transition:
             'border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
         }}
@@ -833,6 +854,7 @@ export const ChatInputCM = memo(function ChatInputCM({
             </button>
 
             {session && <ModeBadge session={session} />}
+            {session && <ThinkingEffortBadge session={session} />}
           </div>
 
           {active ? (

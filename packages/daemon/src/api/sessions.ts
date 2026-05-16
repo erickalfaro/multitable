@@ -22,6 +22,7 @@ import {
 import { parseCodexThread } from '../transcripts/codexParser.js';
 import { createAttachmentHandler, rawAttachmentBody, removeAttachmentDir } from './attachments.js';
 import type { AgentSessionManager } from '../agent/manager.js';
+import { loadGlobalConfig, saveGlobalConfigDebounced } from '../config/loader.js';
 
 export function createSessionsRouter(agentManager: AgentSessionManager): Router {
   const router = Router();
@@ -46,6 +47,7 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
         state: agent?.state ?? 'stopped',
         pid: null,
         mode: agent?.mode ?? s.mode ?? 'default',
+        thinkingEffort: agent?.thinkingEffort ?? s.thinkingEffort ?? null,
         capabilities,
       };
     });
@@ -63,6 +65,7 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
       state: agent?.state ?? 'stopped',
       pid: null,
       mode: agent?.mode ?? session.mode ?? 'default',
+      thinkingEffort: agent?.thinkingEffort ?? session.thinkingEffort ?? null,
       capabilities,
     });
   });
@@ -114,6 +117,7 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
         provider: session.agentProvider,
         model: session.model,
         mode: session.mode,
+        thinkingEffort: session.thinkingEffort,
         agentSessionId: session.agentSessionId ?? null,
         agentSessionIdHistory: session.agentSessionIdHistory ?? [],
         claudeSessionId: session.claudeSessionId ?? null,
@@ -356,6 +360,43 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
     try {
       agentManager.setMode(req.params.id, mode as 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only');
       res.json({ ok: true, mode });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /api/sessions/:id/thinking-effort
+  //
+  // Set the reasoning-effort level (low / medium / high / xhigh / max).
+  // Mirrors /mode: takes effect on the NEXT turn (Claude reads
+  // s.thinkingEffort when assembling query() options; Codex passes it to
+  // turn/start). Also persists the value into GlobalConfig.lastThinkingEffort
+  // (debounced) so the next new session inherits the user's last choice.
+  router.post('/:id/thinking-effort', (req: Request, res: Response) => {
+    const session = getSessionById(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    const effort = req.body?.thinkingEffort ?? req.body?.effort;
+    // Five-tier enum matching Claude SDK's EffortLevel. Per-model gating
+    // happens in the UI by filtering against DiscoveredModel.effortLevels;
+    // the API still accepts any valid level so a model that adds support for
+    // a higher tier mid-session doesn't require a daemon restart.
+    const VALID = ['low', 'medium', 'high', 'xhigh', 'max'];
+    if (typeof effort !== 'string' || !VALID.includes(effort)) {
+      return res.status(400).json({
+        error: `Invalid thinkingEffort. Must be one of: ${VALID.join(', ')}`,
+      });
+    }
+    type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+    try {
+      agentManager.setThinkingEffort(req.params.id, effort as Effort);
+      try {
+        const cfg = loadGlobalConfig();
+        cfg.lastThinkingEffort = effort as Effort;
+        saveGlobalConfigDebounced(cfg);
+      } catch (cfgErr) {
+        console.error('[sessions] failed to persist lastThinkingEffort:', cfgErr);
+      }
+      res.json({ ok: true, thinkingEffort: effort });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }

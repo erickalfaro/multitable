@@ -159,6 +159,7 @@ export class CodexAdapter implements ProviderAdapter {
     // simulated. Other modes (chat, accept-edits, auto) don't map cleanly to
     // the codex sandbox enum — leave them out so the UI doesn't show them.
     modes: ['default', 'plan', 'read-only'],
+    thinkingEffort: 'native',
   };
 
   private client: CodexAppServerClient;
@@ -322,7 +323,21 @@ export class CodexAdapter implements ProviderAdapter {
     });
 
     try {
-      const { turnId } = await this.client.startTurn({ threadId, prompt: text });
+      // Map our five-level toggle into Codex's ReasoningEffort enum
+      // ("none" | "minimal" | "low" | "medium" | "high" | "xhigh"). The Claude
+      // SDK has an additional 'max' tier; Codex does NOT, so a session that
+      // carried `max` over from a Claude model (or via sticky lastThinkingEffort)
+      // gets omitted here — Codex applies its own default reasoning level. The
+      // UI per-model gating will normally prevent this from ever landing, but
+      // we keep the defensive map so a stale persisted value can't 400 a turn.
+      // NOTE: effort is per-turn; do NOT include it in the threads-cache key.
+      const codexEffort =
+        s.thinkingEffort === 'max' ? undefined : s.thinkingEffort ?? undefined;
+      const { turnId } = await this.client.startTurn({
+        threadId,
+        prompt: text,
+        ...(codexEffort ? { effort: codexEffort } : {}),
+      });
       completion.turnId = turnId;
       // If the user already aborted before the response landed, fire-and-
       // forget the interrupt now.

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { StatusDot } from './StatusDot';
 import { SessionStatusLoader } from './SessionStatusLoader';
 import { Bell, Square } from 'lucide-react';
@@ -13,7 +13,8 @@ interface Props {
   subtitle?: string;
   metrics?: string;
   isSelected: boolean;
-  onClick: () => void;
+  isMultiSelected?: boolean;
+  onClick: (e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }
 
@@ -22,11 +23,10 @@ export function SidebarItem({
   subtitle,
   metrics,
   isSelected,
+  isMultiSelected = false,
   onClick,
   onContextMenu,
 }: Props) {
-  const [hovered, setHovered] = useState(false);
-
   const permissionCount = useAppStore(s =>
     process.type === 'session'
       ? s.pendingPermissions.reduce(
@@ -65,12 +65,16 @@ export function SidebarItem({
         0
       : 0;
 
+  const className =
+    'mt-sidebar-item' +
+    (isSelected ? ' is-selected' : '') +
+    (isMultiSelected ? ' is-multi' : '');
+
   return (
     <div
+      className={className}
       onClick={onClick}
       onContextMenu={onContextMenu}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -83,14 +87,14 @@ export function SidebarItem({
         borderRadius: 'var(--radius-snug)',
         backgroundColor: isSelected
           ? 'var(--bg-elevated)'
-          : hovered
+          : isMultiSelected
             ? 'var(--bg-hover)'
             : 'transparent',
         borderLeft: isSelected
           ? '3px solid var(--accent-amber)'
-          : '3px solid transparent',
-        transition:
-          'background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
+          : isMultiSelected
+            ? '3px solid var(--accent-amber-dim)'
+            : '3px solid transparent',
       }}
     >
       <div
@@ -191,12 +195,13 @@ export function SidebarItem({
           >
             {metrics && (
               <span
+                className={
+                  process.state === 'running' ? 'mt-sidebar-item-meta hide-on-hover' : 'mt-sidebar-item-meta'
+                }
                 style={{
                   fontSize: 11.5,
                   color: 'var(--text-muted)',
                   fontVariantNumeric: 'tabular-nums',
-                  opacity: hovered && process.state === 'running' ? 0 : 1,
-                  transition: 'opacity var(--dur-fast) var(--ease-out)',
                   pointerEvents: 'none',
                 }}
               >
@@ -206,12 +211,13 @@ export function SidebarItem({
             {!metrics && process.type === 'session' && sessionRecency > 0 && (
               <span
                 title={new Date(sessionRecency).toLocaleString()}
+                className={
+                  process.state === 'running' ? 'mt-sidebar-item-meta hide-on-hover' : 'mt-sidebar-item-meta'
+                }
                 style={{
                   fontSize: 10,
                   color: 'var(--text-muted)',
                   fontVariantNumeric: 'tabular-nums',
-                  opacity: hovered && process.state === 'running' ? 0 : 1,
-                  transition: 'opacity var(--dur-fast) var(--ease-out)',
                   pointerEvents: 'none',
                 }}
               >
@@ -220,15 +226,13 @@ export function SidebarItem({
             )}
             {process.state === 'running' && (
               <div
+                className="mt-sidebar-item-actions"
                 style={{
                   position: 'absolute',
                   right: 0,
                   top: 0,
                   display: 'flex',
                   gap: 2,
-                  opacity: hovered ? 1 : 0,
-                  pointerEvents: hovered ? 'auto' : 'none',
-                  transition: 'opacity var(--dur-fast) var(--ease-out)',
                 }}
               >
                 <IconButton

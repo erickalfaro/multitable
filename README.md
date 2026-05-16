@@ -13,7 +13,7 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Node ≥18" src="https://img.shields.io/badge/node-%E2%89%A518-brightgreen">
   <img alt="100% local" src="https://img.shields.io/badge/runs-100%25%20local-success">
-  <img alt="v0.8.0" src="https://img.shields.io/badge/version-0.8.0-blue">
+  <img alt="v0.9.0" src="https://img.shields.io/badge/version-0.9.0-blue">
 </p>
 
 <p align="center">

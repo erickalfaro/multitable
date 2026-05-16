@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
 import toast from 'react-hot-toast';
-import { Search } from 'lucide-react';
+import { Search, RefreshCw } from 'lucide-react';
 import { Modal, Button, Input, ProviderLogo, Spinner } from '../ui';
 import { useTranscripts, type TranscriptSession } from '../../hooks/useTranscripts';
 import { useCodexTranscripts } from '../../hooks/useCodexTranscripts';
@@ -10,7 +10,7 @@ import { resumePastSession, resumePastCodexThread, selectPinnedSession } from '.
 import { relativeTime } from '../../lib/relativeTime';
 import type { AgentProvider, DiscoveredModel } from '../../lib/types';
 
-type AgentProviderOption = 'claude' | 'codex' | 'hermes' | undefined;
+type AgentProviderOption = 'claude' | 'codex' | undefined;
 
 const AGENTS: Array<{
   name: string;
@@ -20,7 +20,6 @@ const AGENTS: Array<{
 }> = [
   { name: 'Claude Code', command: 'claude', provider: 'claude' },
   { name: 'Codex', command: 'codex', provider: 'codex' },
-  { name: 'Hermes (Grok)', command: 'hermes', provider: 'hermes' },
   { name: 'Gemini CLI', command: 'gemini', comingSoon: true },
   { name: 'GitHub Copilot', command: 'copilot', comingSoon: true },
   { name: 'opencode', command: 'opencode', comingSoon: true },
@@ -301,6 +300,30 @@ export function AddAgentModal({ onClose, projectId }: Props) {
             state={modelsState}
             selected={selectedModel}
             onSelect={setSelectedModel}
+            onRefresh={async () => {
+              // Trigger live discovery on the daemon side. The catalog update
+              // arrives via the providers:catalog-updated WS event; we also
+              // re-fetch the local picker state so the loading shimmer makes
+              // sense even before the WS event lands.
+              setModelsState({ status: 'loading' });
+              try {
+                await api.providers.refresh(agentProvider);
+                // Small grace period for the daemon to finish discovery.
+                // The WS handler will overwrite our state if the response
+                // comes back faster; we just need a fallback fetch in case
+                // the WS connection is flaky.
+                const res = await api.providers.models(agentProvider);
+                const refreshed = (res.models ?? []) as DiscoveredModel[];
+                setModelsState({ status: 'ready', models: refreshed });
+                const def = refreshed.find((m) => m.isDefault) ?? refreshed[0];
+                if (!selectedModel && def) setSelectedModel(def.id);
+                toast.success(`${agentProvider} catalog refreshed`, { duration: 1500 });
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                setModelsState({ status: 'error', message });
+                toast.error(`Refresh failed: ${message}`);
+              }
+            }}
           />
         )}
 
@@ -343,13 +366,24 @@ export function AddAgentModal({ onClose, projectId }: Props) {
 // We do not cache it on the client — picking a provider always re-fetches.
 
 interface ModelPickerProps {
-  provider: 'claude' | 'codex' | 'hermes';
+  provider: 'claude' | 'codex';
   state: ModelsState;
   selected: string | null;
   onSelect: (id: string) => void;
+  onRefresh: () => Promise<void> | void;
 }
 
-function ModelPicker({ provider, state, selected, onSelect }: ModelPickerProps) {
+function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPickerProps) {
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
   return (
     <div style={{ marginBottom: 12 }}>
       <div
@@ -360,9 +394,46 @@ function ModelPicker({ provider, state, selected, onSelect }: ModelPickerProps) 
           textTransform: 'uppercase',
           letterSpacing: '0.18em',
           marginBottom: 8,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
         }}
       >
-        Model · {provider}
+        <span>Model · {provider}</span>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={refreshing || state.status === 'loading'}
+          title={`Re-discover ${provider} models. Useful after upgrading the provider CLI or rotating API keys.`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            height: 22,
+            padding: '0 8px',
+            fontFamily: 'inherit',
+            fontSize: 10,
+            fontWeight: 500,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--text-muted)',
+            background: 'transparent',
+            border: '1px solid var(--border)',
+            borderRadius: 999,
+            cursor: refreshing || state.status === 'loading' ? 'not-allowed' : 'pointer',
+            opacity: refreshing || state.status === 'loading' ? 0.55 : 1,
+            transition: 'background var(--dur-fast) var(--ease-out)',
+          }}
+        >
+          <RefreshCw
+            size={11}
+            strokeWidth={2.2}
+            style={{
+              animation: refreshing ? 'mt-spin 1s linear infinite' : 'none',
+            }}
+          />
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
       {state.status === 'loading' && (
         <div

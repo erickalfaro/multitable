@@ -139,7 +139,7 @@ export const api = {
       data: {
         name: string;
         command: string;
-        agentProvider?: 'claude' | 'codex' | 'hermes';
+        agentProvider?: 'claude' | 'codex';
         model?: string;
       },
     ) => post<Session>(`/api/projects/${projectId}/sessions`, data),
@@ -148,6 +148,14 @@ export const api = {
     reset: (id: string) => post<{ ok: boolean; session: Session }>(`/api/sessions/${id}/reset`),
     setMode: (id: string, mode: 'default' | 'plan' | 'accept-edits' | 'auto' | 'chat' | 'read-only') =>
       post<{ ok: boolean; mode: string }>(`/api/sessions/${id}/mode`, { mode }),
+    setThinkingEffort: (
+      id: string,
+      thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+    ) =>
+      post<{ ok: boolean; thinkingEffort: string }>(
+        `/api/sessions/${id}/thinking-effort`,
+        { thinkingEffort },
+      ),
     stop: (id: string) => post<{ ok: boolean }>(`/api/sessions/${id}/stop`),
     renameAi: (id: string) => post<{ session: Session; name: string }>(`/api/sessions/${id}/rename-ai`),
     diff: (id: string) => get<{ diff: string }>(`/api/sessions/${id}/diff`),
@@ -190,7 +198,7 @@ export const api = {
     clearScrollback: (id: string) => del(`/api/processes/${id}/scrollback`),
   },
   providers: {
-    models: (provider: 'claude' | 'codex' | 'hermes') =>
+    models: (provider: 'claude' | 'codex') =>
       get<{
         provider: string;
         models: Array<{
@@ -198,8 +206,20 @@ export const api = {
           displayName: string;
           description?: string;
           isDefault?: boolean;
+          supportsEffort?: boolean;
+          effortLevels?: Array<'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
+          defaultEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
         }>;
+        lastRefreshed: number | null;
+        lastError: string | null;
       }>(`/api/providers/${provider}/models`),
+    // Trigger live discovery. Server returns 202; the actual catalog lands
+    // via the `providers:catalog-updated` WS event.
+    refresh: (provider?: 'claude' | 'codex') =>
+      post<{ ok: boolean; refreshing: string[] }>(
+        '/api/providers/refresh',
+        provider ? { provider } : {},
+      ),
   },
   config: {
     get: () => get<GlobalConfig>('/api/config'),

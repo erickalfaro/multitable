@@ -161,6 +161,10 @@ export interface ProviderCapabilities {
   modelSwitchScope: 'per-turn' | 'per-thread' | 'per-session';
   // Modes the adapter actually implements. UI hides others.
   modes: SessionMode[];
+  // Cross-provider reasoning-effort toggle. 'native' = adapter wires the value
+  // through to the SDK (Claude `effort`, Codex `turn/start` effort field).
+  // 'unsupported' = adapter ignores it; UI renders the toggle disabled.
+  thinkingEffort: 'native' | 'unsupported';
 }
 
 // === ProviderAdapter =======================================================
@@ -178,7 +182,7 @@ export interface ProviderCapabilities {
 // speak only this interface upward and the SDK API downward.
 
 export interface ProviderAdapter {
-  readonly name: 'claude' | 'codex' | 'copilot' | 'hermes';
+  readonly name: 'claude' | 'codex' | 'copilot';
   readonly capabilities: ProviderCapabilities;
 
   // Drive one user turn. The adapter must respect `ctrl` for cancellation.
