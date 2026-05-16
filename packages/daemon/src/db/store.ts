@@ -267,7 +267,7 @@ export interface SessionRecord {
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex';
+  agentProvider: 'claude' | 'codex' | 'hermes';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
@@ -319,7 +319,12 @@ function parseSessionMode(
 }
 
 function rowToSession(row: SessionRow): SessionRecord {
-  const provider = row.agent_provider === 'codex' ? 'codex' : 'claude';
+  const provider: 'claude' | 'codex' | 'hermes' =
+    row.agent_provider === 'codex'
+      ? 'codex'
+      : row.agent_provider === 'hermes'
+        ? 'hermes'
+        : 'claude';
   const agentSessionId = row.agent_session_id ?? row.claude_session_id;
   const agentSessionIdHistory =
     parseClaudeSessionIdHistory(row.agent_session_id_history).length > 0
@@ -356,9 +361,13 @@ function rowToSession(row: SessionRow): SessionRecord {
   };
 }
 
-function inferAgentProvider(command: string | null | undefined): 'claude' | 'codex' {
+function inferAgentProvider(
+  command: string | null | undefined,
+): 'claude' | 'codex' | 'hermes' {
   const first = (command ?? '').trim().split(/\s+/, 1)[0]?.toLowerCase() ?? '';
-  return first === 'codex' ? 'codex' : 'claude';
+  if (first === 'codex') return 'codex';
+  if (first === 'hermes') return 'hermes';
+  return 'claude';
 }
 
 export function getSessionsByProject(projectId: string): SessionRecord[] {
@@ -390,7 +399,7 @@ export function createSession(data: {
   autorespawn?: boolean;
   terminalAlerts?: boolean;
   fileWatchPatterns?: string[];
-  agentProvider?: 'claude' | 'codex';
+  agentProvider?: 'claude' | 'codex' | 'hermes';
   model?: string | null;
   /**
    * Optional explicit loader variant. Used by the transcript-resume flow to
@@ -466,7 +475,7 @@ export function updateSession(id: string, data: Partial<{
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex';
+  agentProvider: 'claude' | 'codex' | 'hermes';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];

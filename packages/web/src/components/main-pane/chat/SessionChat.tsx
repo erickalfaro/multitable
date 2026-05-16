@@ -1,11 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Message, Session } from '../../../lib/types';
 import { useAppStore } from '../../../stores/appStore';
 import { wsClient } from '../../../lib/ws';
 import { api } from '../../../lib/api';
 import { useIsMobile } from '../../../lib/useIsMobile';
 import { SessionHeaderBar } from '../SessionHeaderBar';
-import { SessionDetailPanel } from '../SessionDetailPanel';
 import { ProcessBanner } from '../ProcessBanner';
 import { PermissionBar } from '../../permission/PermissionBar';
 import { MessageList } from './MessageList';
@@ -144,30 +143,6 @@ export function SessionChat({ sessionId, session }: Props) {
   // Sessions sit in 'stopped' until the first turn fires; that's the normal
   // ready state, no banner needed. Only surface the banner on actual error.
   const showBanner = session.state === 'errored';
-  const showDetailPanel = detailPanelOpen;
-
-  // Memoized so MessageList can bail out of re-rendering when the empty
-  // state text doesn't actually change.
-  const emptyHint = useMemo(
-    () => (
-      <div
-        style={{
-          color: 'var(--text-muted)',
-          fontSize: 12.5,
-          padding: '40px 20px',
-          textAlign: 'center',
-          lineHeight: 1.5,
-        }}
-      >
-        {agentSessionId ? (
-          <>No messages yet. The conversation will appear here as {session.agentProvider} responds.</>
-        ) : (
-          <>Type a message below to start a {session.agentProvider} conversation.</>
-        )}
-      </div>
-    ),
-    [agentSessionId, session.agentProvider, session.state]
-  );
 
   return (
     <div
@@ -192,66 +167,34 @@ export function SessionChat({ sessionId, session }: Props) {
         style={{
           flex: 1,
           display: 'flex',
-          flexDirection: isMobile ? 'column' : 'row',
+          flexDirection: 'column',
           overflow: 'hidden',
           minHeight: 0,
+          minWidth: 0,
+          position: 'relative',
           backgroundColor: 'var(--bg-primary)',
         }}
       >
-        <div
-          style={{
-            flex: showDetailPanel
-              ? isMobile
-                ? '1 1 20%'
-                : '1 1 60%'
-              : '1',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            minHeight: 0,
-            minWidth: 0,
-            position: 'relative',
-          }}
-        >
-          <ChatScroller>
-            <MessageList
-              messages={messages}
-              loading={loading}
-              emptyHint={emptyHint}
-              projectId={session.projectId}
-              streamingText={streamingText}
-              toolStreaming={toolStreaming}
-              reasoningStreaming={reasoningStreaming}
-              loaderVariant={session.loaderVariant ?? null}
-              active={session.state === 'running'}
-            />
-          </ChatScroller>
-          <ChatInputCM
-            processId={sessionId}
+        <ChatScroller>
+          <MessageList
+            messages={messages}
+            loading={loading}
             projectId={session.projectId}
-            state={session.state}
-            attachmentKind="session"
+            streamingText={streamingText}
+            toolStreaming={toolStreaming}
+            reasoningStreaming={reasoningStreaming}
+            loaderVariant={session.loaderVariant ?? null}
             active={session.state === 'running'}
           />
-          <PermissionBar sessionId={sessionId} />
-        </div>
-
-        {showDetailPanel && (
-          <div
-            style={{
-              flex: isMobile ? '0 0 80%' : '0 0 40%',
-              minHeight: isMobile ? 120 : 0,
-              maxHeight: isMobile ? '80%' : undefined,
-              minWidth: isMobile ? undefined : 280,
-              overflow: 'hidden',
-              borderTop: isMobile ? '1px solid var(--border)' : 'none',
-              borderLeft: isMobile ? 'none' : '1px solid var(--border)',
-              backgroundColor: 'var(--bg-primary)',
-            }}
-          >
-            <SessionDetailPanel key={session.id} session={session} projectId={session.projectId} />
-          </div>
-        )}
+        </ChatScroller>
+        <ChatInputCM
+          processId={sessionId}
+          projectId={session.projectId}
+          state={session.state}
+          attachmentKind="session"
+          active={session.state === 'running'}
+        />
+        <PermissionBar sessionId={sessionId} />
       </div>
     </div>
   );

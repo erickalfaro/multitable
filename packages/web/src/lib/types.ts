@@ -1,6 +1,6 @@
 export type ProcessType = 'session' | 'terminal' | 'command';
 export type ProcessState = 'running' | 'idle' | 'stopped' | 'errored';
-export type AgentProvider = 'claude' | 'codex' | 'copilot';
+export type AgentProvider = 'claude' | 'codex' | 'copilot' | 'hermes';
 
 // Mirrors the daemon's `/api/providers/:provider/models` row shape. Lives here
 // so both AddAgentModal (one-shot fetch on session create) and the appStore

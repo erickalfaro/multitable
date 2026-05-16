@@ -62,15 +62,6 @@ export async function getFileDiff(
   return git(projectPath).diff(args);
 }
 
-export async function getDiffSinceCommit(
-  projectPath: string,
-  baselineSha: string
-): Promise<string> {
-  // Combines committed-since-baseline with current working-tree changes,
-  // so the result reflects everything an agent has done since it started.
-  return git(projectPath).diff([baselineSha]);
-}
-
 export async function getBranches(projectPath: string): Promise<GitBranchList> {
   const summary = await git(projectPath).branch();
   const local: string[] = [];

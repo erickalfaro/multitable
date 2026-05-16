@@ -276,8 +276,27 @@ export function createServer(
     broadcast('process-state-changed', { processId: sessionId, state });
   });
 
-  agentManager.on('session-updated', ({ sessionId }: { sessionId: string; claudeSessionId: string }) => {
+  // Enrich a DB row with the same transient fields the REST endpoints add
+  // (state / pid / mode / capabilities). Without this, a broadcast that lands
+  // before the first turn would overwrite the in-store session with a row
+  // missing `state` — and the composer's "session is idle?" gate keys off
+  // exactly that field, so every send would silently queue instead of firing.
+  const enrichSessionForBroadcast = (sessionId: string) => {
     const session = getSessionById(sessionId);
+    if (!session) return null;
+    const agent = agentManager.get(sessionId);
+    const capabilities = agentManager.getCapabilities(sessionId);
+    return {
+      ...session,
+      state: agent?.state ?? 'stopped',
+      pid: null,
+      mode: agent?.mode ?? session.mode ?? 'default',
+      capabilities,
+    };
+  };
+
+  agentManager.on('session-updated', ({ sessionId }: { sessionId: string; claudeSessionId: string }) => {
+    const session = enrichSessionForBroadcast(sessionId);
     if (session) {
       broadcast('session:updated', { session });
     }
@@ -407,7 +426,7 @@ export function createServer(
   });
 
   agentManager.on('session-renamed', ({ sessionId }: { sessionId: string }) => {
-    const session = getSessionById(sessionId);
+    const session = enrichSessionForBroadcast(sessionId);
     if (session) broadcast('session:updated', { session });
   });
 

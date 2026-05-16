@@ -17,20 +17,17 @@ import type { AlertCategory, AlertSeverity } from '../../lib/types';
 import { Button } from '../ui';
 import toast from 'react-hot-toast';
 
-const SEVERITIES: AlertSeverity[] = ['info', 'success', 'warning', 'error', 'attention'];
-
-const CATEGORIES: { id: AlertCategory; label: string }[] = [
-  { id: 'turn', label: 'Turn' },
-  { id: 'tool', label: 'Tool' },
-  { id: 'permission', label: 'Permission' },
-  { id: 'elicitation', label: 'Elicitation' },
-  { id: 'rate-limit', label: 'Rate limit' },
-  { id: 'auth', label: 'Auth' },
-  { id: 'task', label: 'Task' },
-  { id: 'compaction', label: 'Compaction' },
-  { id: 'sync', label: 'Sync' },
-  { id: 'budget', label: 'Budget' },
-  { id: 'status', label: 'Status' },
+const NOISY_SEVERITIES: AlertSeverity[] = ['info', 'success', 'warning'];
+const NOISY_CATEGORIES: AlertCategory[] = [
+  'turn',
+  'tool',
+  'elicitation',
+  'rate-limit',
+  'task',
+  'compaction',
+  'sync',
+  'budget',
+  'status',
 ];
 
 function detectOs(): 'mac' | 'windows' | 'linux' | 'other' {
@@ -104,6 +101,15 @@ const checkboxRow: React.CSSProperties = {
   borderRadius: 'var(--radius-sm)',
 };
 
+function isCriticalOnly(prefs: NotificationPrefs): boolean {
+  const mutedSevs = new Set(prefs.sounds.mutedSeverities);
+  const mutedCats = new Set(prefs.mutedCategories);
+  return (
+    NOISY_SEVERITIES.every((s) => mutedSevs.has(s)) &&
+    NOISY_CATEGORIES.every((c) => mutedCats.has(c))
+  );
+}
+
 export function NotificationsSection() {
   const [prefs, setPrefs] = useState<NotificationPrefs>(loadPrefs());
   const [permissionState, setPermissionState] = useState<NotificationPermissionState>(getPermissionState());
@@ -131,18 +137,18 @@ export function NotificationsSection() {
     update({ os: { ...prefs.os, ...patch } });
   }
 
-  function toggleSeverityMute(s: AlertSeverity): void {
-    const muted = prefs.sounds.mutedSeverities.includes(s)
-      ? prefs.sounds.mutedSeverities.filter((x) => x !== s)
-      : [...prefs.sounds.mutedSeverities, s];
-    updateSounds({ mutedSeverities: muted });
-  }
-
-  function toggleCategoryMute(c: AlertCategory): void {
-    const muted = prefs.mutedCategories.includes(c)
-      ? prefs.mutedCategories.filter((x) => x !== c)
-      : [...prefs.mutedCategories, c];
-    update({ mutedCategories: muted });
+  function setCriticalOnly(on: boolean): void {
+    if (on) {
+      update({
+        sounds: { ...prefs.sounds, mutedSeverities: [...NOISY_SEVERITIES] },
+        mutedCategories: [...NOISY_CATEGORIES],
+      });
+    } else {
+      update({
+        sounds: { ...prefs.sounds, mutedSeverities: [] },
+        mutedCategories: [],
+      });
+    }
   }
 
   async function handleEnableOs(): Promise<void> {
@@ -167,6 +173,8 @@ export function NotificationsSection() {
     if (!ok) toast.error('Could not show test notification — check OS settings');
   }
 
+  const criticalOnly = isCriticalOnly(prefs);
+
   return (
     <div>
       <label style={{ ...checkboxRow, marginBottom: 10 }}>
@@ -180,38 +188,24 @@ export function NotificationsSection() {
       </label>
 
       <div style={{ opacity: prefs.enabled ? 1 : 0.5, pointerEvents: prefs.enabled ? 'auto' : 'none' }}>
+        <label style={{ ...checkboxRow, marginBottom: 14 }}>
+          <input
+            type="checkbox"
+            checked={criticalOnly}
+            onChange={(e) => setCriticalOnly(e.target.checked)}
+          />
+          Only critical alerts — errors, attention prompts, and permission requests
+        </label>
+
         <div style={{ marginBottom: 14 }}>
-          <label style={labelStyle}>Sounds</label>
           <label style={checkboxRow}>
             <input
               type="checkbox"
               checked={prefs.sounds.enabled}
               onChange={(e) => updateSounds({ enabled: e.target.checked })}
             />
-            Play chimes
+            Play chimes for surfaced alerts
           </label>
-          <div
-            style={{
-              display: 'flex',
-              gap: 4,
-              marginTop: 6,
-              marginLeft: 18,
-              flexWrap: 'wrap',
-              opacity: prefs.sounds.enabled ? 1 : 0.5,
-              pointerEvents: prefs.sounds.enabled ? 'auto' : 'none',
-            }}
-          >
-            {SEVERITIES.map((s) => (
-              <label key={s} style={checkboxRow}>
-                <input
-                  type="checkbox"
-                  checked={!prefs.sounds.mutedSeverities.includes(s)}
-                  onChange={() => toggleSeverityMute(s)}
-                />
-                {s}
-              </label>
-            ))}
-          </div>
         </div>
 
         <div style={{ marginBottom: 14 }}>
@@ -247,32 +241,14 @@ export function NotificationsSection() {
           <PermissionHint state={permissionState} />
         </div>
 
-        <div style={{ marginBottom: 14 }}>
-          <label style={labelStyle}>Categories shown</label>
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            {CATEGORIES.map((c) => (
-              <label key={c.id} style={checkboxRow}>
-                <input
-                  type="checkbox"
-                  checked={!prefs.mutedCategories.includes(c.id)}
-                  onChange={() => toggleCategoryMute(c.id)}
-                />
-                {c.label}
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label style={checkboxRow}>
-            <input
-              type="checkbox"
-              checked={prefs.showCenterBadge}
-              onChange={(e) => update({ showCenterBadge: e.target.checked })}
-            />
-            Show unread badge in tab title and status bar
-          </label>
-        </div>
+        <label style={checkboxRow}>
+          <input
+            type="checkbox"
+            checked={prefs.showCenterBadge}
+            onChange={(e) => update({ showCenterBadge: e.target.checked })}
+          />
+          Show unread badge in tab title and status bar
+        </label>
       </div>
     </div>
   );

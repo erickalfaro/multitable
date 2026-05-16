@@ -107,8 +107,8 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-snap: cubic-bezier(0.22, 1, 0.36, 1);
   --dur-fast: 120ms;
-  --dur-med: 180ms;
-  --dur-slow: 260ms;
+  --dur-med: 160ms;
+  --dur-slow: 220ms;
 
   /* Focus ring — 1px amber border, no halo */
   --focus-ring: 0 0 0 1px var(--accent-amber);
@@ -388,6 +388,88 @@ select:focus-visible,
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------- Resizable panel handle ----------
+ * react-resizable-panels renders the handle as a 0-width div by default. We
+ * give it a 6px hit zone with a single visible 1px center line so it reads
+ * as a panel seam, not as decoration. Hover and drag states darken slightly
+ * (no glow — matches the rest of the chrome).
+ */
+.mt-resize-handle {
+  position: relative;
+  flex: 0 0 6px;
+  background: transparent;
+  cursor: col-resize;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.mt-resize-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: var(--border);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.mt-resize-handle:hover::after,
+.mt-resize-handle[data-resize-handle-active]::after {
+  background: var(--border-tab);
+}
+
+/* ---------- Edge rails (visible only when a side panel is collapsed) ----------
+ * Thin, full-height click target at the screen edge with an inward-facing
+ * chevron. Replaces the missing affordance when sidebar / context panel
+ * collapse to 0 width. Cmd+B and Cmd+. still work; this is the visual path.
+ */
+.mt-edge-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-sidebar);
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0;
+  z-index: 20;
+  transition: background-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              width var(--dur-fast) var(--ease-out);
+}
+.mt-edge-rail:hover {
+  background: var(--bg-hover);
+  color: var(--accent-amber);
+  width: 18px;
+}
+.mt-edge-rail-left {
+  left: 0;
+  border-right: 1px solid var(--border);
+}
+.mt-edge-rail-right {
+  right: 0;
+  border-left: 1px solid var(--border);
+}
+
+/* ---------- Toolbar button hover (shared, replaces inline handlers) ---------- */
+.mt-toolbar-button {
+  transition: background-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+.mt-toolbar-button:hover {
+  background-color: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+.mt-toolbar-button.is-active {
+  background-color: var(--bg-hover) !important;
+  color: var(--accent-amber) !important;
+}
+
+/* Tabular-nums utility — apply to cost chips, token counts, attention timestamps */
+.mt-mono-tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'Berkeley Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* ---------- Section header pattern (── LABEL  count ──) ---------- */
