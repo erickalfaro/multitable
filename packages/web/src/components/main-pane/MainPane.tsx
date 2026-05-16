@@ -4,11 +4,20 @@ import { TerminalView } from './TerminalView';
 import { DashboardView } from './DashboardView';
 import { ProjectOverview } from './ProjectOverview';
 import { SessionChat } from './chat/SessionChat';
+import { GitMainView } from './git/GitMainView';
 import type { Session } from '../../lib/types';
 
 export function MainPane() {
   const store = useAppStore();
   const { selectedProcessId } = store;
+
+  if (store.selectedGitProjectId) {
+    return (
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <GitMainView projectId={store.selectedGitProjectId} />
+      </div>
+    );
+  }
 
   if (!selectedProcessId && store.projectOverviewOpen && store.focusedProjectId) {
     return (
