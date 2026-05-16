@@ -9,6 +9,7 @@ import { updateSession, insertCostRecord, getSessionById } from '../db/store.js'
 import { detectOptions } from '../hooks/optionDetector.js';
 import { CodexAdapter } from './providers/codex.js';
 import { ClaudeAdapter } from './providers/claude.js';
+import { HermesAdapter } from './providers/hermes.js';
 import { trackedTimeout, type TrackedTimer } from '../devLog.js';
 import type {
   AdapterCallbacks,
@@ -100,6 +101,7 @@ export class AgentSessionManager extends EventEmitter {
     this.adapters = {
       claude: new ClaudeAdapter(permManager, elicitManager),
       codex: new CodexAdapter(),
+      hermes: new HermesAdapter(),
     };
   }
 

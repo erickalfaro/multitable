@@ -9,3 +9,4 @@
 // the de-facto Claude adapter; the explicit ones cover the rest.
 export type { ProviderAdapter, AdapterCallbacks } from './types.js';
 export { CodexAdapter } from './codex.js';
+export { HermesAdapter } from './hermes.js';

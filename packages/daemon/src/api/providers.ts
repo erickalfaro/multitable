@@ -71,6 +71,40 @@ async function listCodexModels(env: NodeJS.ProcessEnv): Promise<DiscoveredModel[
     }));
 }
 
+// Hermes (Nous Research) routes Grok 4.3 + the grok-4.20 variants through its
+// xAI OAuth provider. There's no `hermes models --json` CLI surface today;
+// the live catalog ships with the `models.dev` cache referenced in the xAI
+// Grok OAuth docs (https://hermes-agent.nousresearch.com/docs/guides/xai-grok-oauth).
+// Return the canonical list xAI documents as the chat catalog — grok-4.3 is
+// pinned default. Legacy slugs (grok-4-1-fast, grok-4-fast, grok-code-fast-1)
+// redirect to grok-4.3 server-side as of 2026-05-15, so callers that picked
+// older ids continue to work.
+async function listHermesModels(_env: NodeJS.ProcessEnv): Promise<DiscoveredModel[]> {
+  return [
+    {
+      id: 'grok-4.3',
+      displayName: 'Grok 4.3',
+      description: 'xAI flagship. 1M context, agentic tool calling, reasoning.',
+      isDefault: true,
+    },
+    {
+      id: 'grok-4.20-0309-reasoning',
+      displayName: 'Grok 4.20 Reasoning',
+      description: 'Reasoning variant for harder problems.',
+    },
+    {
+      id: 'grok-4.20-0309-non-reasoning',
+      displayName: 'Grok 4.20',
+      description: 'Non-reasoning variant.',
+    },
+    {
+      id: 'grok-4.20-multi-agent-0309',
+      displayName: 'Grok 4.20 Multi-agent',
+      description: 'Multi-agent variant.',
+    },
+  ];
+}
+
 // Claude has no equivalent "list models" CLI subcommand. The closest live
 // source is the Anthropic REST API `/v1/models`, which only authenticates with
 // `ANTHROPIC_API_KEY` (OAuth tokens from `claude login` are rejected for that
@@ -136,6 +170,8 @@ export function createProvidersRouter(deps: ProvidersDeps): Router {
         models = await listCodexModels(env);
       } else if (provider === 'claude') {
         models = await listClaudeModels(env);
+      } else if (provider === 'hermes') {
+        models = await listHermesModels(env);
       } else {
         return res.status(404).json({ error: `unknown provider: ${provider}` });
       }

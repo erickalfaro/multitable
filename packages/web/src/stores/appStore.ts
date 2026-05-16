@@ -910,11 +910,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       pendingSendsBySession: { ...s.pendingSendsBySession, [sessionId]: [] },
     })),
 
-  // Model catalog cache. The daemon route is `claude` / `codex` only today;
-  // copilot is `comingSoon` and short-circuits to a no-op so the chip falls
-  // back to its prettifier without firing a 404.
-  modelCatalog: { claude: null, codex: null, copilot: null },
-  modelCatalogStatus: { claude: 'idle', codex: 'idle', copilot: 'idle' },
+  // Model catalog cache. The daemon route is `claude` / `codex` / `hermes`
+  // today; copilot is `comingSoon` and short-circuits to a no-op so the chip
+  // falls back to its prettifier without firing a 404.
+  modelCatalog: { claude: null, codex: null, copilot: null, hermes: null },
+  modelCatalogStatus: {
+    claude: 'idle',
+    codex: 'idle',
+    copilot: 'idle',
+    hermes: 'idle',
+  },
   loadModelCatalog: (provider) => {
     const status = get().modelCatalogStatus[provider];
     if (status === 'loading' || status === 'ready') return;

@@ -384,8 +384,12 @@ export function createProjectsRouter(
     }
 
     try {
-      const provider: 'claude' | 'codex' | undefined =
-        agentProvider === 'claude' || agentProvider === 'codex' ? agentProvider : undefined;
+      const provider: 'claude' | 'codex' | 'hermes' | undefined =
+        agentProvider === 'claude' ||
+        agentProvider === 'codex' ||
+        agentProvider === 'hermes'
+          ? agentProvider
+          : undefined;
       const modelId =
         typeof model === 'string' && model.trim().length > 0 ? model.trim() : null;
       const session = createSession({

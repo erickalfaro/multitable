@@ -10,7 +10,7 @@ import { resumePastSession, resumePastCodexThread, selectPinnedSession } from '.
 import { relativeTime } from '../../lib/relativeTime';
 import type { AgentProvider, DiscoveredModel } from '../../lib/types';
 
-type AgentProviderOption = 'claude' | 'codex' | undefined;
+type AgentProviderOption = 'claude' | 'codex' | 'hermes' | undefined;
 
 const AGENTS: Array<{
   name: string;
@@ -20,6 +20,7 @@ const AGENTS: Array<{
 }> = [
   { name: 'Claude Code', command: 'claude', provider: 'claude' },
   { name: 'Codex', command: 'codex', provider: 'codex' },
+  { name: 'Hermes (Grok)', command: 'hermes', provider: 'hermes' },
   { name: 'Gemini CLI', command: 'gemini', comingSoon: true },
   { name: 'GitHub Copilot', command: 'copilot', comingSoon: true },
   { name: 'opencode', command: 'opencode', comingSoon: true },
@@ -342,7 +343,7 @@ export function AddAgentModal({ onClose, projectId }: Props) {
 // We do not cache it on the client — picking a provider always re-fetches.
 
 interface ModelPickerProps {
-  provider: 'claude' | 'codex';
+  provider: 'claude' | 'codex' | 'hermes';
   state: ModelsState;
   selected: string | null;
   onSelect: (id: string) => void;

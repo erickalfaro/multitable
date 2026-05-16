@@ -32,6 +32,7 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
   const buildResumeCommand = (id: string): string => {
     if (provider === 'claude') return `claude --resume ${id}`;
     if (provider === 'codex') return `codex resume ${id}`;
+    if (provider === 'hermes') return `hermes acp  # session ${id}`;
     return id;
   };
   const resumeCommand = agentSessionId ? buildResumeCommand(agentSessionId) : null;
