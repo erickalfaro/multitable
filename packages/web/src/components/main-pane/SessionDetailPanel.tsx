@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { X, Folder, File, Plus, MessageSquare, Check, Copy, Sparkles, Trash2 } from 'lucide-react';
+import { X, Folder, Plus, Minus, MessageSquare, Check, Copy, Sparkles, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import type { DetailPanelTab } from '../../stores/appStore';
 import { api } from '../../lib/api';
@@ -7,7 +7,6 @@ import { copyToClipboard } from '../../lib/clipboard';
 import type { Session, Note } from '../../lib/types';
 import { IconButton, Spinner } from '../ui';
 import { TasksTab } from './chat/TasksTab';
-import { GitPanel } from './git/GitPanel';
 import { AttentionStream } from './context/AttentionStream';
 import { ProviderCapabilityStrip } from './context/ProviderCapabilityStrip';
 
@@ -17,7 +16,6 @@ interface Props {
 }
 
 const TABS: { id: DetailPanelTab; label: string }[] = [
-  { id: 'diff', label: 'Source Control' },
   { id: 'files', label: 'Files' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'cost', label: 'Cost' },
@@ -30,12 +28,10 @@ interface FileEntry {
   type: 'file' | 'directory';
 }
 
-function FilesTab({ projectId }: { projectId: string }) {
-  const projects = useAppStore(s => s.projects);
-  const projectPath = useMemo(() => {
-    const p = projects.find(pr => pr.id === projectId);
-    return p?.path ?? '';
-  }, [projects, projectId]);
+function FilesTab({ projectId, sessionId }: { projectId: string; sessionId: string }) {
+  const selectedFiles = useAppStore(s => s.selectedFilesBySession[sessionId]);
+  const toggleSelectedFile = useAppStore(s => s.toggleSelectedFile);
+  const selectedSet = useMemo(() => new Set(selectedFiles ?? []), [selectedFiles]);
 
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [expanded, setExpanded] = useState<Record<string, FileEntry[]>>({});
@@ -104,10 +100,10 @@ function FilesTab({ projectId }: { projectId: string }) {
   const copyEntryPath = async (entry: FileEntry, e: React.MouseEvent) => {
     // Prevent the click from bubbling to the row and triggering folder expand.
     e.stopPropagation();
-    const abs = projectPath
-      ? `${projectPath.replace(/\/$/, '')}/${entry.path}`
-      : entry.path;
-    const ok = await copyToClipboard(abs);
+    // Copy the project-rooted relative path (e.g. `packages/web/src/...`),
+    // not the OS-absolute path — that's what callers paste into prompts,
+    // commits, and @-mentions.
+    const ok = await copyToClipboard(entry.path);
     if (!ok) return;
     setCopiedPath(entry.path);
     if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
@@ -125,6 +121,7 @@ function FilesTab({ projectId }: { projectId: string }) {
       {entries.map((entry) => {
         const isCopied = copiedPath === entry.path;
         const isDir = entry.type === 'directory';
+        const isSelected = !isDir && selectedSet.has(entry.path);
         const copyBtn = (
           <button
             type="button"
@@ -134,17 +131,16 @@ function FilesTab({ projectId }: { projectId: string }) {
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 3,
+              justifyContent: 'center',
               background: isCopied
                 ? 'color-mix(in srgb, var(--accent-blue) 20%, transparent)'
                 : 'transparent',
               border: '1px solid',
               borderColor: isCopied ? 'var(--accent-blue)' : 'var(--border)',
               color: isCopied ? 'var(--accent-blue)' : 'var(--text-muted)',
-              padding: '2px 6px',
+              padding: '3px 4px',
               borderRadius: 'var(--radius-sm)',
               cursor: 'pointer',
-              fontSize: 11,
               flexShrink: 0,
               transition: 'background-color var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast)',
             }}
@@ -162,8 +158,72 @@ function FilesTab({ projectId }: { projectId: string }) {
             }}
           >
             {isCopied ? <Check size={12} /> : <Copy size={12} />}
-            {isCopied ? 'Copied' : 'Copy'}
           </button>
+        );
+        const contextBtn = (
+          <button
+            type="button"
+            disabled={isDir}
+            onClick={
+              isDir
+                ? undefined
+                : (e) => {
+                    e.stopPropagation();
+                    toggleSelectedFile(sessionId, entry.path);
+                  }
+            }
+            title={
+              isDir
+                ? 'Folders cannot be added to chat context'
+                : isSelected
+                  ? 'Remove from chat context'
+                  : 'Add to chat context'
+            }
+            aria-label={
+              isDir
+                ? `${entry.name} (folder)`
+                : isSelected
+                  ? `Remove ${entry.name} from chat context`
+                  : `Add ${entry.name} to chat context`
+            }
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: isSelected
+                ? 'color-mix(in srgb, var(--accent-blue) 20%, transparent)'
+                : 'transparent',
+              border: '1px solid',
+              borderColor: isSelected ? 'var(--accent-blue)' : 'var(--border)',
+              color: isSelected ? 'var(--accent-blue)' : 'var(--text-muted)',
+              padding: '3px 4px',
+              borderRadius: 'var(--radius-sm)',
+              cursor: isDir ? 'not-allowed' : 'pointer',
+              opacity: isDir ? 0.4 : 1,
+              flexShrink: 0,
+              transition: 'background-color var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast)',
+            }}
+            onMouseEnter={(e) => {
+              if (!isDir && !isSelected) {
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
+                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-muted)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isDir && !isSelected) {
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)';
+                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)';
+              }
+            }}
+          >
+            {isSelected ? <Minus size={12} /> : <Plus size={12} />}
+          </button>
+        );
+        const actions = (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            {contextBtn}
+            {copyBtn}
+          </div>
         );
         return (
           <React.Fragment key={entry.path}>
@@ -190,11 +250,9 @@ function FilesTab({ projectId }: { projectId: string }) {
                 ((e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent')
               }
             >
-              {!isMobile && copyBtn}
-              {isDir ? (
+              {!isMobile && actions}
+              {isDir && (
                 <Folder size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-              ) : (
-                <File size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
               )}
               <span
                 style={{
@@ -207,7 +265,7 @@ function FilesTab({ projectId }: { projectId: string }) {
               >
                 {entry.name}
               </span>
-              {isMobile && copyBtn}
+              {isMobile && actions}
             </div>
             {isDir &&
               expandedPaths.has(entry.path) &&
@@ -912,7 +970,7 @@ export function SessionDetailPanel({ session, projectId }: Props) {
   useEffect(() => {
     const tab = detailPanelTab as string;
     if (tab === 'brainstorm') setDetailPanelTab('prompt-builder');
-    else if (tab === 'prompts') setDetailPanelTab('diff');
+    else if (tab === 'prompts' || tab === 'diff') setDetailPanelTab('files');
   }, [detailPanelTab, setDetailPanelTab]);
 
   return (
@@ -1002,10 +1060,7 @@ export function SessionDetailPanel({ session, projectId }: Props) {
           minHeight: 0,
         }}
       >
-        {detailPanelTab === 'diff' && (
-          <GitPanel projectId={projectId} />
-        )}
-        {detailPanelTab === 'files' && <FilesTab projectId={projectId} />}
+        {detailPanelTab === 'files' && <FilesTab projectId={projectId} sessionId={session.id} />}
         {detailPanelTab === 'tasks' && <TasksTab sessionId={session.id} />}
         {detailPanelTab === 'cost' && <CostTab session={session} />}
         {detailPanelTab === 'prompt-builder' && <PromptBuilderTab session={session} />}
