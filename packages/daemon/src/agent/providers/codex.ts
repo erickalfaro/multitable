@@ -203,6 +203,20 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   /**
+   * Daemon boot hook. Eagerly spawns `codex app-server` + runs the initialize
+   * handshake so the first Codex session doesn't pay the ~2–5s subprocess
+   * cold-start. ensureReady() is idempotent; this is safe to call alongside
+   * provisionSession() races.
+   */
+  async warmup(): Promise<void> {
+    try {
+      await this.client.ensureReady();
+    } catch (err) {
+      console.error('[codex] warmup failed', err);
+    }
+  }
+
+  /**
    * Daemon shutdown hook. Closes the underlying app-server child.
    */
   shutdown(): void {

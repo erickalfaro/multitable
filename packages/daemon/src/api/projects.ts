@@ -428,11 +428,13 @@ export function createProjectsRouter(
         claudeSessionId: session.claudeSessionId ?? null,
         claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
       });
-      // Mint the provider-side session id eagerly so the transcript file
-      // exists and resume works the moment the user clicks Start. Errors are
-      // logged inside; the new id arrives at the UI via the `session-updated`
-      // WS event when it lands.
-      void agentManager.provisionSession(session.id);
+      // Mint the provider-side session id BEFORE returning. The cold-start
+      // cost (codex `thread/start` RPC ~500ms–2s; warmup at boot has already
+      // paid for the app-server spawn) happens here instead of on the user's
+      // first message, so the chat is fully primed the moment the modal
+      // closes. Errors are swallowed inside provisionSession (logged, not
+      // thrown) — falling back to lazy mint on first turn is acceptable.
+      await agentManager.provisionSession(session.id);
       // Enrich the response so the web store has `capabilities` immediately —
       // the ModeBadge dropdown self-hides when modes.length <= 1, and would
       // stay hidden on a freshly created session if we returned the bare DB

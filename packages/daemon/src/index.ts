@@ -223,6 +223,10 @@ async function main() {
     // are isolated; WS broadcast lets any open UI rerender model dropdowns
     // when fresh results land.
     void catalog.refreshAll();
+    // Background adapter warmup — pre-spawns long-lived provider children
+    // (codex app-server) so the first session that uses them doesn't eat the
+    // ~2-5s cold-start. Errors per adapter are isolated inside warmupAll.
+    void agentManager.warmupAll();
   });
 
   // 10. Graceful shutdown — idempotent, force exits within 2s

@@ -109,6 +109,25 @@ export class AgentSessionManager extends EventEmitter {
     };
   }
 
+  /**
+   * Warm every adapter that implements `warmup()`. Called from the daemon
+   * entrypoint after `server.listen` so cold-start costs (codex app-server
+   * spawn + handshake) are paid in the background before any session uses
+   * them. Errors per adapter are isolated.
+   */
+  async warmupAll(): Promise<void> {
+    await Promise.all(
+      Object.entries(this.adapters).map(async ([name, adapter]) => {
+        if (!adapter.warmup) return;
+        try {
+          await adapter.warmup();
+        } catch (err) {
+          console.error(`[agent] warmup failed for ${name}`, err);
+        }
+      }),
+    );
+  }
+
   /** Register a session in memory. Pure bookkeeping. */
   register(input: RegisterInput): AgentSession {
     const existing = this.sessions.get(input.id);

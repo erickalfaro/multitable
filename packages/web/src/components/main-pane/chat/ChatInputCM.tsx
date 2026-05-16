@@ -22,6 +22,12 @@ import {
   warmSlashCommands,
 } from '../../../lib/cm-completions';
 import { uploadAttachment, quotePath } from '../../../lib/attachments';
+import {
+  clearDraft,
+  flushDraft,
+  loadDraft,
+  saveDraft,
+} from '../../../lib/composerDrafts';
 
 import { EditorState, Compartment } from '@codemirror/state';
 import {
@@ -325,6 +331,7 @@ export const ChatInputCM = memo(function ChatInputCM({
           changes: { from: 0, to: view.state.doc.length, insert: '' },
         });
         clearImageAttachments();
+        clearDraft(processId);
         return true;
       }
 
@@ -358,6 +365,7 @@ export const ChatInputCM = memo(function ChatInputCM({
       // The text was sent (or queued); the registry references that text and
       // is no longer useful. Revoke blob URLs to free memory.
       clearImageAttachments();
+      clearDraft(processId);
       return true;
     };
     onSendRef.current = doSend;
@@ -474,7 +482,9 @@ export const ChatInputCM = memo(function ChatInputCM({
 
     const updateListener = EditorView.updateListener.of((vu) => {
       if (vu.docChanged) {
-        setHasText(vu.state.doc.length > 0);
+        const doc = vu.state.doc.toString();
+        setHasText(doc.length > 0);
+        saveDraft(processId, doc);
       }
     });
 
@@ -552,11 +562,16 @@ export const ChatInputCM = memo(function ChatInputCM({
       editableCompartment.current.of(EditorView.editable.of(!disabled)),
     ];
 
+    const initialDraft = loadDraft(processId);
     const view = new EditorView({
-      state: EditorState.create({ doc: '', extensions }),
+      state: EditorState.create({ doc: initialDraft, extensions }),
       parent: containerRef.current,
     });
     viewRef.current = view;
+    if (initialDraft.length > 0) {
+      setHasText(true);
+      view.dispatch({ selection: { anchor: initialDraft.length } });
+    }
     // Focus on mount so the composer feels immediately actionable.
     view.focus();
 
@@ -567,6 +582,14 @@ export const ChatInputCM = memo(function ChatInputCM({
     // shift but CM doesn't recompute — leaving a visibly misaligned caret
     // for the first few seconds of a session. Force a remeasure when fonts
     // are ready; guard against unmount.
+    // Flush any pending debounced draft save before the tab/app goes away —
+    // pagehide fires reliably on close, navigation, and mobile background.
+    const flushOnHide = () => {
+      const v = viewRef.current;
+      if (v) flushDraft(processId, v.state.doc.toString());
+    };
+    window.addEventListener('pagehide', flushOnHide);
+
     if (typeof document !== 'undefined' && document.fonts?.ready) {
       let cancelled = false;
       document.fonts.ready.then(() => {
@@ -575,12 +598,16 @@ export const ChatInputCM = memo(function ChatInputCM({
       });
       return () => {
         cancelled = true;
+        window.removeEventListener('pagehide', flushOnHide);
+        flushDraft(processId, view.state.doc.toString());
         view.destroy();
         viewRef.current = null;
       };
     }
 
     return () => {
+      window.removeEventListener('pagehide', flushOnHide);
+      flushDraft(processId, view.state.doc.toString());
       view.destroy();
       viewRef.current = null;
     };

@@ -68,7 +68,7 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
   });
 
   // POST /api/sessions
-  router.post('/', (req: Request, res: Response) => {
+  router.post('/', async (req: Request, res: Response) => {
     const {
       projectId,
       name,
@@ -120,11 +120,13 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
         claudeSessionId: session.claudeSessionId ?? null,
         claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
       });
-      // Mint the provider-side session id eagerly so the transcript file
-      // exists and resume works the moment the user clicks Start. Errors are
-      // logged inside; we don't await — the UI gets the new id via the
-      // `session-updated` WS broadcast when it lands.
-      void agentManager.provisionSession(session.id);
+      // Mint the provider-side session id BEFORE returning. The cold-start
+      // cost (codex `thread/start` RPC ~500ms–2s; warmup at boot has already
+      // paid for the app-server spawn) happens here instead of on the user's
+      // first message, so the chat is fully primed the moment the modal
+      // closes. Errors are swallowed inside provisionSession (logged, not
+      // thrown) — falling back to lazy mint on first turn is acceptable.
+      await agentManager.provisionSession(session.id);
       res.status(201).json(session);
     } catch (err) {
       res.status(500).json({ error: 'Failed to create session' });
