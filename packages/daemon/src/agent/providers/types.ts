@@ -203,6 +203,14 @@ export interface ProviderAdapter {
   // without breaking session creation.
   provisionSession?(s: AgentSession, ctrl: AbortController, cb: AdapterCallbacks): Promise<void>;
 
+  // Optional: warm any daemon-wide adapter resources (long-lived child
+  // processes, transport handshakes) so the first session that uses this
+  // provider doesn't pay the cold-start cost. Called after `server.listen`
+  // from the daemon entrypoint. Idempotent; errors must be swallowed by the
+  // adapter (logged, not thrown) since warm-up failure should never block
+  // boot.
+  warmup?(): Promise<void>;
+
   // Optional: clean up per-session adapter caches. Called from /reset.
   reset?(s: AgentSession): void;
 
