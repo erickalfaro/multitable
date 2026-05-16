@@ -117,10 +117,17 @@ function collectStaged(status: StatusResult): GitFileEntry[] {
 }
 
 function collectUnstaged(status: StatusResult): GitFileEntry[] {
-  return status.modified.map<GitFileEntry>((p) => ({
-    path: p,
-    status: 'modified' as GitFileStatus,
-  }));
+  // simple-git's `modified` convenience array includes files whose INDEX
+  // status is 'M' — i.e. files that have been staged with no further
+  // working-tree changes. They belong only in the staged bucket. Use the
+  // canonical per-file `working_dir` flag instead so we only emit files
+  // with an actual working-tree change.
+  return status.files
+    .filter((f) => f.working_dir === 'M' || f.working_dir === 'D')
+    .map<GitFileEntry>((f) => ({
+      path: f.path,
+      status: f.working_dir === 'D' ? 'deleted' : 'modified',
+    }));
 }
 
 export async function getStructuredLog(
