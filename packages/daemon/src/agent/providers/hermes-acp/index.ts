@@ -13,4 +13,9 @@ export type {
   PromptOptions,
   PromptResult,
   SessionListener,
+  AcpToolCall,
+  AcpPermissionOption,
+  AcpPermissionRequest,
+  AcpPermissionOutcome,
+  AcpPermissionHandler,
 } from './client.js';

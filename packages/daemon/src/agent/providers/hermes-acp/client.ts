@@ -14,10 +14,11 @@ import {
 // to the matching listener.
 //
 // Server-requests (ACP-side):
-//   - `session/request_permission` — auto-allow the "allow_session" option.
-//     Hermes brokers dangerous-command approvals through this; we don't yet
-//     plumb them into PermissionManager (capability `perCallApproval: 'sandbox'`
-//     advertises this).
+//   - `session/request_permission` — if a permissionHandler is wired (the
+//     normal MultiTable wiring, see HermesAdapter), the handler routes the
+//     request through PermissionManager so the user sees a prompt in the UI.
+//     If no handler is wired (standalone client / tests) we fall back to the
+//     auto-allow policy below.
 //   - `fs/read_text_file` / `fs/write_text_file` — we don't advertise the
 //     filesystem client capability, so Hermes shouldn't send these. Reject
 //     defensively if it does.
@@ -76,11 +77,44 @@ export interface PromptResult {
 
 export type SessionListener = (n: RpcNotification) => void;
 
+// Subset of the ACP request_permission payload we care about. The agent may
+// send more fields; we ignore what we don't surface.
+export interface AcpToolCall {
+  toolCallId?: string;
+  title?: string;
+  kind?: string;
+  rawInput?: Record<string, unknown>;
+  locations?: Array<{ path?: string }>;
+}
+
+export interface AcpPermissionOption {
+  optionId: string;
+  name?: string;
+  kind?: string;
+}
+
+export interface AcpPermissionRequest {
+  sessionId: string;
+  toolCall?: AcpToolCall;
+  options: AcpPermissionOption[];
+}
+
+export type AcpPermissionOutcome =
+  | { outcome: { type: 'allowed'; optionId: string } }
+  | { outcome: { type: 'denied' } }
+  | { outcome: { type: 'cancelled' } };
+
+export type AcpPermissionHandler = (req: AcpPermissionRequest) => Promise<AcpPermissionOutcome>;
+
 export interface HermesClientOptions extends HermesTransportOptions {
-  // Per-session permission grant policy. v1: auto-allow for the session
-  // duration so the agent doesn't block mid-turn. Will be plumbed through
-  // PermissionManager later.
+  // Fallback policy used only when no permissionHandler is supplied. Kept for
+  // standalone-client / test usage; the normal MultiTable wiring always
+  // supplies a handler and this is unused.
   permissionPolicy?: 'allow_session' | 'allow_once' | 'deny';
+  // When set, every ACP `session/request_permission` is routed here. The
+  // handler decides which optionId to pick (typically by routing through
+  // PermissionManager and waiting for the UI).
+  permissionHandler?: AcpPermissionHandler;
 }
 
 const TERMINAL_SETUP_AUTH_METHOD_ID = 'hermes-setup';
@@ -91,9 +125,11 @@ export class HermesAcpClient {
   private listeners = new Map<string, SessionListener>();
   private authState: HermesAuthState | null = null;
   private permissionPolicy: 'allow_session' | 'allow_once' | 'deny';
+  private permissionHandler: AcpPermissionHandler | null;
 
   constructor(private readonly options: HermesClientOptions = {}) {
     this.permissionPolicy = options.permissionPolicy ?? 'allow_session';
+    this.permissionHandler = options.permissionHandler ?? null;
   }
 
   /**
@@ -199,12 +235,31 @@ export class HermesAcpClient {
   }
 
   private registerServerRequestHandlers(transport: HermesAcpTransport): void {
-    // Permission requests. v1 policy: auto-allow with the configured option
-    // (allow_session by default) so Hermes can finish the turn. Full plumbing
-    // through PermissionManager is phase 2.
-    transport.onRequest('session/request_permission', (params) => {
-      const p = params as { options?: Array<{ optionId?: string }> } | null;
-      const options = Array.isArray(p?.options) ? p!.options! : [];
+    // Permission requests. Normal wiring (HermesAdapter) supplies a handler
+    // that routes through PermissionManager so the UI prompts the user.
+    // Without a handler (standalone client / tests) we fall back to the
+    // configured auto-allow policy so Hermes doesn't block mid-turn.
+    transport.onRequest('session/request_permission', async (params) => {
+      const req = (params ?? null) as Partial<AcpPermissionRequest> | null;
+      const options = Array.isArray(req?.options)
+        ? (req!.options as AcpPermissionOption[]).filter(
+            (o) => o && typeof o.optionId === 'string',
+          )
+        : [];
+
+      if (this.permissionHandler && req && typeof req.sessionId === 'string') {
+        try {
+          return await this.permissionHandler({
+            sessionId: req.sessionId,
+            toolCall: req.toolCall,
+            options,
+          });
+        } catch (err) {
+          console.warn('[hermes] permission handler threw, denying', err);
+          return { outcome: { type: 'denied' } };
+        }
+      }
+
       // Map the daemon's intent to whatever option ids the agent actually
       // offered. Hermes' canonical ids are allow_once / allow_session /
       // allow_always / deny (see acp_adapter/permissions.py).
