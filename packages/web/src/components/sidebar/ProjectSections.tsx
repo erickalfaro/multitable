@@ -9,7 +9,7 @@ import { AddProcessModal } from '../modals/AddProcessModal';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuItem } from '../context-menu/ContextMenu';
 import { api, stopProcessByType } from '../../lib/api';
-import { terminalManager } from '../../lib/terminalManager';
+import { buildProjectMenuItems } from '../../lib/projectActions';
 import toast from 'react-hot-toast';
 import type { ManagedProcess, Project } from '../../lib/types';
 import { getProjectColor } from '../../lib/projectColor';
@@ -26,20 +26,26 @@ interface Props {
   project: Project;
 }
 
-export function ProjectSidebarItem({ project }: Props) {
+/**
+ * The sections for a SINGLE project (AGENTS / TERMINALS / COMMANDS / SOURCE
+ * CONTROL / FILE VIEWER). Extracted from the old `ProjectSidebarItem` — the
+ * always-visible `ProjectRail` now picks the one active project, so the
+ * accordion (`expandedProjectIds`) and per-project header chevron are gone;
+ * the 5 sections always render and the header is a slim title bar.
+ *
+ * All selection / multi-select / context-menu / rename behavior is preserved
+ * verbatim from the original component.
+ */
+export function ProjectSections({ project }: Props) {
   const store = useAppStore();
   const {
     sessions,
     commands,
     terminals,
     selectedProcessId,
-    expandedProjectIds,
-    focusedProjectId,
     setSelectedProcess,
   } = store;
 
-  const expanded = expandedProjectIds.includes(project.id);
-  const focused = focusedProjectId === project.id;
   const dark = useIsDark();
   const color = getProjectColor(project.id, dark);
 
@@ -67,10 +73,6 @@ export function ProjectSidebarItem({ project }: Props) {
     store.setFocusedProject(project.id);
     store.setSelectedProcess(null);
     store.setProjectOverviewOpen(true);
-  };
-
-  const handleToggleExpand = () => {
-    store.toggleProjectExpanded(project.id);
   };
 
   const handleSelectProcess = (proc: ManagedProcess, e?: React.MouseEvent) => {
@@ -283,79 +285,16 @@ export function ProjectSidebarItem({ project }: Props) {
     ];
   };
 
-  const getProjectHeaderMenuItems = (): MenuItem[] => [
-    {
-      label: 'Start all',
-      action: () => api.projects.startAll(project.id).catch(() => toast.error('Failed to start all')),
-    },
-    {
-      label: 'Stop all',
-      action: () => api.projects.stopAll(project.id).catch(() => toast.error('Failed to stop all')),
-    },
-    {
-      label: 'Rename project',
-      action: () => setRenaming(true),
-      divider: true,
-    },
-    {
-      label: 'Project settings',
-      action: () => {
-        store.setFocusedProject(project.id);
-        store.setProjectSettingsOpen(true);
-      },
-      divider: true,
-    },
-    {
-      label: 'Remove project',
-      action: async () => {
-        if (!window.confirm(`Remove project "${project.name}"? This will not delete any files.`)) return;
-        try {
-          await api.projects.delete(project.id);
-
-          // Drop everything tied to the deleted project from the store
-          const remainingSessions = Object.fromEntries(
-            Object.entries(store.sessions).filter(([, s]) => s.projectId !== project.id)
-          );
-          const remainingCommands = Object.fromEntries(
-            Object.entries(store.commands).filter(([, c]) => c.projectId !== project.id)
-          );
-          const remainingTerminals = Object.fromEntries(
-            Object.entries(store.terminals).filter(([, t]) => t.projectId !== project.id)
-          );
-          useAppStore.setState({
-            sessions: remainingSessions,
-            commands: remainingCommands,
-            terminals: remainingTerminals,
-          });
-
-          // removeProject also handles expandedProjectIds/focusedProjectId cleanup
-          store.removeProject(project.id);
-
-          if (selectedProcessId && !(
-            remainingSessions[selectedProcessId] ||
-            remainingCommands[selectedProcessId] ||
-            remainingTerminals[selectedProcessId]
-          )) {
-            store.setSelectedProcess(null);
-            store.setProjectOverviewOpen(false);
-          }
-
-          window.dispatchEvent(new Event('mt:past-sessions-refresh'));
-          toast.success('Project removed');
-        } catch {
-          toast.error('Failed to remove project');
-        }
-      },
-      divider: true,
-      danger: true,
-    },
-  ];
-
   const getContextMenuItems = (): MenuItem[] => {
     if (!contextMenu) return [];
     const { type, process } = contextMenu;
     if (!process) {
-      if (type === 'project-header') return getProjectHeaderMenuItems();
+      if (type === 'project-header')
+        return buildProjectMenuItems({
+          projectId: project.id,
+          projectName: project.name,
+          onRename: () => setRenaming(true),
+        });
       return [];
     }
     switch (type) {
@@ -381,16 +320,17 @@ export function ProjectSidebarItem({ project }: Props) {
           borderRadius: 'var(--radius-none)',
           overflow: 'hidden',
           backgroundColor: 'transparent',
-          borderTop: `1px solid ${focused ? color.stripe : 'transparent'}`,
+          borderTop: `1px solid ${color.stripe}`,
           transition: 'border-color var(--dur-med) var(--ease-out)',
         }}
       >
       <ProjectHeader
         project={project}
-        expanded={expanded}
-        focused={focused}
+        expanded
+        focused
+        hideToggle
         onSelect={handleSelectProject}
-        onToggle={handleToggleExpand}
+        onToggle={() => {}}
         editing={renaming}
         onEditingChange={setRenaming}
         onContextMenu={(e) => {
@@ -399,84 +339,80 @@ export function ProjectSidebarItem({ project }: Props) {
         }}
       />
 
-      {expanded && (
-        <>
-          <SidebarSection
-            title="AGENTS"
-            onAdd={() => {
-              store.setFocusedProject(project.id);
-              store.setAddAgentModalOpen(true);
-            }}
-          >
-            {projectSessions.length > 0 ? (
-              projectSessions.map((session) => (
-                <SidebarItem
-                  key={session.id}
-                  process={session}
-                  isSelected={selectedProcessId === session.id}
-                  isMultiSelected={store.multiSelectedSessionIds.includes(session.id)}
-                  onClick={(e) => handleSelectProcess(session, e)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({ type: 'session', id: session.id, x: e.clientX, y: e.clientY, process: session });
-                  }}
-                />
-              ))
-            ) : (
-              <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                No agents yet
-              </div>
-            )}
-          </SidebarSection>
+      <SidebarSection
+        title="AGENTS"
+        onAdd={() => {
+          store.setFocusedProject(project.id);
+          store.setAddAgentModalOpen(true);
+        }}
+      >
+        {projectSessions.length > 0 ? (
+          projectSessions.map((session) => (
+            <SidebarItem
+              key={session.id}
+              process={session}
+              isSelected={selectedProcessId === session.id}
+              isMultiSelected={store.multiSelectedSessionIds.includes(session.id)}
+              onClick={(e) => handleSelectProcess(session, e)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setContextMenu({ type: 'session', id: session.id, x: e.clientX, y: e.clientY, process: session });
+              }}
+            />
+          ))
+        ) : (
+          <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+            No agents yet
+          </div>
+        )}
+      </SidebarSection>
 
-          <SidebarSection title="TERMINALS" onAdd={handleAddTerminal}>
-            {projectTerminals.length > 0 ? (
-              projectTerminals.map((term) => (
-                <SidebarItem
-                  key={term.id}
-                  process={term}
-                  isSelected={selectedProcessId === term.id}
-                  onClick={() => handleSelectProcess(term)}
-                  // terminals don't participate in session multi-select
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({ type: 'terminal', id: term.id, x: e.clientX, y: e.clientY, process: term });
-                  }}
-                />
-              ))
-            ) : (
-              <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                No terminals yet
-              </div>
-            )}
-          </SidebarSection>
+      <SidebarSection title="TERMINALS" onAdd={handleAddTerminal}>
+        {projectTerminals.length > 0 ? (
+          projectTerminals.map((term) => (
+            <SidebarItem
+              key={term.id}
+              process={term}
+              isSelected={selectedProcessId === term.id}
+              onClick={() => handleSelectProcess(term)}
+              // terminals don't participate in session multi-select
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setContextMenu({ type: 'terminal', id: term.id, x: e.clientX, y: e.clientY, process: term });
+              }}
+            />
+          ))
+        ) : (
+          <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+            No terminals yet
+          </div>
+        )}
+      </SidebarSection>
 
-          <SidebarSection title="COMMANDS" onAdd={() => setShowAddCommand(true)}>
-            {projectCommands.length > 0 ? (
-              projectCommands.map((cmd) => (
-                <SidebarItem
-                  key={cmd.id}
-                  process={cmd}
-                  metrics={formatMetrics(cmd)}
-                  isSelected={selectedProcessId === cmd.id}
-                  onClick={() => handleSelectProcess(cmd)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({ type: 'command', id: cmd.id, x: e.clientX, y: e.clientY, process: cmd });
-                  }}
-                />
-              ))
-            ) : (
-              <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                No commands yet
-              </div>
-            )}
-          </SidebarSection>
+      <SidebarSection title="COMMANDS" onAdd={() => setShowAddCommand(true)}>
+        {projectCommands.length > 0 ? (
+          projectCommands.map((cmd) => (
+            <SidebarItem
+              key={cmd.id}
+              process={cmd}
+              metrics={formatMetrics(cmd)}
+              isSelected={selectedProcessId === cmd.id}
+              onClick={() => handleSelectProcess(cmd)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setContextMenu({ type: 'command', id: cmd.id, x: e.clientX, y: e.clientY, process: cmd });
+              }}
+            />
+          ))
+        ) : (
+          <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+            No commands yet
+          </div>
+        )}
+      </SidebarSection>
 
-          <SidebarGitSection projectId={project.id} />
-          <SidebarFileViewerSection projectId={project.id} />
-        </>
-      )}
+      <SidebarGitSection projectId={project.id} />
+      <SidebarFileViewerSection projectId={project.id} />
       </div>
 
       {showAddCommand && (

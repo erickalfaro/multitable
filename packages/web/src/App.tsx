@@ -8,6 +8,8 @@ import {
   type ImperativePanelHandle,
 } from 'react-resizable-panels';
 import { Sidebar } from './components/sidebar/Sidebar';
+import { ProjectRail } from './components/sidebar/ProjectRail';
+import { ProjectSectionsColumn } from './components/sidebar/ProjectSectionsColumn';
 import { MainPane } from './components/main-pane/MainPane';
 import { SessionDetailPanel } from './components/main-pane/SessionDetailPanel';
 import { StatusBar } from './components/status-bar/StatusBar';
@@ -210,9 +212,28 @@ function App() {
             const initial = projects.find(p => p.isActive) ?? projects[0];
             expanded = [initial.id];
           }
+
+          // Seed the always-visible rail's active project: last selected
+          // (persisted) if it still exists, else the first active project.
+          // A restored `mt:selectedProcessId` (below) calls
+          // setSelectedProcess, which overrides this with that process's
+          // owning project.
+          let savedSidebar: string | null = null;
+          try {
+            savedSidebar = localStorage.getItem('mt:sidebarProjectId');
+          } catch {
+            // localStorage unavailable
+          }
+          const validIds = new Set(projects.map(p => p.id));
+          const initialSidebar =
+            savedSidebar && validIds.has(savedSidebar)
+              ? savedSidebar
+              : (projects.find(p => p.isActive) ?? projects[0])?.id ?? null;
+
           useAppStore.setState({
             expandedProjectIds: expanded,
             focusedProjectId: expanded[0] ?? null,
+            sidebarProjectId: initialSidebar,
           });
 
           // Fetch processes for every project in parallel
@@ -323,6 +344,22 @@ function App() {
           .status(p.id)
           .then((status) => useAppStore.getState().setGitStatus(p.id, status))
           .catch(() => {});
+      }
+    });
+
+    // Persist the rail's active project so a refresh returns to the same
+    // project's sections (unless a restored selected process overrides it).
+    const unsubPersistSidebar = useAppStore.subscribe((state, prev) => {
+      if (state.sidebarProjectId !== prev.sidebarProjectId) {
+        try {
+          if (state.sidebarProjectId) {
+            localStorage.setItem('mt:sidebarProjectId', state.sidebarProjectId);
+          } else {
+            localStorage.removeItem('mt:sidebarProjectId');
+          }
+        } catch {
+          // ignore quota/availability errors
+        }
       }
     });
 
@@ -855,6 +892,7 @@ function App() {
       window.removeEventListener('focus', syncOnFocus);
       unsubPersist();
       unsubPersistSelection();
+      unsubPersistSidebar();
       unsubSeedGit();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -999,6 +1037,11 @@ function App() {
         </div>
       ) : (
         <div style={{ position: 'relative', flex: 1, overflow: 'hidden', display: 'flex' }}>
+        {/* Always-visible project rail — lives OUTSIDE the PanelGroup so it can
+            never be collapsed and so the existing 3-panel autoSaveId layout
+            (and Cmd+B / edge-rail logic) stays untouched. */}
+        <ProjectRail />
+        <div style={{ position: 'relative', flex: 1, overflow: 'hidden', display: 'flex' }}>
         <PanelGroup
           direction="horizontal"
           autoSaveId="mt:layout"
@@ -1017,7 +1060,7 @@ function App() {
             onExpand={() => setSidebarCollapsed(false)}
             style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
-            <Sidebar />
+            <ProjectSectionsColumn />
           </Panel>
           <PanelResizeHandle className="mt-resize-handle" />
           <Panel
@@ -1085,6 +1128,7 @@ function App() {
             <ChevronLeft size={14} />
           </button>
         )}
+        </div>
         </div>
       )}
 

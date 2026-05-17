@@ -51,6 +51,8 @@ export function AddProjectModal({ onClose }: Props) {
       const project = await api.projects.create({ path: dirPath.trim() });
       store.addProject(project);
       store.expandProject(project.id);
+      // Reveal the new project in the always-visible rail / sections column.
+      store.setSidebarProject(project.id);
       store.setProjectOverviewOpen(true);
       toast.success(`Project "${project.name}" added`);
       onClose();

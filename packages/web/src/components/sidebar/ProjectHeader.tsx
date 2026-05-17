@@ -15,6 +15,12 @@ interface Props {
   onContextMenu?: (e: React.MouseEvent) => void;
   editing?: boolean;
   onEditingChange?: (editing: boolean) => void;
+  /**
+   * Hide the expand/collapse chevron. Used by ProjectSections, where the
+   * accordion is gone (the rail picks the single active project) so the
+   * header is just a title bar with rename + context menu.
+   */
+  hideToggle?: boolean;
 }
 
 export function ProjectHeader({
@@ -27,6 +33,7 @@ export function ProjectHeader({
   onContextMenu,
   editing = false,
   onEditingChange,
+  hideToggle = false,
 }: Props) {
   const [hover, setHover] = useState(false);
   const [toggleHover, setToggleHover] = useState(false);
@@ -91,6 +98,7 @@ export function ProjectHeader({
         transition: 'background-color var(--dur-fast) var(--ease-out)',
       }}
     >
+      {!hideToggle && (
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -127,6 +135,8 @@ export function ProjectHeader({
           }}
         />
       </button>
+      )}
+      {hideToggle && <span style={{ width: 4, flexShrink: 0 }} />}
       {editing ? (
         <input
           ref={inputRef}
