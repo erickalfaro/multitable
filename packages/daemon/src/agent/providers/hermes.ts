@@ -42,10 +42,22 @@ import type {
 //    `tool_call_update` with status `completed` or `failed` is the canonical
 //    tool_result.
 //
+// Permission scope (READ THIS before any "Hermes didn't ask" report):
+//  Hermes SELF-GATES. It only emits session/request_permission for commands
+//  its own tools/approval.py flags via a hardcoded DANGEROUS_PATTERNS list
+//  (recursive/root rm, mkfs, fork bombs, …). A plain `rm -f foo.py`, `mv`,
+//  `>file`, `git reset` etc. are NOT flagged — Hermes runs them with no
+//  server-request, so handleAcpPermission is never called and the host
+//  CANNOT intercept them. There is no ACP hook / canUseTool / sandbox enum
+//  to widen this; approvals.mode lives in ~/.hermes/config.yaml, not env.
+//  This is a Hermes design property, not a bug here. Do not add fake
+//  interception. See .claude/skills/hermes-grok/pitfalls.md §10b.
+//
 // Mode mapping:
 //  Hermes' ACP today doesn't expose a per-thread sandbox enum the way Codex
-//  does — its "command approval" flows through session/request_permission,
-//  which the adapter forwards to PermissionManager so the UI prompts the user.
+//  does — its "command approval" flows through session/request_permission
+//  (for the flagged subset above), which the adapter forwards to
+//  PermissionManager so the UI prompts the user.
 //  Mode is essentially advisory and we keep the same session id across mode
 //  flips. This may change once ACP grows per-session modes; the cache is keyed
 //  by {sessionId, mode} precisely so the flip-recreates-session path works the
@@ -390,7 +402,12 @@ export class HermesAdapter implements ProviderAdapter {
         error: err instanceof Error ? err.stack ?? err.message : String(err),
       });
       // Drop the cached session so the next turn re-loads from disk. The ACP
-      // session persists in Hermes's state.db regardless.
+      // session persists in Hermes's state.db regardless. Mirror reset()'s
+      // invariant and also drop the acpToMt reverse entry — otherwise a
+      // resume that mints a different hermesSessionId leaves a dead key
+      // mapping behind (harmless to routing, but it accumulates and breaks
+      // the "acpToMt is cleared whenever the session cache is" invariant).
+      this.acpToMt.delete(hermesSessionId);
       this.sessions.delete(s.id);
       this.lastSentEffort.delete(s.id);
       throw err;
