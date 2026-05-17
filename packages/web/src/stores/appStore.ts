@@ -68,6 +68,10 @@ interface AppState {
   // of any selected process. Mutually exclusive with `selectedProcessId` and
   // `projectOverviewOpen` — setting any one clears the others.
   selectedGitProjectId: string | null;
+  // When set, the main pane shows the per-project File Viewer instead of any
+  // selected process. Same mutually-exclusive surface model as
+  // `selectedGitProjectId` — setting any surface clears the others.
+  selectedFileViewerProjectId: string | null;
   // Multi-selected session ids for bulk operations (e.g. group remove). Sidebar
   // toggles entries via Cmd/Ctrl+click and Shift+click range select. Cleared
   // whenever a plain (un-modified) click sets a new primary selection.
@@ -91,6 +95,7 @@ interface AppState {
   setDevLogOpen: (open: boolean) => void;
   setSelectedProcess: (id: string | null) => void;
   setSelectedGitProject: (projectId: string | null) => void;
+  setSelectedFileViewer: (projectId: string | null) => void;
   setMultiSelectedSessions: (ids: string[]) => void;
   toggleMultiSelectedSession: (id: string) => void;
   clearMultiSelectedSessions: () => void;
@@ -489,6 +494,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // UI
   selectedProcessId: null,
   selectedGitProjectId: null,
+  selectedFileViewerProjectId: null,
   multiSelectedSessionIds: [],
   sidebarCollapsed: false,
   customThemes: loadCustomThemesFromStorage(),
@@ -534,11 +540,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       if (id === null) return { selectedProcessId: null };
       const proc = s.sessions[id] || s.commands[id] || s.terminals[id];
-      if (!proc) return { selectedProcessId: id, selectedGitProjectId: null };
+      if (!proc)
+        return { selectedProcessId: id, selectedGitProjectId: null, selectedFileViewerProjectId: null };
       return {
         selectedProcessId: id,
         focusedProjectId: proc.projectId,
         selectedGitProjectId: null,
+        selectedFileViewerProjectId: null,
       };
     }),
   setSelectedGitProject: (projectId) =>
@@ -547,6 +555,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         selectedGitProjectId: projectId,
         selectedProcessId: null,
+        selectedFileViewerProjectId: null,
+        projectOverviewOpen: false,
+        focusedProjectId: projectId,
+      };
+    }),
+  setSelectedFileViewer: (projectId) =>
+    set(() => {
+      if (projectId === null) return { selectedFileViewerProjectId: null };
+      return {
+        selectedFileViewerProjectId: projectId,
+        selectedProcessId: null,
+        selectedGitProjectId: null,
         projectOverviewOpen: false,
         focusedProjectId: projectId,
       };
@@ -662,7 +682,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setConnectionState: (state) => set({ connectionState: state }),
   setProjectOverviewOpen: (open) =>
-    set(() => (open ? { projectOverviewOpen: true, selectedGitProjectId: null } : { projectOverviewOpen: false })),
+    set(() =>
+      open
+        ? { projectOverviewOpen: true, selectedGitProjectId: null, selectedFileViewerProjectId: null }
+        : { projectOverviewOpen: false },
+    ),
   setContextMenu: (menu) => set({ contextMenu: menu }),
   setMobileDrawerOpen: (open) => set({ mobileDrawerOpen: open }),
 

@@ -5,11 +5,20 @@ import { DashboardView } from './DashboardView';
 import { ProjectOverview } from './ProjectOverview';
 import { SessionChat } from './chat/SessionChat';
 import { GitMainView } from './git/GitMainView';
+import { FileViewerMainView } from './file-viewer/FileViewerMainView';
 import type { Session } from '../../lib/types';
 
 export function MainPane() {
   const store = useAppStore();
   const { selectedProcessId } = store;
+
+  if (store.selectedFileViewerProjectId) {
+    return (
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <FileViewerMainView projectId={store.selectedFileViewerProjectId} />
+      </div>
+    );
+  }
 
   if (store.selectedGitProjectId) {
     return (
