@@ -99,10 +99,14 @@ export interface AcpPermissionRequest {
   options: AcpPermissionOption[];
 }
 
+// ACP RequestPermissionResponse shape. The inner `outcome` field is the
+// discriminator in the agent-side Pydantic union (DeniedOutcome vs
+// AllowedOutcome) — the values are LITERALS, "selected" / "cancelled", not
+// "allowed" / "denied". Returning the wrong shape silently coerces every
+// approval to a deny on the agent side.
 export type AcpPermissionOutcome =
-  | { outcome: { type: 'allowed'; optionId: string } }
-  | { outcome: { type: 'denied' } }
-  | { outcome: { type: 'cancelled' } };
+  | { outcome: { outcome: 'selected'; optionId: string } }
+  | { outcome: { outcome: 'cancelled' } };
 
 export type AcpPermissionHandler = (req: AcpPermissionRequest) => Promise<AcpPermissionOutcome>;
 
@@ -256,7 +260,7 @@ export class HermesAcpClient {
           });
         } catch (err) {
           console.warn('[hermes] permission handler threw, denying', err);
-          return { outcome: { type: 'denied' } };
+          return { outcome: { outcome: 'cancelled' } };
         }
       }
 
@@ -265,9 +269,9 @@ export class HermesAcpClient {
       // allow_always / deny (see acp_adapter/permissions.py).
       const candidate = pickPermissionOption(options, this.permissionPolicy);
       if (!candidate) {
-        return { outcome: { type: 'denied' } };
+        return { outcome: { outcome: 'cancelled' } };
       }
-      return { outcome: { type: 'allowed', optionId: candidate } };
+      return { outcome: { outcome: 'selected', optionId: candidate } };
     });
 
     // We do NOT advertise fs/terminal capabilities. Reject if the agent ever
