@@ -7,6 +7,7 @@ import type {
 } from './types.js';
 import type { ProcessState } from '../types.js';
 import { parseCodexThread, listCodexThreads } from '../transcripts/codexParser.js';
+import { parseHermesSession } from '../transcripts/hermesParser.js';
 import type { PermissionManager } from '../hooks/permissionManager.js';
 import type { ElicitationManager } from '../hooks/elicitationManager.js';
 import { createAlert } from './alerts.js';
@@ -225,6 +226,16 @@ export class AgentSessionManager extends EventEmitter {
         } catch (err) {
           console.error('[agent] codex hydration failed for', session.id, err);
         }
+      }
+    }
+    // Hermes hydration from on-disk session JSON — Hermes' ACP server is the
+    // source of truth (~/.hermes/sessions/session_<id>.json).
+    if (session.provider === 'hermes' && session.agentSessionId) {
+      try {
+        const hydrated = parseHermesSession(session.agentSessionId);
+        if (hydrated.length > 0) session.messages = hydrated;
+      } catch (err) {
+        console.error('[agent] hermes hydration failed for', session.id, err);
       }
     }
     return session;

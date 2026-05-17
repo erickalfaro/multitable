@@ -17,6 +17,7 @@ import {
   getSessionJsonlPath,
 } from '../transcripts/parser.js';
 import { parseCodexThread } from '../transcripts/codexParser.js';
+import { parseHermesSession } from '../transcripts/hermesParser.js';
 import { createAttachmentHandler, rawAttachmentBody, removeAttachmentDir } from './attachments.js';
 import type { AgentSessionManager } from '../agent/manager.js';
 import { loadGlobalConfig, saveGlobalConfigDebounced } from '../config/loader.js';
@@ -284,6 +285,27 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
           }
         } catch (err) {
           console.error('[sessions] codex re-hydration failed for', session.id, err);
+        }
+      }
+      return res.json({ messages, endOffset: 0 });
+    }
+    if (session.agentProvider === 'hermes') {
+      // Hermes persists each ACP session at `~/.hermes/sessions/session_<id>.json`
+      // (OpenAI-style chat completions). The in-memory `agent.messages` is
+      // populated by streaming notifications during live turns; after a daemon
+      // restart it starts empty and we re-hydrate from disk. Mirrors the codex
+      // branch above.
+      const agent = agentManager.get(req.params.id);
+      let messages = agent?.messages ?? [];
+      if (messages.length === 0 && session.agentSessionId) {
+        try {
+          const hydrated = parseHermesSession(session.agentSessionId);
+          if (hydrated.length > 0) {
+            if (agent) agent.messages = hydrated;
+            messages = hydrated;
+          }
+        } catch (err) {
+          console.error('[sessions] hermes re-hydration failed for', session.id, err);
         }
       }
       return res.json({ messages, endOffset: 0 });
