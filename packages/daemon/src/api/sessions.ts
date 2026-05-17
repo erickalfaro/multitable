@@ -7,6 +7,7 @@ import {
   deleteSession,
   getAllSessions,
   getSessionCostAggregate,
+  getProjectById,
 } from '../db/store.js';
 import { parseSessionCost } from '../hooks/costParser.js';
 import { parseSessionPrompts, parseAllProjectPrompts } from '../hooks/promptsParser.js';
@@ -90,11 +91,14 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
     }
 
     try {
+      const project = getProjectById(projectId);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const resolvedCwd = workingDirectory || project.path;
       const session = createSession({
         projectId,
         name,
         command,
-        workingDirectory,
+        workingDirectory: resolvedCwd,
         type: 'session',
         autostart,
         autorestart,
@@ -106,12 +110,15 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
         fileWatchPatterns,
       });
       // Register immediately so the next `session:send` from the UI doesn't
-      // race the DB write with the agent manager's lookup.
+      // race the DB write with the agent manager's lookup. workingDir must
+      // never be empty — adapters pass it to the provider child as cwd, and
+      // an empty cwd causes the child to fall back to its own process cwd
+      // (which is the daemon's cwd, NOT the project root).
       agentManager.register({
         id: session.id,
         projectId: session.projectId,
         name: session.name,
-        workingDir: session.workingDirectory || '',
+        workingDir: session.workingDirectory || project.path,
         provider: session.agentProvider,
         model: session.model,
         mode: session.mode,
