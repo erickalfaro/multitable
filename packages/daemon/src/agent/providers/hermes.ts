@@ -372,9 +372,11 @@ export class HermesAdapter implements ProviderAdapter {
     if (existing && existing.mode === s.mode) return existing.hermesSessionId;
 
     let hermesSessionId: string;
+    let loaded = false;
     if (s.agentSessionId) {
       try {
         hermesSessionId = await this.client.loadSession(s.agentSessionId, s.workingDir);
+        loaded = true;
       } catch (err) {
         console.warn('[hermes] session/load failed, creating fresh', {
           sessionId: s.id,
@@ -386,6 +388,16 @@ export class HermesAdapter implements ProviderAdapter {
     } else {
       hermesSessionId = await this.client.newSession({ cwd: s.workingDir });
     }
+
+    // Hermes schedules _replay_session_history (acp_adapter/server.py) AFTER
+    // session/load returns — it floods session/update notifications for every
+    // persisted user/assistant/tool message so Zed-style UIs can rebuild
+    // history. MultiTable already has these from parseHermesSession on
+    // register, so the replay produces duplicate UI noise. Wait briefly
+    // before the caller subscribes so most replay notifications land before
+    // there's a listener (and get dropped silently). Tool-id dedup in
+    // handleNotification catches the tail if replay is large.
+    if (loaded) await new Promise<void>((r) => setTimeout(r, 500));
 
     if (hermesSessionId !== s.agentSessionId) {
       const previous = s.agentSessionId;
@@ -509,6 +521,10 @@ export class HermesAdapter implements ProviderAdapter {
       case 'tool_call': {
         const toolUseId = typeof update.toolCallId === 'string' ? update.toolCallId : '';
         if (!toolUseId) return;
+        // Tool-id dedup against hydrated history. Hermes' history replay
+        // resends the same toolCallIds it persisted; if we already have one
+        // in s.messages, this notification is replay — drop it.
+        if (isHistoricalToolId(s, toolUseId)) return;
         const toolName =
           (typeof update.title === 'string' && update.title) ||
           (typeof update.kind === 'string' && update.kind) ||
@@ -537,6 +553,8 @@ export class HermesAdapter implements ProviderAdapter {
       case 'tool_call_update': {
         const toolUseId = typeof update.toolCallId === 'string' ? update.toolCallId : '';
         if (!toolUseId) return;
+        // Tool-id dedup: same rationale as tool_call above.
+        if (isHistoricalToolId(s, toolUseId)) return;
         const meta = buffers.toolCalls.get(toolUseId);
         const status = typeof update.status === 'string' ? update.status : '';
         const finished = status === 'completed' || status === 'failed';
@@ -588,4 +606,16 @@ export class HermesAdapter implements ProviderAdapter {
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+// True if the toolCallId already exists as a tool_use Message in the session's
+// hydrated history. Used to drop replay notifications that arrive after the
+// session/load drain window. Linear scan is fine — histories are bounded by
+// ACP context window and we only call this on tool_call/tool_call_update.
+function isHistoricalToolId(s: AgentSession, toolUseId: string): boolean {
+  if (!toolUseId) return false;
+  for (const m of s.messages) {
+    if (m.kind === 'tool_use' && m.toolUseId === toolUseId) return true;
+  }
+  return false;
 }
