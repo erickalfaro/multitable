@@ -5,63 +5,47 @@
 <h1 align="center">MultiTable</h1>
 
 <p align="center">
-  <em>Run Claude Code, Codex, Copilot, and Gemini side by side — plus your dev servers, terminals, and git, all in one app.</em><br/>
-  <sub>Because <code>tmux</code> wasn't built for the day Claude, Codex, and <code>npm run dev</code> all need your attention at once.</sub>
+  <img src="docs/images/demo.gif" alt="MultiTable" width="760">
 </p>
 
-<p align="center">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Node ≥18" src="https://img.shields.io/badge/node-%E2%89%A518-brightgreen">
-  <img alt="100% local" src="https://img.shields.io/badge/runs-100%25%20local-success">
-  <img alt="v0.9.0" src="https://img.shields.io/badge/version-0.9.0-blue">
-</p>
+## What it is
 
-<p align="center">
-  <img src="docs/images/demo.gif" alt="MultiTable in action" width="760">
-</p>
+MultiTable is a local web app that puts every coding agent and every project behind
+one interface. A Node.js daemon runs on your machine and drives Claude Code, OpenAI
+Codex, and Hermes (xAI Grok) through one unified contract — same chat UI, same
+permission prompts, same git diff, same notifications, regardless of which agent is
+answering. Copilot and Gemini are next.
 
----
+The point is context switching. Real work means jumping between several repos and,
+increasingly, between several agents — Claude on one task, Codex on another, a dev
+server and a shell open the whole time. MultiTable keeps all of it in one place: pick a
+project, pick an agent, send a prompt; switch to another project and another agent
+without losing any of the others. Past threads from the official Claude/Codex/Hermes
+CLIs are listed and resumable — MultiTable reads and writes the same on-disk state, so
+nothing is locked in.
 
-## What is it?
+It serves a React UI at `http://localhost:3000`. Because it's a web app it runs the
+same on macOS, Linux, and Windows, and if you host the daemon on a machine you can
+reach (a home server, a VPS, Tailscale) you can drive your agents from a phone or
+tablet — including approving permission prompts remotely over Telegram.
 
-A local, browser-based dashboard for the chaos of agentic coding. A Node.js daemon runs on your machine, drives **Claude Code** and **OpenAI Codex** through their respective SDKs (no PTY screen-scraping), spawns dev servers and shells via [`node-pty`](https://github.com/microsoft/node-pty), and serves a React UI at `http://localhost:3000`. One tab. Every project. Every agent. Every dev server.
+Everything runs locally. No accounts, no telemetry — the only network calls are your
+LLM provider's API and, if you opt in, Telegram.
 
-Approve permission prompts from your phone over Telegram. Resume any past Claude or Codex thread. See exactly what each agent changed via a per-agent git diff.
+## Prior art
 
-**Privacy:** everything runs on your machine. No accounts, no telemetry — only the network calls you opt into (your LLM provider's API, and optionally Telegram).
-
-## Features
-
-- **Multi-agent in one UI.** Claude Code via the Agent SDK; Codex via direct JSON-RPC to `codex app-server`. Both render in the same chat UI; both feed the same permission, diff, and notification plumbing.
-- **Approve permissions from your phone.** Optional Telegram bridge forwards `canUseTool` prompts with inline Allow / Deny / Always-Allow buttons. No relay server — your daemon talks to the Bot API directly.
-- **Sleek chat UI.** CodeMirror composer with `@file` mentions, `/` slash commands, image attachments. Streaming markdown, shiki code highlighting, collapsible tool cards, live chain-of-thought, live task lists.
-- **Modes per agent:** `default`, `plan`, `accept-edits`, `auto`, `chat`, `read-only`. Each adapter translates the right way.
-- **Full git panel.** Status, stage, commit composer, branch picker, stash, fetch/pull/push — live-updated by `chokidar` + `simple-git`. Each agent gets a baseline commit so you can see exactly what *it* changed.
-- **Live cost + token tracking** per agent, straight from the SDK's result message.
-- **Live model picker** (`codex debug models` + Anthropic `/v1/models`).
-- **Past Agents browser.** Resume any past Claude or Codex thread from disk — full interop with the official CLIs.
-- **Auto-restart with backoff** for commands. File-watch restart for dev servers — edit `src/**/*.ts`, the right process restarts.
-- **Notification center.** Per-category + per-severity prefs, OS notifications, tab badges, audio chimes.
-- **LAN / Tailscale / mobile.** Bind to `0.0.0.0`, open from your phone or iPad. Touch toolbar built in.
-- **Themeable** via CSS variables; **config-as-code** via `mt.yml`; **SQLite persistence** across restarts.
-
-## How it compares
-
-|                                       | tmux / zellij | Warp / Wave | **MultiTable** |
-|---------------------------------------|---------------|-------------|----------------|
-| Multiple PTYs                         | ✅            | ✅          | ✅             |
-| Survives reboot                       | ⚠️            | ❌          | ✅             |
-| Per-process auto-restart + file-watch | ❌            | ❌          | ✅             |
-| Agent in a chat UI                    | ❌            | ❌          | ✅             |
-| **Multi-provider (Claude + Codex)**   | ❌            | ❌          | ✅             |
-| **Approve permissions from your phone** | ❌          | ❌          | ✅             |
-| **Full in-UI git workflow**           | ❌            | ❌          | ✅             |
-| Use from your phone                   | ❌            | ❌          | ✅             |
-| 100% local, no account                | ✅            | ❌          | ✅             |
+Terminal multiplexers and modern terminals already solve part of this well —
+[tmux](https://github.com/tmux/tmux), [Zellij](https://zellij.dev/),
+[Warp](https://www.warp.dev/), [soloterm](https://soloterm.com/). MultiTable isn't
+trying to be a better terminal. It's aimed at the newer problem: several coding agents,
+across several projects, each with their own permission and review flow, that you need
+to move between quickly. If your day is mostly one shell, those tools are lighter and
+probably enough.
 
 ## Install
 
-Pre-npm-publish — install from source. **Prereqs everywhere:** Node ≥18, npm ≥9, Git, and a C/C++ toolchain (`better-sqlite3` and `node-pty` are native modules).
+Pre-publish — install from source. Everywhere you need Node ≥18, npm ≥9, Git, and a
+C/C++ toolchain (`better-sqlite3` and `node-pty` are native modules).
 
 <details>
 <summary><strong>macOS</strong></summary>
@@ -94,7 +78,8 @@ cd packages/cli && sudo npm link && cd ../..
 <details>
 <summary><strong>Windows 10 / 11</strong></summary>
 
-Use **PowerShell**, not `cmd.exe`. When installing Node from nodejs.org, check *"Automatically install the necessary tools for native modules."*
+Use PowerShell, not `cmd.exe`. When installing Node from nodejs.org, check
+"Automatically install the necessary tools for native modules."
 
 ```powershell
 git clone https://github.com/erickalfaro/multitable.git
@@ -104,7 +89,8 @@ npm run build
 cd packages\cli ; npm link ; cd ..\..
 ```
 
-Known limitation: per-process CPU % shows `0` on Windows (the metrics poller uses Unix `ps`). Memory and state work normally. PR welcome.
+Known limitation: per-process CPU % shows `0` on Windows (the metrics poller uses Unix
+`ps`). Memory and state work normally.
 
 </details>
 
@@ -118,7 +104,8 @@ mt open           # open the UI
 npm run dev
 ```
 
-From the dashboard: **+ Add Project** → point at a directory → add an agent (Claude or Codex) or a command (`npm run dev`) → send your first prompt.
+From the dashboard: Add Project → point at a directory → add an agent (Claude, Codex,
+or Hermes) or a command (`npm run dev`) → send a prompt.
 
 ## Configure with `mt.yml`
 
@@ -146,28 +133,26 @@ port: 3000
 host: 127.0.0.1   # change to 0.0.0.0 for LAN / Tailscale
 ```
 
-For phone / iPad access: install [Tailscale](https://tailscale.com), set `host: 0.0.0.0`, open `http://<tailscale-hostname>:3000` from any device on your tailnet. **Don't bind `0.0.0.0` outside Tailscale** — the daemon has no auth.
+For phone / tablet access: install [Tailscale](https://tailscale.com), set
+`host: 0.0.0.0`, open `http://<tailscale-hostname>:3000` from any device on your
+tailnet. Don't bind `0.0.0.0` outside Tailscale — the daemon has no auth.
 
 ## Auth
 
-- **Claude:** `ANTHROPIC_API_KEY` env var, or `claude login`.
-- **Codex:** install `codex-cli`, then `codex login`. The daemon spawns one `codex app-server` child lazily on first Codex turn.
-- **Telegram (optional):** set `MULTITABLE_TELEGRAM_BOT_TOKEN` and configure chat IDs in the UI's Integrations panel.
-
-## Roadmap
-
-- [x] **v0.6** Sessions driven by the Claude Agent SDK (no PTY for sessions)
-- [x] **v0.7** Multi-provider architecture; Codex as a first-class adapter
-- [x] **v0.8** Telegram bridge, full git panel, notification center, elicitation forms, model picker, Past Agents
-- [ ] **v0.9** Global keyboard shortcuts, richer search, more adapters (Gemini, Copilot), packaged binaries
+- Claude — `ANTHROPIC_API_KEY` env var, or `claude login`.
+- Codex — install `codex-cli`, then `codex login`.
+- Hermes — `hermes login` (xAI OAuth).
+- Telegram (optional) — set `MULTITABLE_TELEGRAM_BOT_TOKEN` and configure chat IDs in
+  the UI's Integrations panel.
 
 ## Contributing
 
-> ⚠️ **Not accepting unsolicited PRs right now.** MultiTable is a solo project moving fast — the codebase churns weekly. **Please file an issue first** if you've spotted a bug or have a feature idea, and I'll let you know if a PR would be welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Not accepting unsolicited PRs right now — this is a solo project and the codebase
+churns weekly. File an issue first; see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Security
 
-Please **don't open public issues** for vulnerabilities — see [`SECURITY.md`](SECURITY.md).
+Don't open public issues for vulnerabilities — see [`SECURITY.md`](SECURITY.md).
 
 ## License
 

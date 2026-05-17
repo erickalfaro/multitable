@@ -1,69 +1,131 @@
-import React from 'react';
-import { FolderTree } from 'lucide-react';
+import React, { useState } from 'react';
+import { toast } from 'react-hot-toast';
 import { useAppStore } from '../../stores/appStore';
+import { validateNewPath } from '../../lib/filePath';
+import { FileTree } from '../main-pane/file-viewer/FileTree';
 import { SidebarSection } from './SidebarSection';
+import { SidebarFileTreeActions } from './SidebarFileTreeActions';
 
 interface Props {
   projectId: string;
 }
 
 export function SidebarFileViewerSection({ projectId }: Props) {
-  const isSelected = useAppStore((s) => s.selectedFileViewerProjectId === projectId);
   const setSelectedFileViewer = useAppStore((s) => s.setSelectedFileViewer);
+  const setFileViewerOpenPath = useAppStore((s) => s.setFileViewerOpenPath);
+  const openPath = useAppStore((s) => s.fileViewerOpenPath[projectId] ?? null);
+  const refreshKey = useAppStore((s) => s.fileViewerRefreshKey[projectId] ?? 0);
 
-  const className = 'mt-sidebar-item' + (isSelected ? ' is-selected' : '');
+  // Active session for this project: the explicit selection if it's a session
+  // in this project, else the most-recently-active one (same recency
+  // expression the sidebar sorts by). null → "add to context" is disabled.
+  const activeSessionId = useAppStore((s) => {
+    const sel = s.selectedProcessId;
+    if (sel && s.sessions[sel]?.projectId === projectId) return sel;
+    let best: string | null = null;
+    let bestRecency = -1;
+    for (const sess of Object.values(s.sessions)) {
+      if (sess.projectId !== projectId) continue;
+      const recency = sess.claudeState?.lastActivity || sess.lastActiveAt || sess.createdAt || 0;
+      if (recency > bestRecency) {
+        bestRecency = recency;
+        best = sess.id;
+      }
+    }
+    return best;
+  });
+
+  const [newFileMode, setNewFileMode] = useState(false);
+  const [newFilePath, setNewFilePath] = useState('');
+
+  const createNewFile = () => {
+    const err = validateNewPath(newFilePath);
+    if (err) {
+      toast.error(err);
+      return;
+    }
+    const p = newFilePath.trim();
+    setFileViewerOpenPath(projectId, p, { isNew: true });
+    setSelectedFileViewer(projectId);
+    setNewFileMode(false);
+    setNewFilePath('');
+  };
 
   return (
-    <SidebarSection title="FILE VIEWER">
-      <div
-        className={className}
-        onClick={() => setSelectedFileViewer(projectId)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          padding: '4px 10px 4px 9px',
-          margin: '1px 0',
-          cursor: 'pointer',
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          position: 'relative',
-          borderRadius: 'var(--radius-snug)',
-          backgroundColor: isSelected ? 'var(--bg-elevated)' : 'transparent',
-          borderLeft: isSelected
-            ? '3px solid var(--accent-amber)'
-            : '3px solid transparent',
-        }}
-      >
+    <SidebarSection
+      title="FILE VIEWER"
+      onAdd={() => {
+        setNewFileMode((v) => !v);
+        setNewFilePath('');
+      }}
+    >
+      {newFileMode && (
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            width: 12,
-            flexShrink: 0,
-            color: 'var(--text-secondary)',
+            gap: 6,
+            padding: '6px 10px 6px 12px',
           }}
         >
-          <FolderTree size={12} />
-        </div>
-        <div style={{ marginLeft: 10, flex: 1, minWidth: 0 }}>
-          <span
+          <input
+            autoFocus
+            value={newFilePath}
+            onChange={(e) => setNewFilePath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') createNewFile();
+              if (e.key === 'Escape') {
+                setNewFileMode(false);
+                setNewFilePath('');
+              }
+            }}
+            placeholder="e.g. .claude/notes/scratch.md"
             style={{
-              display: 'block',
+              flex: 1,
               minWidth: 0,
-              fontSize: 13.5,
-              lineHeight: 1.3,
+              padding: '4px 6px',
+              fontSize: 11.5,
+              fontFamily: "'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace",
+              background: 'var(--bg-primary)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 'var(--radius-snug)',
               color: 'var(--text-primary)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              fontWeight: isSelected ? 600 : 500,
+              outline: 'none',
+            }}
+          />
+          <button
+            type="button"
+            onClick={createNewFile}
+            style={{
+              padding: '4px 8px',
+              fontSize: 11.5,
+              fontWeight: 500,
+              fontFamily: 'inherit',
+              border: 'none',
+              borderRadius: 'var(--radius-snug)',
+              background: 'var(--text-primary)',
+              color: 'var(--bg-elevated)',
+              cursor: 'pointer',
+              flexShrink: 0,
             }}
           >
-            File Viewer
-          </span>
+            Create
+          </button>
         </div>
-      </div>
+      )}
+      <FileTree
+        projectId={projectId}
+        variant="sidebar"
+        selectedPath={openPath}
+        refreshKey={refreshKey}
+        onOpenFile={(rel) => {
+          setFileViewerOpenPath(projectId, rel);
+          setSelectedFileViewer(projectId);
+        }}
+        fileActions={(entry) => (
+          <SidebarFileTreeActions filePath={entry.path} targetSessionId={activeSessionId} />
+        )}
+      />
     </SidebarSection>
   );
 }

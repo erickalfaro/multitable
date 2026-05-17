@@ -72,6 +72,16 @@ interface AppState {
   // selected process. Same mutually-exclusive surface model as
   // `selectedGitProjectId` — setting any surface clears the others.
   selectedFileViewerProjectId: string | null;
+  // File Viewer open-file coordination. The tree lives in the left sidebar
+  // (per project) while the editor host lives in the center pane, so the
+  // currently-open relative path must be shared. Keyed by projectId so each
+  // project remembers its open file independently. `fileViewerNewFile` flags a
+  // path created from the sidebar so the host opens it in "not yet saved"
+  // mode; `fileViewerRefreshKey` is bumped after a save so the sidebar tree
+  // re-fetches.
+  fileViewerOpenPath: Record<string, string | null>;
+  fileViewerNewFile: Record<string, boolean>;
+  fileViewerRefreshKey: Record<string, number>;
   // Multi-selected session ids for bulk operations (e.g. group remove). Sidebar
   // toggles entries via Cmd/Ctrl+click and Shift+click range select. Cleared
   // whenever a plain (un-modified) click sets a new primary selection.
@@ -96,6 +106,12 @@ interface AppState {
   setSelectedProcess: (id: string | null) => void;
   setSelectedGitProject: (projectId: string | null) => void;
   setSelectedFileViewer: (projectId: string | null) => void;
+  setFileViewerOpenPath: (
+    projectId: string,
+    path: string | null,
+    opts?: { isNew?: boolean },
+  ) => void;
+  bumpFileViewerRefresh: (projectId: string) => void;
   setMultiSelectedSessions: (ids: string[]) => void;
   toggleMultiSelectedSession: (id: string) => void;
   clearMultiSelectedSessions: () => void;
@@ -249,7 +265,7 @@ interface AppState {
   setModelCatalog: (provider: AgentProvider, models: DiscoveredModel[]) => void;
 }
 
-export type DetailPanelTab = 'files' | 'tasks' | 'cost' | 'prompt-builder';
+export type DetailPanelTab = 'tasks' | 'cost' | 'prompt-builder';
 
 export type AttentionKind = 'read' | 'edit' | 'command' | 'search' | 'mcp' | 'reasoning';
 
@@ -495,6 +511,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedProcessId: null,
   selectedGitProjectId: null,
   selectedFileViewerProjectId: null,
+  fileViewerOpenPath: {},
+  fileViewerNewFile: {},
+  fileViewerRefreshKey: {},
   multiSelectedSessionIds: [],
   sidebarCollapsed: false,
   customThemes: loadCustomThemesFromStorage(),
@@ -512,7 +531,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   globalSettingsOpen: false,
   projectSettingsOpen: false,
   detailPanelOpen: true,
-  detailPanelTab: 'files',
+  detailPanelTab: 'tasks',
   // Start optimistic. The fullscreen "Cannot connect to daemon" overlay is
   // intrusive — only show it after a real connect attempt has failed, never
   // during the initial mount window. ws.connect() flips this to 'reconnecting'
@@ -571,6 +590,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         focusedProjectId: projectId,
       };
     }),
+  setFileViewerOpenPath: (projectId, path, opts) =>
+    set((s) => ({
+      fileViewerOpenPath: { ...s.fileViewerOpenPath, [projectId]: path },
+      fileViewerNewFile: { ...s.fileViewerNewFile, [projectId]: !!opts?.isNew },
+    })),
+  bumpFileViewerRefresh: (projectId) =>
+    set((s) => ({
+      fileViewerRefreshKey: {
+        ...s.fileViewerRefreshKey,
+        [projectId]: (s.fileViewerRefreshKey[projectId] ?? 0) + 1,
+      },
+    })),
   setMultiSelectedSessions: (ids) => set({ multiSelectedSessionIds: ids }),
   toggleMultiSelectedSession: (id) =>
     set((s) => {
