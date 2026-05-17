@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { X, Folder, Plus, Minus, MessageSquare, Check, Copy, Sparkles, Trash2 } from 'lucide-react';
+import { X, Plus, MessageSquare, Check, Copy, Sparkles, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import type { DetailPanelTab } from '../../stores/appStore';
 import { api } from '../../lib/api';
@@ -12,299 +12,13 @@ import { ProviderCapabilityStrip } from './context/ProviderCapabilityStrip';
 
 interface Props {
   session: Session;
-  projectId: string;
 }
 
 const TABS: { id: DetailPanelTab; label: string }[] = [
-  { id: 'files', label: 'Files' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'cost', label: 'Cost' },
   { id: 'prompt-builder', label: 'Prompt Builder' },
 ];
-
-interface FileEntry {
-  name: string;
-  path: string;
-  type: 'file' | 'directory';
-}
-
-function FilesTab({ projectId, sessionId }: { projectId: string; sessionId: string }) {
-  const selectedFiles = useAppStore(s => s.selectedFilesBySession[sessionId]);
-  const toggleSelectedFile = useAppStore(s => s.toggleSelectedFile);
-  const selectedSet = useMemo(() => new Set(selectedFiles ?? []), [selectedFiles]);
-
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [expanded, setExpanded] = useState<Record<string, FileEntry[]>>({});
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // Track the last-copied entry path for transient feedback — keyed by the
-  // entry's relative path, cleared after ~1.2s.
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Mirrors the App-level mobile breakpoint so we can flip the copy-path
-  // button to the right edge on touch layouts.
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
-
-  useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!projectId) {
-      setLoading(false);
-      setError('No project ID available');
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    api.projects
-      .files(projectId)
-      .then((result) => {
-        setFiles(result);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error('[FilesTab] Failed to load root files:', err);
-        setError(err?.message || 'Failed to load files');
-        setLoading(false);
-      });
-  }, [projectId]);
-
-  const toggleFolder = async (path: string) => {
-    if (expandedPaths.has(path)) {
-      setExpandedPaths((prev) => {
-        const next = new Set(prev);
-        next.delete(path);
-        return next;
-      });
-    } else {
-      try {
-        const children = await api.projects.files(projectId, path);
-        setExpanded((prev) => ({ ...prev, [path]: children }));
-        setExpandedPaths((prev) => new Set(prev).add(path));
-      } catch (err) {
-        console.error('[FilesTab] Failed to expand folder:', path, err);
-      }
-    }
-  };
-
-  const copyEntryPath = async (entry: FileEntry, e: React.MouseEvent) => {
-    // Prevent the click from bubbling to the row and triggering folder expand.
-    e.stopPropagation();
-    // Copy the project-rooted relative path (e.g. `packages/web/src/...`),
-    // not the OS-absolute path — that's what callers paste into prompts,
-    // commits, and @-mentions.
-    const ok = await copyToClipboard(entry.path);
-    if (!ok) return;
-    setCopiedPath(entry.path);
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-    copiedTimerRef.current = setTimeout(() => setCopiedPath(null), 1200);
-  };
-
-  const handleRowClick = (entry: FileEntry) => {
-    // Folders expand/collapse on click. Files do nothing — the only way to
-    // interact with a file is the copy-path button.
-    if (entry.type === 'directory') toggleFolder(entry.path);
-  };
-
-  const renderEntries = (entries: FileEntry[], depth: number) => (
-    <>
-      {entries.map((entry) => {
-        const isCopied = copiedPath === entry.path;
-        const isDir = entry.type === 'directory';
-        const isSelected = !isDir && selectedSet.has(entry.path);
-        const copyBtn = (
-          <button
-            type="button"
-            onClick={(e) => copyEntryPath(entry, e)}
-            title="Copy path"
-            aria-label={`Copy path for ${entry.name}`}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: isCopied
-                ? 'color-mix(in srgb, var(--accent-blue) 20%, transparent)'
-                : 'transparent',
-              border: '1px solid',
-              borderColor: isCopied ? 'var(--accent-blue)' : 'var(--border)',
-              color: isCopied ? 'var(--accent-blue)' : 'var(--text-muted)',
-              padding: '3px 4px',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-              flexShrink: 0,
-              transition: 'background-color var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast)',
-            }}
-            onMouseEnter={(e) => {
-              if (!isCopied) {
-                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
-                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-muted)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!isCopied) {
-                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)';
-                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)';
-              }
-            }}
-          >
-            {isCopied ? <Check size={12} /> : <Copy size={12} />}
-          </button>
-        );
-        const contextBtn = (
-          <button
-            type="button"
-            disabled={isDir}
-            onClick={
-              isDir
-                ? undefined
-                : (e) => {
-                    e.stopPropagation();
-                    toggleSelectedFile(sessionId, entry.path);
-                  }
-            }
-            title={
-              isDir
-                ? 'Folders cannot be added to chat context'
-                : isSelected
-                  ? 'Remove from chat context'
-                  : 'Add to chat context'
-            }
-            aria-label={
-              isDir
-                ? `${entry.name} (folder)`
-                : isSelected
-                  ? `Remove ${entry.name} from chat context`
-                  : `Add ${entry.name} to chat context`
-            }
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: isSelected
-                ? 'color-mix(in srgb, var(--accent-blue) 20%, transparent)'
-                : 'transparent',
-              border: '1px solid',
-              borderColor: isSelected ? 'var(--accent-blue)' : 'var(--border)',
-              color: isSelected ? 'var(--accent-blue)' : 'var(--text-muted)',
-              padding: '3px 4px',
-              borderRadius: 'var(--radius-sm)',
-              cursor: isDir ? 'not-allowed' : 'pointer',
-              opacity: isDir ? 0.4 : 1,
-              flexShrink: 0,
-              transition: 'background-color var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast)',
-            }}
-            onMouseEnter={(e) => {
-              if (!isDir && !isSelected) {
-                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
-                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-muted)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!isDir && !isSelected) {
-                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)';
-                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)';
-              }
-            }}
-          >
-            {isSelected ? <Minus size={12} /> : <Plus size={12} />}
-          </button>
-        );
-        const actions = (
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-            {contextBtn}
-            {copyBtn}
-          </div>
-        );
-        return (
-          <React.Fragment key={entry.path}>
-            <div
-              onClick={() => handleRowClick(entry)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '4px 8px',
-                paddingLeft: 8 + depth * 16,
-                cursor: isDir ? 'pointer' : 'default',
-                userSelect: 'none',
-                WebkitUserSelect: 'none',
-                fontSize: 13,
-                color: 'var(--text-primary)',
-                borderRadius: 'var(--radius-sm)',
-                transition: 'background-color var(--dur-fast) var(--ease-out)',
-              }}
-              onMouseEnter={(e) =>
-                ((e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--bg-hover)')
-              }
-              onMouseLeave={(e) =>
-                ((e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent')
-              }
-            >
-              {!isMobile && actions}
-              {isDir && (
-                <Folder size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-              )}
-              <span
-                style={{
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  flex: 1,
-                  minWidth: 0,
-                }}
-              >
-                {entry.name}
-              </span>
-              {isMobile && actions}
-            </div>
-            {isDir &&
-              expandedPaths.has(entry.path) &&
-              expanded[entry.path] &&
-              renderEntries(expanded[entry.path], depth + 1)}
-          </React.Fragment>
-        );
-      })}
-    </>
-  );
-
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: 'var(--text-muted)', fontSize: 13, padding: 24, gap: 8 }}>
-        <Spinner size="sm" /> Loading files...
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, color: 'var(--text-muted)', padding: 24 }}>
-        <Folder size={32} style={{ opacity: 0.4 }} />
-        <span style={{ fontSize: 13, color: 'var(--status-error)' }}>{error}</span>
-      </div>
-    );
-  }
-
-  if (files.length === 0) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, color: 'var(--text-muted)', padding: 24 }}>
-        <Folder size={32} style={{ opacity: 0.4 }} />
-        <span style={{ fontSize: 13 }}>No files found</span>
-      </div>
-    );
-  }
-
-  return <div className="mt-scroll" style={{ padding: 8, overflowY: 'auto', flex: 1 }}>{renderEntries(files, 0)}</div>;
-}
 
 function CostTab({ session }: { session: Session }) {
   const [costData, setCostData] = useState<{
@@ -967,7 +681,7 @@ function PromptBuilderTab({ session }: { session: Session }) {
   );
 }
 
-export function SessionDetailPanel({ session, projectId }: Props) {
+export function SessionDetailPanel({ session }: Props) {
   const detailPanelTab = useAppStore((s) => s.detailPanelTab);
   const setDetailPanelTab = useAppStore((s) => s.setDetailPanelTab);
   const setDetailPanelOpen = useAppStore((s) => s.setDetailPanelOpen);
@@ -978,7 +692,8 @@ export function SessionDetailPanel({ session, projectId }: Props) {
   useEffect(() => {
     const tab = detailPanelTab as string;
     if (tab === 'brainstorm') setDetailPanelTab('prompt-builder');
-    else if (tab === 'prompts' || tab === 'diff') setDetailPanelTab('files');
+    else if (tab === 'files' || tab === 'prompts' || tab === 'diff')
+      setDetailPanelTab('tasks');
   }, [detailPanelTab, setDetailPanelTab]);
 
   return (
@@ -1068,7 +783,6 @@ export function SessionDetailPanel({ session, projectId }: Props) {
           minHeight: 0,
         }}
       >
-        {detailPanelTab === 'files' && <FilesTab projectId={projectId} sessionId={session.id} />}
         {detailPanelTab === 'tasks' && <TasksTab sessionId={session.id} />}
         {detailPanelTab === 'cost' && <CostTab session={session} />}
         {detailPanelTab === 'prompt-builder' && <PromptBuilderTab session={session} />}

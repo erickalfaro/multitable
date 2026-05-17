@@ -1044,11 +1044,7 @@ function App() {
             style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
             {selectedSession ? (
-              <SessionDetailPanel
-                key={selectedSession.id}
-                session={selectedSession}
-                projectId={selectedSession.projectId}
-              />
+              <SessionDetailPanel key={selectedSession.id} session={selectedSession} />
             ) : (
               <div
                 style={{

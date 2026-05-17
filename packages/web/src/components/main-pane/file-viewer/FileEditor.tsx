@@ -184,7 +184,7 @@ export function FileEditor({
   if (loadState === 'idle' || !path) {
     return (
       <Centered>
-        Select a file from the tree to view or edit it.
+        Select a file from the File Viewer in the sidebar to view or edit it.
       </Centered>
     );
   }

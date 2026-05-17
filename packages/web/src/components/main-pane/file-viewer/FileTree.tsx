@@ -15,11 +15,25 @@ interface Props {
   selectedPath: string | null;
   onOpenFile: (relPath: string) => void;
   refreshKey: number;
+  // Optional per-file-row action cluster (e.g. copy-path / add-to-context).
+  // Directories never get one. Clicking inside it must not open the file —
+  // the renderer wraps it with stopPropagation.
+  fileActions?: (entry: { name: string; path: string }) => React.ReactNode;
+  // 'panel' = legacy fixed-width bordered column (center File Viewer host);
+  // 'sidebar' = full-width, transparent, no own scroll (host scrolls).
+  variant?: 'panel' | 'sidebar';
 }
 
 const ROOT = '';
 
-export function FileTree({ projectId, selectedPath, onOpenFile, refreshKey }: Props) {
+export function FileTree({
+  projectId,
+  selectedPath,
+  onOpenFile,
+  refreshKey,
+  fileActions,
+  variant = 'panel',
+}: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [childrenByDir, setChildrenByDir] = useState<Record<string, Entry[]>>({});
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
@@ -157,10 +171,22 @@ export function FileTree({ projectId, selectedPath, onOpenFile, refreshKey }: Pr
           <span style={{ width: 11, flexShrink: 0 }} />
           <FileText size={12} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
           <Name selected={isSelected}>{entry.name}</Name>
+          {fileActions && (
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {fileActions({ name: entry.name, path: entry.path })}
+            </div>
+          )}
         </Row>
       );
     });
   };
+
+  if (variant === 'sidebar') {
+    return <div style={{ padding: '2px 0' }}>{renderLevel(ROOT, 0)}</div>;
+  }
 
   return (
     <div
