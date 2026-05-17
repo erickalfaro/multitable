@@ -31,6 +31,13 @@ interface AppState {
   projects: Project[];
   expandedProjectIds: string[];
   focusedProjectId: string | null;
+  // The single project whose sections render in the sidebar column (the
+  // always-visible ProjectRail drives this). Distinct from `focusedProjectId`
+  // — which is mutated as a side effect by process/git/file-viewer selection
+  // and modals — so the rail never jumps unexpectedly when something else
+  // foregrounds a different project's surface.
+  sidebarProjectId: string | null;
+  setSidebarProject: (id: string | null) => void;
   setProjects: (projects: Project[]) => void;
   addProject: (project: Project) => void;
   updateProject: (project: Project) => void;
@@ -401,6 +408,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   expandedProjectIds: [],
   focusedProjectId: null,
+  sidebarProjectId: null,
+  setSidebarProject: (id) => set({ sidebarProjectId: id }),
   setProjects: (projects) => set({ projects }),
   addProject: (project) => set((s) => ({ projects: [...s.projects, project] })),
   updateProject: (project) =>
@@ -408,14 +417,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       projects: s.projects.map((p) => (p.id === project.id ? { ...p, ...project } : p)),
     })),
   removeProject: (id) =>
-    set((s) => ({
-      projects: s.projects.filter((p) => p.id !== id),
-      expandedProjectIds: s.expandedProjectIds.filter((pid) => pid !== id),
-      focusedProjectId:
-        s.focusedProjectId === id
-          ? s.expandedProjectIds.find((pid) => pid !== id) ?? null
-          : s.focusedProjectId,
-    })),
+    set((s) => {
+      const remaining = s.projects.filter((p) => p.id !== id);
+      return {
+        projects: remaining,
+        expandedProjectIds: s.expandedProjectIds.filter((pid) => pid !== id),
+        focusedProjectId:
+          s.focusedProjectId === id
+            ? s.expandedProjectIds.find((pid) => pid !== id) ?? null
+            : s.focusedProjectId,
+        sidebarProjectId:
+          s.sidebarProjectId === id
+            ? (remaining.find((p) => p.isActive) ?? remaining[0])?.id ?? null
+            : s.sidebarProjectId,
+      };
+    }),
   expandProject: (id) =>
     set((s) => ({
       expandedProjectIds: s.expandedProjectIds.includes(id)
@@ -564,6 +580,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         selectedProcessId: id,
         focusedProjectId: proc.projectId,
+        // Keep the rail/sections on the owning project so notification- or
+        // deep-link-driven selections never leave the sidebar showing a
+        // different project than the foregrounded surface.
+        sidebarProjectId: proc.projectId,
         selectedGitProjectId: null,
         selectedFileViewerProjectId: null,
       };
@@ -577,6 +597,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedFileViewerProjectId: null,
         projectOverviewOpen: false,
         focusedProjectId: projectId,
+        sidebarProjectId: projectId,
       };
     }),
   setSelectedFileViewer: (projectId) =>
@@ -588,6 +609,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedGitProjectId: null,
         projectOverviewOpen: false,
         focusedProjectId: projectId,
+        sidebarProjectId: projectId,
       };
     }),
   setFileViewerOpenPath: (projectId, path, opts) =>
@@ -1156,4 +1178,45 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 function isTaskState(s: string | undefined): boolean {
   return s === 'pending' || s === 'running' || s === 'completed' || s === 'failed' || s === 'killed';
+}
+
+// Roll the per-session amber-Bell badge (pending permissions + unread alerts)
+// up to the owning project, for the ProjectRail tiles. Pure against a store
+// snapshot so it can be called from a scalar selector — returning the object
+// directly from useAppStore would allocate a fresh reference every render and
+// loop, so the hooks below select scalars only.
+export interface ProjectAttention {
+  permissionCount: number;
+  unreadAttention: number;
+  total: number;
+}
+
+export function selectProjectAttention(
+  s: Pick<AppState, 'sessions' | 'pendingPermissions' | 'unreadBySession'>,
+  projectId: string,
+): ProjectAttention {
+  const ids = new Set(
+    Object.values(s.sessions)
+      .filter((x) => x.projectId === projectId)
+      .map((x) => x.id),
+  );
+  let permissionCount = 0;
+  for (const p of s.pendingPermissions) {
+    if (p.sessionId && ids.has(p.sessionId)) permissionCount++;
+  }
+  let unreadAttention = 0;
+  for (const id of ids) unreadAttention += s.unreadBySession[id] ?? 0;
+  return { permissionCount, unreadAttention, total: permissionCount + unreadAttention };
+}
+
+export function useProjectAttentionTotal(projectId: string): number {
+  return useAppStore((s) => selectProjectAttention(s, projectId).total);
+}
+
+export function useProjectPermissionCount(projectId: string): number {
+  return useAppStore((s) => selectProjectAttention(s, projectId).permissionCount);
+}
+
+export function useProjectUnreadCount(projectId: string): number {
+  return useAppStore((s) => selectProjectAttention(s, projectId).unreadAttention);
 }
