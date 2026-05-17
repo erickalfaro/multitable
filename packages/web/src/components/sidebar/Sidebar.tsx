@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import { ProjectSidebarItem } from './ProjectSidebarItem';
 import { LogoArt } from './LogoArt';
@@ -13,6 +13,8 @@ export function Sidebar() {
   const setProjectOverviewOpen = useAppStore(s => s.setProjectOverviewOpen);
   const setFocusedProject = useAppStore(s => s.setFocusedProject);
   const setAddProjectModalOpen = useAppStore(s => s.setAddProjectModalOpen);
+
+  const [homeHover, setHomeHover] = React.useState(false);
 
   const onDashboard = !selectedProcessId && !projectOverviewOpen;
 
@@ -40,75 +42,56 @@ export function Sidebar() {
           flexShrink: 0,
         }}
       >
-        {/* Logo */}
-        <div
-          aria-label="MultiTable"
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 12,
-            padding: '14px 14px 8px',
-            userSelect: 'none',
-            WebkitUserSelect: 'none',
-          }}
-        >
-          <LogoArt />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 10 }}>
-            <span
-              style={{
-                fontSize: 18,
-                fontWeight: 700,
-                color: 'white',
-                letterSpacing: '-0.02em',
-                lineHeight: 1,
-              }}
-            >
-              mt
-            </span>
-            <span
-              style={{
-                fontSize: 9.5,
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.18em',
-                lineHeight: 1,
-              }}
-            >
-              multitable v0.1
-            </span>
-          </div>
-        </div>
-        {/* Dashboard button */}
-        <div style={{ padding: '0 8px 4px' }}>
-          <Button
-            variant="ghost"
-            size="md"
-            block
-            leftIcon={<LayoutGrid size={14} />}
+        {/* Home button (avatar + HOME label, navigates to dashboard) */}
+        <div style={{ padding: '10px 8px 6px' }}>
+          <button
+            type="button"
             onClick={goToDashboard}
+            onMouseEnter={() => setHomeHover(true)}
+            onMouseLeave={() => setHomeHover(false)}
             title="View all projects"
+            aria-label="Home — view all projects"
             style={{
-              justifyContent: 'flex-start',
-              backgroundColor: onDashboard ? 'var(--bg-hover)' : undefined,
-              color: onDashboard ? 'var(--text-primary)' : 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              width: '100%',
+              padding: '6px 8px',
+              border: '1px solid transparent',
+              borderRadius: 'var(--radius-snug)',
+              backgroundColor:
+                onDashboard || homeHover ? 'var(--bg-hover)' : 'transparent',
+              cursor: 'pointer',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              fontFamily: 'inherit',
+              transition: 'background-color var(--dur-fast) var(--ease-out)',
             }}
           >
-            Home
-          </Button>
+            <LogoArt />
+            <span
+              style={{
+                fontSize: 20,
+                fontWeight: 700,
+                letterSpacing: '0.16em',
+                textTransform: 'uppercase',
+                lineHeight: 1,
+                color: onDashboard ? 'var(--text-primary)' : 'var(--text-secondary)',
+              }}
+            >
+              Home
+            </span>
+          </button>
         </div>
         {/* Add Project button */}
-        <div style={{ padding: '0 8px 8px' }}>
+        <div style={{ padding: '0 8px 12px' }}>
           <Button
-            variant="ghost"
+            variant="primary"
             size="md"
             block
             leftIcon={<Plus size={14} />}
             onClick={() => setAddProjectModalOpen(true)}
             title="Add a new project"
-            style={{
-              justifyContent: 'flex-start',
-              color: 'var(--text-secondary)',
-            }}
           >
             Add Project
           </Button>

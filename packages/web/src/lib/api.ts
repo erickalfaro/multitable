@@ -123,7 +123,30 @@ export const api = {
     setActive: (id: string) => put<Project>(`/api/projects/${id}/active`),
     startAll: (id: string) => post<void>(`/api/projects/${id}/start-all`),
     stopAll: (id: string) => post<void>(`/api/projects/${id}/stop-all`),
-    files: (id: string, path?: string) => get<any[]>(`/api/projects/${id}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+    files: (id: string, path?: string, all?: boolean) => {
+      const qs = new URLSearchParams();
+      if (path) qs.set('path', path);
+      if (all) qs.set('all', '1');
+      const suffix = qs.toString();
+      return get<
+        Array<{
+          name: string;
+          path: string;
+          type: 'directory' | 'file';
+          size: number;
+          modifiedAt: number;
+        }>
+      >(`/api/projects/${id}/files${suffix ? `?${suffix}` : ''}`);
+    },
+    readFile: (id: string, filePath: string) =>
+      get<{ content: string; exists: boolean; size?: number; modifiedAt?: number }>(
+        `/api/projects/${id}/file-content?path=${encodeURIComponent(filePath)}`,
+      ),
+    saveFile: (id: string, filePath: string, content: string) =>
+      post<{ ok: true; path: string; size: number; modifiedAt: number }>(
+        `/api/projects/${id}/file-content`,
+        { path: filePath, content },
+      ),
     openFile: (id: string, filePath: string) => post<void>(`/api/projects/${id}/open-file`, { path: filePath }),
     diff: (id: string) => get<{ diff: string }>(`/api/projects/${id}/diff`),
     slashCommands: (id: string) =>

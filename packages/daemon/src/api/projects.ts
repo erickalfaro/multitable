@@ -198,6 +198,11 @@ function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig
   };
 }
 
+// File Viewer: cap on a single editable text file (read + write).
+const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+// Directory entries always hidden from the File Viewer tree, even with ?all=1.
+const FILE_TREE_HARD_EXCLUDE = new Set(['.git', 'node_modules']);
+
 export function createProjectsRouter(
   manager: PtyManager,
   gitWatcher: GitWatcher,
@@ -547,10 +552,19 @@ export function createProjectsRouter(
       return res.status(403).json({ error: 'Path is outside project directory' });
     }
 
+    // ?all=1 exposes dotfolders (.claude/, .github/, …) for the File Viewer;
+    // other callers (Files tab, @-mention index) omit it and keep the old
+    // dotfile-hiding behavior.
+    const includeAll = req.query.all === '1' || req.query.all === 'true';
+
     try {
       const entries = fs.readdirSync(resolved);
       const result = entries
-        .filter((name) => !name.startsWith('.'))
+        .filter((name) => {
+          if (FILE_TREE_HARD_EXCLUDE.has(name)) return false;
+          if (includeAll) return true;
+          return !name.startsWith('.');
+        })
         .map((name) => {
           try {
             const fullPath = path.join(resolved, name);
@@ -575,6 +589,99 @@ export function createProjectsRouter(
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ error: err.message || 'Failed to read directory' });
+    }
+  });
+
+  // GET /api/projects/:id/file-content?path= — read a single text file for the
+  // File Viewer. Missing file → { content:'', exists:false } (200) so the
+  // editor can open a not-yet-created path gracefully.
+  router.get('/:id/file-content', (req: Request, res: Response) => {
+    const project = getProjectById(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const relPath = (req.query.path as string) || '';
+    if (!relPath) return res.status(400).json({ error: 'path is required' });
+
+    const normalizedProjectPath = path.resolve(project.path);
+    const resolved = path.resolve(normalizedProjectPath, relPath);
+    if (!resolved.startsWith(normalizedProjectPath)) {
+      return res.status(403).json({ error: 'Path is outside project directory' });
+    }
+
+    try {
+      if (!fs.existsSync(resolved)) {
+        return res.json({ content: '', exists: false });
+      }
+      const stat = fs.statSync(resolved);
+      if (stat.isDirectory()) {
+        return res.status(400).json({ error: 'Path is a directory' });
+      }
+      if (stat.size > MAX_TEXT_BYTES) {
+        return res.status(413).json({ error: 'File too large to edit (2 MB limit)' });
+      }
+      const buf = fs.readFileSync(resolved);
+      const scanLen = Math.min(buf.length, 8000);
+      for (let i = 0; i < scanLen; i++) {
+        if (buf[i] === 0) {
+          return res.status(415).json({ error: 'Binary file — not editable' });
+        }
+      }
+      res.json({
+        content: buf.toString('utf8'),
+        exists: true,
+        size: stat.size,
+        modifiedAt: stat.mtimeMs,
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || 'Failed to read file' });
+    }
+  });
+
+  // POST /api/projects/:id/file-content { path, content } — save a single text
+  // file for the File Viewer (creates parent dirs; atomic temp+rename).
+  router.post('/:id/file-content', (req: Request, res: Response) => {
+    const project = getProjectById(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const { path: relPath, content } = req.body || {};
+    if (typeof relPath !== 'string' || !relPath.trim()) {
+      return res.status(400).json({ error: 'path is required' });
+    }
+    if (typeof content !== 'string') {
+      return res.status(400).json({ error: 'content must be a string' });
+    }
+    if (path.isAbsolute(relPath) || relPath.split(/[\\/]/).includes('..')) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    const normalizedProjectPath = path.resolve(project.path);
+    const resolved = path.resolve(normalizedProjectPath, relPath);
+    if (!resolved.startsWith(normalizedProjectPath)) {
+      return res.status(403).json({ error: 'Path is outside project directory' });
+    }
+
+    try {
+      if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+        return res.status(400).json({ error: 'Path is a directory' });
+      }
+      const dirPath = path.dirname(resolved);
+      fs.mkdirSync(dirPath, { recursive: true });
+      const tmp = `${resolved}.mt-tmp-${Date.now()}`;
+      try {
+        fs.writeFileSync(tmp, content, 'utf8');
+        fs.renameSync(tmp, resolved);
+      } catch (e) {
+        try {
+          if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+        } catch {
+          /* best-effort temp cleanup */
+        }
+        throw e;
+      }
+      const stat = fs.statSync(resolved);
+      res.json({ ok: true, path: relPath, size: stat.size, modifiedAt: stat.mtimeMs });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to write file' });
     }
   });
 
