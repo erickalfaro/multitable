@@ -264,6 +264,18 @@ export class HermesAdapter implements ProviderAdapter {
       authState = await client.ensureReady();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Fail-closed sandbox: bwrap missing → don't run Hermes unconfined.
+      // Surface the actionable install/opt-out hint verbatim.
+      if (err instanceof Error && err.name === 'SandboxUnavailableError') {
+        cb.emitAlert({
+          category: 'auth',
+          severity: 'error',
+          title: 'Hermes blocked: filesystem sandbox unavailable',
+          body: message,
+          persistent: true,
+        });
+        throw err;
+      }
       cb.emitAlert({
         category: 'auth',
         severity: 'error',
