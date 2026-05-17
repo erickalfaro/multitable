@@ -5,7 +5,10 @@
 <h1 align="center">MultiTable</h1>
 
 <p align="center">
-  <img src="docs/images/demo.gif" alt="MultiTable" width="760">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Node ≥18" src="https://img.shields.io/badge/node-%E2%89%A518-brightgreen">
+  <img alt="100% local" src="https://img.shields.io/badge/runs-100%25%20local-success">
+  <img alt="v0.9.0" src="https://img.shields.io/badge/version-0.9.0-blue">
 </p>
 
 ## What it is
@@ -31,6 +34,10 @@ tablet — including approving permission prompts remotely over Telegram.
 
 Everything runs locally. No accounts, no telemetry — the only network calls are your
 LLM provider's API and, if you opt in, Telegram.
+
+<p align="center">
+  <img src="docs/images/demo.gif" alt="MultiTable" width="760">
+</p>
 
 ## Prior art
 

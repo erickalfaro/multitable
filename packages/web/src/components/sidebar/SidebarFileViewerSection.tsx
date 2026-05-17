@@ -16,12 +16,19 @@ export function SidebarFileViewerSection({ projectId }: Props) {
   const openPath = useAppStore((s) => s.fileViewerOpenPath[projectId] ?? null);
   const refreshKey = useAppStore((s) => s.fileViewerRefreshKey[projectId] ?? 0);
 
-  // Active session for this project: the explicit selection if it's a session
-  // in this project, else the most-recently-active one (same recency
-  // expression the sidebar sorts by). null → "add to context" is disabled.
+  // Resolve the session that "add to context" attaches to — but ONLY when
+  // this project is the one the user is currently focused on. Adding files
+  // across projects (e.g. Project B's tree while a Project A session is
+  // selected) is not allowed, so the + stays disabled there.
+  //
+  // - selected process is a session in THIS project  -> that session
+  // - this project's File Viewer is the foreground surface -> its
+  //   most-recently-active session (so browsing files here still works)
+  // - otherwise -> null (disabled)
   const activeSessionId = useAppStore((s) => {
     const sel = s.selectedProcessId;
     if (sel && s.sessions[sel]?.projectId === projectId) return sel;
+    if (s.selectedFileViewerProjectId !== projectId) return null;
     let best: string | null = null;
     let bestRecency = -1;
     for (const sess of Object.values(s.sessions)) {
