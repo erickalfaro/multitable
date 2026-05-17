@@ -171,7 +171,10 @@ export class HermesAdapter implements ProviderAdapter {
   };
 
   private permManager: PermissionManager;
-  private client: HermesAcpClient;
+  // Per-project-cwd pool of `hermes acp` children (see clientFor). Empty when
+  // an injected client is supplied for tests.
+  private clients = new Map<string, HermesAcpClient>();
+  private injectedClient: HermesAcpClient | null = null;
   private sessions = new Map<string, SessionCacheEntry>();
   // Reverse map (Hermes ACP session id → MultiTable session id) so the
   // permission handler — which only knows the ACP id — can resolve back to
@@ -184,22 +187,37 @@ export class HermesAdapter implements ProviderAdapter {
 
   constructor(permManager: PermissionManager, client?: HermesAcpClient) {
     this.permManager = permManager;
-    this.client =
-      client ??
-      new HermesAcpClient({
-        // Pin xAI Grok OAuth at the Hermes runtime layer so the user's shell
-        // default (`hermes config set model.provider …`) can't override us.
-        envOverlay: { HERMES_INFERENCE_PROVIDER: 'xai-oauth' },
-        permissionHandler: (req) => this.handleAcpPermission(req),
-        // Hermes' terminal tool falls back to `os.getcwd()` on the agent
-        // child whenever a session's per-task cwd override is missing/empty.
-        // If we spawn with the daemon's cwd, that fallback becomes
-        // `packages/daemon` under `npm run dev -w` — confusing and wrong for
-        // every project. Pin to the user's home so the fallback is at least
-        // a sane neutral location. Per-session cwds are still passed via
-        // session/new and session/load.
-        cwd: homedir(),
-      });
+    // Test seam: an injected client is used for every cwd (tests don't spawn
+    // real children).
+    this.injectedClient = client ?? null;
+  }
+
+  // One `hermes acp` child per project working directory. Hermes' ACP adapter
+  // does NOT propagate the per-session cwd to the agent's self-perception or
+  // its context-file discovery — both read the child's own `os.getcwd()`
+  // (see run_agent.py:build_context_files_prompt → os.getcwd(), and the
+  // terminal tool's `os.getenv("TERMINAL_CWD", os.getcwd())`). A single shared
+  // child therefore can't be correct for more than one project. We pool a
+  // child per resolved cwd so the agent actually believes it's in the project
+  // root and loads that project's AGENTS.md / CLAUDE.md / .cursorrules.
+  private clientFor(cwd: string): HermesAcpClient {
+    if (this.injectedClient) return this.injectedClient;
+    const existing = this.clients.get(cwd);
+    if (existing) return existing;
+    const created = new HermesAcpClient({
+      // Pin xAI Grok OAuth at the Hermes runtime layer so the user's shell
+      // default (`hermes config set model.provider …`) can't override us.
+      // TERMINAL_CWD makes Hermes discover context files from the project
+      // root even on code paths that prefer the env var over os.getcwd().
+      envOverlay: { HERMES_INFERENCE_PROVIDER: 'xai-oauth', TERMINAL_CWD: cwd },
+      permissionHandler: (req) => this.handleAcpPermission(req),
+      // The spawn cwd IS the project root, so the agent's os.getcwd() — what
+      // it reports as "where am I" and what context-file discovery walks —
+      // is correct without relying on the per-session task override.
+      cwd,
+    });
+    this.clients.set(cwd, created);
+    return created;
   }
 
   reset(s: AgentSession): void {
@@ -209,9 +227,11 @@ export class HermesAdapter implements ProviderAdapter {
     this.lastSentEffort.delete(s.id);
   }
 
-  /** Daemon shutdown hook. Closes the underlying acp child. */
+  /** Daemon shutdown hook. Closes every per-project acp child. */
   shutdown(): void {
-    this.client.close();
+    if (this.injectedClient) this.injectedClient.close();
+    for (const c of this.clients.values()) c.close();
+    this.clients.clear();
   }
 
   async runTurn(
@@ -222,10 +242,14 @@ export class HermesAdapter implements ProviderAdapter {
   ): Promise<void> {
     if (s.userMessages.length === 1) cb.maybeRenameFromFirstPrompt(text);
 
+    // Resolve the project cwd up front and pick the child bound to it.
+    const cwd = this.resolveCwd(s);
+    const client = this.clientFor(cwd);
+
     // 1. Make sure the long-lived child is up and authenticated.
     let authState: HermesAuthState;
     try {
-      authState = await this.client.ensureReady();
+      authState = await client.ensureReady();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       cb.emitAlert({
@@ -256,11 +280,11 @@ export class HermesAdapter implements ProviderAdapter {
     }
 
     // 2. Mint or load the ACP session id.
-    const hermesSessionId = await this.ensureSessionId(s, cb);
+    const hermesSessionId = await this.ensureSessionId(s, cb, client, cwd);
 
     // 3. Wire streaming. Subscribe BEFORE prompt so we can't miss early chunks.
     const buffers = makeBuffers();
-    const off = this.client.subscribe(hermesSessionId, (n) => {
+    const off = client.subscribe(hermesSessionId, (n) => {
       try {
         this.handleNotification(s, n, cb, buffers);
       } catch (err) {
@@ -273,7 +297,7 @@ export class HermesAdapter implements ProviderAdapter {
       }
     });
 
-    const onAbort = () => this.client.cancel(hermesSessionId);
+    const onAbort = () => client.cancel(hermesSessionId);
     ctrl.signal.addEventListener('abort', onAbort, { once: true });
 
     // Reasoning-effort prefix. Hermes' ACP session honors a `/reasoning <level>`
@@ -298,7 +322,7 @@ export class HermesAdapter implements ProviderAdapter {
     });
 
     try {
-      const result = await this.client.prompt({ sessionId: hermesSessionId, text: body });
+      const result = await client.prompt({ sessionId: hermesSessionId, text: body });
 
       console.info('[hermes] turn completed', {
         sessionId: s.id,
@@ -376,30 +400,35 @@ export class HermesAdapter implements ProviderAdapter {
     }
   }
 
-  private async ensureSessionId(s: AgentSession, cb: AdapterCallbacks): Promise<string> {
-    const existing = this.sessions.get(s.id);
-    if (existing && existing.mode === s.mode) return existing.hermesSessionId;
-
-    // Hard guard against empty cwd reaching session/new or session/load. An
-    // empty cwd ends up registered as `{"cwd": ""}` in Hermes' per-task
-    // override registry; the terminal tool's `or config["cwd"]` fallback
-    // then runs commands from the Hermes process's own cwd. Surface stale
-    // DB rows loudly so we fix them upstream instead of debugging "rm ran
-    // from the wrong directory" again.
-    const cwd = s.workingDir;
-    if (!cwd) {
+  // Resolve a session's project cwd, never empty. An empty cwd would make
+  // Hermes fall back to the child's own process cwd both for the agent's
+  // self-perception and for terminal-tool execution; we'd rather pin to a
+  // sane neutral location and log the stale row loudly.
+  private resolveCwd(s: AgentSession): string {
+    if (!s.workingDir) {
       console.warn('[hermes] session has empty workingDir; falling back to homedir', {
         sessionId: s.id,
         projectId: s.projectId,
       });
+      return homedir();
     }
-    const safeCwd = cwd || homedir();
+    return s.workingDir;
+  }
+
+  private async ensureSessionId(
+    s: AgentSession,
+    cb: AdapterCallbacks,
+    client: HermesAcpClient,
+    cwd: string,
+  ): Promise<string> {
+    const existing = this.sessions.get(s.id);
+    if (existing && existing.mode === s.mode) return existing.hermesSessionId;
 
     let hermesSessionId: string;
     let loaded = false;
     if (s.agentSessionId) {
       try {
-        hermesSessionId = await this.client.loadSession(s.agentSessionId, safeCwd);
+        hermesSessionId = await client.loadSession(s.agentSessionId, cwd);
         loaded = true;
       } catch (err) {
         console.warn('[hermes] session/load failed, creating fresh', {
@@ -407,10 +436,10 @@ export class HermesAdapter implements ProviderAdapter {
           hermesSessionId: s.agentSessionId,
           error: err instanceof Error ? err.message : String(err),
         });
-        hermesSessionId = await this.client.newSession({ cwd: safeCwd });
+        hermesSessionId = await client.newSession({ cwd });
       }
     } else {
-      hermesSessionId = await this.client.newSession({ cwd: safeCwd });
+      hermesSessionId = await client.newSession({ cwd });
     }
 
     // Hermes schedules _replay_session_history (acp_adapter/server.py) AFTER
