@@ -31,16 +31,23 @@ Instead of this:                      You get this:
 │  All sessions/commands/terminals run from this path           │
 │                                                              │
 │  ┌─ Sessions ───────┐  ┌─ Commands ────────┐  ┌─ Terminals ┐│
-│  │ AI agent runs     │  │ Dev servers,      │  │ Ad-hoc     ││
+│  │ AI agent          │  │ Dev servers,      │  │ Ad-hoc     ││
 │  │ (Claude, Codex,   │  │ queue workers,    │  │ shells     ││
-│  │  Aider, etc.)     │  │ build watchers    │  │ (Ctrl+T)   ││
+│  │  Hermes/Grok)     │  │ build watchers    │  │ (Ctrl+T)   ││
 │  │                   │  │                   │  │            ││
-│  │ Tracked: cost,    │  │ Auto-start,       │  │ No config  ││
-│  │ tokens, diffs,    │  │ auto-restart,     │  │ needed     ││
-│  │ timeline          │  │ file-watch restart │  │            ││
+│  │ SDK-driven,       │  │ PTY child,        │  │ PTY child  ││
+│  │ no PTY. Tracked:  │  │ auto-start,       │  │ No config  ││
+│  │ cost, tokens,     │  │ auto-restart,     │  │ needed     ││
+│  │ diffs, timeline   │  │ file-watch restart │  │            ││
 │  └───────────────────┘  └───────────────────┘  └────────────┘│
 └──────────────────────────────────────────────────────────────┘
 ```
+
+A **Session** is an AI-agent conversation driven through a provider adapter
+(Claude via the in-process Agent SDK, Codex via a `codex app-server` JSON-RPC
+child, Hermes/Grok via `hermes acp` ACP JSON-RPC). Sessions have **no PTY** —
+the daemon talks to the provider directly and streams the conversation to a
+React chat UI. **Commands** and **Terminals** are real PTY children (`node-pty`).
 
 ---
 
@@ -50,7 +57,9 @@ Instead of this:                      You get this:
 ┌─────────────────────────────────────────────┐
 │  Browser (any device: laptop, iPad, phone)  │
 │  ┌───────────────────────────────────────┐  │
-│  │         React + xterm.js UI           │  │
+│  │  React UI                             │  │
+│  │   • chat view for sessions            │  │
+│  │   • xterm.js for commands/terminals   │  │
 │  └──────────┬──────────────┬─────────────┘  │
 │        REST API        WebSocket             │
 └─────────────┼──────────────┼────────────────┘
@@ -60,16 +69,24 @@ Instead of this:                      You get this:
 │  ┌──────────┐  ┌───────────┴──┐              │
 │  │ Express  │  │ ws (streams)  │              │
 │  └──────────┘  └──────────────┘              │
+│  ┌────────────────────┐  ┌────────────────┐  │
+│  │ Agent providers     │  │ node-pty        │  │
+│  │ Claude SDK / Codex  │  │ (commands &     │  │
+│  │ app-server / Hermes │  │  terminals)     │  │
+│  │ ACP   → sessions    │  │                 │  │
+│  └────────────────────┘  └────────────────┘  │
 │  ┌──────────┐  ┌──────────────┐              │
-│  │ node-pty │  │ SQLite (state)│              │
+│  │ SQLite   │  │ chokidar      │              │
+│  │ (state)  │  │ (watch)       │              │
 │  └──────────┘  └──────────────┘              │
-│  ┌──────────┐  ┌──────────────┐              │
-│  │ chokidar │  │ simple-git   │              │
-│  │ (watch)  │  │ (diffs)      │              │
-│  └──────────┘  └──────────────┘              │
+│  ┌──────────────┐                            │
+│  │ simple-git    │                            │
+│  │ (diffs)       │                            │
+│  └──────────────┘                            │
 │                                              │
 │  REST  = CRUD for projects/sessions/commands │
-│  WS    = terminal I/O, state changes, metrics│
+│  WS    = session deltas, terminal I/O,       │
+│          state changes, metrics              │
 └──────────────────────────────────────────────┘
 ```
 
@@ -84,25 +101,29 @@ Instead of this:                      You get this:
 │  SIDEBAR     │  MAIN PANE                                    │
 │  (~300px)    │                                               │
 │              │  Shows ONE of:                                │
-│  ┌─────────┐ │    • Terminal output (xterm.js)               │
-│  │my-projct│ │    • Dashboard (project cards grid)           │
-│  │─────────│ │    • Project Overview (settings cards)        │
-│  │SESSIONS │ │    • Session Detail (diffs, timeline, cost)   │
+│  ┌─────────┐ │    • Session chat (messages, tools, cost)     │
+│  │my-projct│ │    • Terminal output (xterm.js)               │
+│  │─────────│ │    • Dashboard (project cards grid)           │
+│  │SESSIONS │ │    • Project Overview (settings cards)        │
 │  │ ● Claude│ │                                               │
 │  │ ● Codex │ │  ┌──────────────────────────────────────┐     │
-│  │TERMINALS│ │  │                                      │     │
-│  │ ● Term 1│ │  │  $ claude                            │     │
-│  │COMMANDS │ │  │  > I'll help you refactor the API... │     │
-│  │ ● npm   │ │  │  Reading src/api/routes.ts...        │     │
-│  │ ● Queue │ │  │  █                                   │     │
-│  │─────────│ │  │                                      │     │
-│  │Project 2│ │  └──────────────────────────────────────┘     │
-│  │Project 3│ │                                               │
-│  └─────────┘ │                                               │
+│  │TERMINALS│ │  │ ▸ refactor the API                   │     │
+│  │ ● Term 1│ │  │   I'll start by reading routes.ts…   │     │
+│  │COMMANDS │ │  │   ⚙ Read  src/api/routes.ts          │     │
+│  │ ● npm   │ │  │   ⚙ Edit  src/api/routes.ts          │     │
+│  │ ● Queue │ │  │   ▍ (streaming…)                     │     │
+│  │─────────│ │  └──────────────────────────────────────┘     │
+│  │Project 2│ │  ┌──────────────────────────────────────┐     │
+│  │Project 3│ │  │ Type a message…           [send ▸]   │     │
+│  └─────────┘ │  └──────────────────────────────────────┘     │
 ├──────────────┴───────────────────────────────────────────────┤
-│  [Focus][Pause][Clear][Stop][Restart]   CPU 2.1%  MEM 43MB  │
+│  ● Running   Opus 4.7   $0.42   ↑12k ↓3k tokens             │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+The session main pane is a **React chat**, not a terminal — assistant text,
+tool cards, and reasoning stream in live over the WebSocket. xterm.js is used
+only when a Command or Terminal is selected.
 
 ---
 
@@ -154,19 +175,22 @@ Instead of this:                      You get this:
 
 ---
 
-## Permission System (Claude Code)
+## Permission System
+
+Claude and Hermes route per-call tool approvals to the UI (Codex is
+sandbox-gated and never prompts). The request appears as a card below the
+session chat:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  MAIN PANE (terminal)                                        │
+│  SESSION CHAT                                                │
 │  ┌──────────────────────────────────────────────────────┐    │
-│  │  $ claude                                            │    │
-│  │  > I need to edit src/api/routes.ts                  │    │
-│  │  ...waiting for permission...                        │    │
+│  │  ▸ edit the routes file                              │    │
+│  │  I need to edit src/api/routes.ts                    │    │
 │  └──────────────────────────────────────────────────────┘    │
 │                                                              │
 │  ┌─ Permission Request ────────────────────────────────────┐ │
-│  │  Claude Code wants to use: Edit                         │ │
+│  │  Claude wants to use: Edit                              │ │
 │  │  File: src/api/routes.ts                                │ │
 │  │  ████████████░░░░░░░░░░░░  85s remaining                │ │
 │  │                                                         │ │
@@ -180,6 +204,8 @@ Instead of this:                      You get this:
 ---
 
 ## Process State Machine
+
+**Commands & Terminals** (PTY children):
 
 ```
               start()
@@ -195,6 +221,12 @@ Instead of this:                      You get this:
                          Errored (final)
                       (if limit reached)
 ```
+
+**Sessions** (no PTY, no autorestart): `stopped` (resting, ready for the next
+message) → `running` (a turn is in flight) → back to `stopped`, or `errored`
+if the turn threw. Sending a message auto-starts (or resumes) a turn; there is
+no Start / Restart / Resume action. The only controls are `/stop` (abort the
+in-flight turn) and `/reset` (clear the conversation).
 
 ---
 
@@ -229,14 +261,14 @@ User                          CLI / Daemon                  Browser
  │  Sees project with suggested   │                            │
  │  commands. Clicks "Start All"  │                            │
  │ ──────────────────────────────►│                            │
- │                                │ spawns PTYs via node-pty   │
+ │                                │ spawns command PTYs        │
  │                                │ streams output via WS      │
  │                                │────────────────────────────►
  │  Sidebar shows green dots      │                            │
  │  for all running processes     │                            │
 ```
 
-### Flow 2: Daily Workflow — Multiple AI Agents
+### Flow 2: Daily Workflow — Talking to an Agent
 
 ```
 User                          Daemon                      Browser UI
@@ -244,46 +276,51 @@ User                          Daemon                      Browser UI
  │  $ mt start                    │                            │
  │ ──────────────────────────────►│                            │
  │                                │ reads mt.yml               │
- │                                │ autostarts:                │
- │                                │   • Claude Code            │
+ │                                │ autostarts commands:       │
  │                                │   • npm:dev                │
  │                                │   • Queue worker           │
+ │                                │ registers sessions (no spawn)
  │                                │────────────────────────────►
  │                                │                            │
  │  Opens browser                 │                            │
  │  Clicks "Claude Code" session  │                            │
  │ ────────────────────────────────────────────────────────────►
- │                                │ WS: subscribe claude_id    │
- │                                │ sends scrollback + output  │
+ │                                │ WS: subscribe sessionId    │
+ │                                │ loads history from disk    │
  │                                │────────────────────────────►
  │                                │                            │
- │  Types prompt to Claude        │                            │
+ │  Types a prompt, hits send     │                            │
  │ ────────────────────────────────────────────────────────────►
- │                                │ WS: pty-input → PTY stdin  │
+ │                                │ WS: session:send           │
+ │                                │ adapter starts a turn      │
+ │                                │ (Claude SDK query())       │
+ │                                │ session:assistant-delta ──►│
+ │                                │ session:tool-event ───────►│
  │                                │                            │
- │                                │ Claude wants to Edit file  │
- │                                │ hook: PreToolUse fires     │
+ │                                │ Claude wants to Edit a file│
+ │                                │ canUseTool → PermissionMgr │
  │                                │◄────────────────────────────
- │                                │                            │
  │  Sees Permission card          │                            │
  │  Clicks [Allow]                │                            │
  │ ────────────────────────────────────────────────────────────►
  │                                │ WS: permission:respond     │
- │                                │ releases held HTTP response│
- │                                │ Claude proceeds with edit  │
- │                                │────────────────────────────►
+ │                                │ resolves canUseTool promise│
+ │                                │ turn continues, then       │
+ │                                │ session:turn-result ──────►│
  │                                │                            │
  │  Meanwhile, checks npm:dev     │                            │
  │  by clicking it in sidebar     │                            │
  │ ────────────────────────────────────────────────────────────►
- │                                │ WS: unsubscribe claude     │
+ │                                │ WS: unsubscribe session    │
  │                                │ WS: subscribe npm_dev      │
- │                                │ sends npm output           │
+ │                                │ sends scrollback + output  │
  │                                │────────────────────────────►
  │  Sees dev server output        │                            │
 ```
 
 ### Flow 3: Process Crashes and Auto-Restarts
+
+(Commands only — sessions have no autorestart.)
 
 ```
                            Daemon                         Browser
@@ -348,29 +385,35 @@ Dev Machine (running daemon)              iPad on Tailscale
 │                            │    │  devbox.tail1234.ts.net:3000  │
 │  Claude Code ● running     │◄──►│                              │
 │  npm:dev     ● running     │ WS │  Same UI, full control       │
-│  Queue       ● running     │    │  Can view terminals           │
+│  Queue       ● running     │    │  Can view sessions            │
 │                            │    │  Can approve permissions      │
 └────────────────────────────┘    └──────────────────────────────┘
 ```
 
-### Flow 6: Claude Code Session Resume
+### Flow 6: Resuming a Past Conversation
+
+There is no "Resume" button. A session keeps its provider conversation id
+(Claude `claude_session_id`, Codex thread id, Hermes session id) on disk and in
+SQLite. Re-opening the session and sending a message transparently resumes the
+existing conversation:
 
 ```
 User                          Daemon                      Browser
  │                                │                            │
- │  Claude Code session idle      │                            │
- │  (PTY alive, Claude exited)    │                            │
- │                                │                            │
- │  Clicks [Resume] button        │                            │
+ │  Opens an old session          │                            │
+ │  (state: stopped)              │                            │
  │ ────────────────────────────────────────────────────────────►
- │                                │ POST /sessions/:id/resume  │
- │                                │ writes to PTY:             │
- │                                │ "claude --resume abc123\r" │
- │                                │                            │
- │                                │ Claude reconnects to       │
- │                                │ previous conversation      │
+ │                                │ WS: subscribe sessionId    │
+ │                                │ parses on-disk transcript  │
+ │                                │ → renders prior messages   │
  │                                │────────────────────────────►
- │  Sees Claude pick up where     │                            │
+ │  Types a new message           │                            │
+ │ ────────────────────────────────────────────────────────────►
+ │                                │ WS: session:send           │
+ │                                │ adapter resumes the saved  │
+ │                                │ conversation id (no spawn) │
+ │                                │ session:assistant-delta ──►│
+ │  Sees the agent pick up where  │                            │
  │  it left off                   │                            │
 ```
 
@@ -385,7 +428,7 @@ User                          Daemon                      Browser
 │  Ctrl+W        Close terminal               │
 │  Alt+1..9      Switch project               │
 │  Alt+S/T/C     Jump to Sessions/Terms/Cmds  │
-│  Ctrl+Shift+R  Restart selected process     │
+│  Ctrl+Shift+R  Restart selected command     │
 │  Ctrl+Shift+S  Start all                    │
 │  Ctrl+Shift+X  Stop all                     │
 └─────────────────────────────────────────────┘
@@ -402,8 +445,8 @@ v0.2 Persistence    SQLite state + Dashboard view + status indicators
         │
 v0.3 Git            Diff viewer + rollback + file explorer
         │
-v0.4 Claude Code    Hooks + permissions + options + resume + respawn
-        │
+v0.4 Agents         Provider adapters (Claude/Codex/Hermes) +
+        │           hooks + permissions + options
 v0.5 Intelligence   Cost tracking + timeline + search + scratchpad
         │
 v0.6 Polish         Conflict detection + CLI + notifications
@@ -414,7 +457,10 @@ v0.6 Polish         Conflict detection + CLI + notifications
 ## Tech Stack (All TypeScript)
 
 ```
-Frontend:  React · Vite · xterm.js · TailwindCSS · Zustand · cmdk
-Backend:   Node.js · Express · ws · node-pty · better-sqlite3 · chokidar · simple-git
+Frontend:  React · Vite · xterm.js (commands/terminals) · CodeMirror 6
+           (composer) · TailwindCSS · Zustand · cmdk
+Backend:   Node.js · Express · ws · node-pty (commands/terminals) ·
+           @anthropic-ai/claude-agent-sdk · codex app-server (JSON-RPC) ·
+           hermes acp (ACP JSON-RPC) · better-sqlite3 · chokidar · simple-git
 CLI:       commander
 ```

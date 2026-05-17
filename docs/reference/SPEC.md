@@ -122,7 +122,7 @@ A directory on disk that contains code and (optionally) an `mt.yml` configuratio
 
 ### Session
 
-An AI agent interaction within a project. Sessions are the primary unit of work in MultiTable — they run Claude Code (or another agent) as an interactive terminal process. Sessions are tracked with cost/token data, file diffs, and structured activity timelines. Sessions can be archived and searched after completion.
+An AI agent conversation within a project. Sessions are the primary unit of work in MultiTable. A session is driven through a **provider adapter** — Claude (in-process `@anthropic-ai/claude-agent-sdk`), Codex (a `codex app-server` JSON-RPC child), or Hermes/Grok (a `hermes acp` ACP JSON-RPC child) — **not** as a PTY/terminal process. The daemon streams the conversation (assistant text, tool calls, reasoning) to a React chat UI over the WebSocket. Sessions are tracked with cost/token data, file diffs, and structured activity timelines, and can be searched and resumed after completion.
 
 ### Terminal
 
@@ -151,17 +151,17 @@ App
     │
     ├── Sessions[]
     │   ├── name: string (e.g., "Claude Code")
-    │   ├── command: string (e.g., "claude")
+    │   ├── provider: claude | codex | hermes
+    │   ├── model: string | null
     │   ├── working_directory: string (optional, defaults to project root)
     │   ├── autostart: boolean
-    │   ├── status: running | idle | stopped | error
+    │   ├── status: running | stopped | errored   (no PTY; no "idle")
+    │   ├── mode: string (provider-native, e.g. default | plan | acceptEdits)
     │   ├── subtitle: string (live activity description from agent output)
-    │   ├── pid: number | null
-    │   ├── cpu_percent: float
-    │   ├── memory_bytes: number
+    │   ├── agent_session_id: string | null (provider conversation id)
     │   ├── tokens_in: number
     │   ├── tokens_out: number
-    │   └── cost_usd: number
+    │   └── cost_usd: number (hidden for Codex/Hermes)
     │
     ├── Terminals[]
     │   ├── name: string (e.g., "Terminal 1")
@@ -200,7 +200,8 @@ MultiTable is a **web app + local daemon**. The daemon runs on your dev machine 
 │            Any browser, any device                │
 │      (laptop, iPad over Tailscale, phone)         │
 │                                                   │
-│    React UI ←── WebSocket ──→ Terminal streams     │
+│    React UI ←── WebSocket ──→ Session deltas +     │
+│                               terminal streams     │
 │              ←── REST API ──→ Project/session CRUD │
 └──────────────────┬────────────────────────────────┘
                    │ localhost or Tailscale / LAN
@@ -212,9 +213,13 @@ MultiTable is a **web app + local daemon**. The daemon runs on your dev machine 
 │  │ REST API     │  │ (per-terminal stream)      │   │
 │  └──────────────┘  └───────────────────────────┘   │
 │  ┌──────────────┐  ┌───────────────────────────┐   │
-│  │ node-pty     │  │ chokidar (file watcher)    │   │
-│  │ (PTY         │  │                            │   │
-│  │  sessions)   │  │                            │   │
+│  │ Agent        │  │ node-pty                   │   │
+│  │ providers    │  │ (commands & terminals      │   │
+│  │ (sessions:   │  │  only — NOT sessions)      │   │
+│  │  Claude SDK /│  └───────────────────────────┘   │
+│  │  Codex app-  │  ┌───────────────────────────┐   │
+│  │  server /    │  │ chokidar (file watcher)    │   │
+│  │  Hermes ACP) │  │                            │   │
 │  └──────────────┘  └───────────────────────────┘   │
 │  ┌──────────────┐  ┌───────────────────────────┐   │
 │  │ SQLite       │  │ simple-git (git ops)       │   │
@@ -241,7 +246,7 @@ MultiTable is a **web app + local daemon**. The daemon runs on your dev machine 
 ### Communication Model
 
 - **REST API** — CRUD operations for projects, sessions, commands, terminals, and configuration
-- **WebSocket** — Real-time terminal streams (PTY output), process state changes, metrics updates, and notifications
+- **WebSocket** — Real-time session streams (assistant/tool/reasoning deltas, turn results), terminal PTY output (commands/terminals), process state changes, metrics updates, and notifications
 
 ---
 
@@ -251,11 +256,9 @@ MultiTable is a **web app + local daemon**. The daemon runs on your dev machine 
 |---|---|---|
 | Frontend | React + TypeScript | UI framework |
 | Build | Vite | Frontend bundling and dev server |
-| Terminal UI | xterm.js | Terminal emulation in the browser |
-| Terminal UI | xterm-addon-fit | Resize terminal to container + SIGWINCH signaling |
-| Terminal UI | xterm-addon-web-links | Clickable URLs in terminal output |
-| Terminal UI | xterm-addon-search | In-terminal search (⌘F / Ctrl+F) |
-| Terminal UI | xterm-addon-unicode11 | Unicode 11 support (emoji, CJK) |
+| Terminal UI | xterm.js (+ fit / web-links / search / unicode11 addons) | Terminal emulation for **commands & terminals only** — sessions do not use xterm.js |
+| Session UI | CodeMirror 6 | Chat composer (`@` mentions, `/` commands) |
+| Session UI | Streamdown + shiki | Assistant markdown + code highlighting |
 | Styling | TailwindCSS | Utility-first CSS |
 | State | Zustand | Lightweight state management (sliced architecture) |
 | Command Palette | cmdk | Fuzzy search command palette |
@@ -263,13 +266,16 @@ MultiTable is a **web app + local daemon**. The daemon runs on your dev machine 
 | Notifications | react-hot-toast | In-app toast notifications |
 | Backend | Node.js + TypeScript | Daemon runtime |
 | HTTP | Express | REST API server |
-| WebSocket | ws | Real-time terminal streams and events |
-| PTY | node-pty | Pseudo-terminal session management |
+| WebSocket | ws | Real-time session deltas, terminal streams, and events |
+| Agent (Claude) | @anthropic-ai/claude-agent-sdk | In-process `query()` driving Claude sessions |
+| Agent (Codex) | `codex app-server` (line-delimited JSON-RPC child) | Drives Codex sessions; `@openai/codex-sdk` is **not** used |
+| Agent (Hermes) | `hermes acp` (ACP JSON-RPC child) | Drives Hermes/xAI-Grok sessions |
+| PTY | node-pty | PTY for **commands & terminals only** — sessions have no PTY |
 | Database | better-sqlite3 | Session state, history, cost tracking |
 | File Watching | chokidar | File system change detection |
 | Git | simple-git | Git operations (diff, status, log) |
 
-> **Deferred from initial build:** `xterm-addon-webgl` (GPU rendering — adds complexity, has Safari/mobile issues; start with canvas renderer and add WebGL later). `CodeMirror 6` (scratchpad — start with a plain `<textarea>`; upgrade to CodeMirror when markdown preview is prioritized). `commander` CLI package (deferred until after web UI is stable).
+> **Historical note:** `CodeMirror 6` and the `commander` CLI were deferred in the initial build and have since shipped (CodeMirror 6 powers the chat composer; `commander` powers the `mt` CLI). `xterm-addon-webgl` remains deferred (Safari/mobile issues; canvas renderer is used).
 
 **The entire stack is TypeScript.** No Rust, no Go, no second language. Any JavaScript/TypeScript developer can contribute immediately.
 
@@ -303,7 +309,10 @@ multitable/
 │   │   └── src/
 │   │       ├── index.ts        # Entry point
 │   │       ├── server.ts       # Express + WebSocket setup
-│   │       ├── pty/            # Terminal session management
+│   │       ├── agent/          # AI sessions (NO PTY)
+│   │       │   ├── manager.ts  # Provider-agnostic orchestrator
+│   │       │   └── providers/  # claude.ts / codex.ts / hermes.ts adapters
+│   │       ├── pty/            # Commands & terminals ONLY (not sessions)
 │   │       │   ├── manager.ts  # Spawn, resize, kill PTYs
 │   │       │   └── stream.ts   # WebSocket <-> PTY bridge
 │   │       ├── api/            # REST routes
@@ -390,10 +399,13 @@ The daemon stores all persistent state in a SQLite database at `~/.config/multit
 **Core tables:**
 
 - `projects` — registered project directories
-- `sessions` — agent sessions with cost/token data, status, timestamps
-  - Includes `claude_session_id TEXT` for Claude Code resume capability (Section 31)
-  - Includes `scrollback_data BLOB` for persistent scrollback (flushed from 512KB ring buffer every 3s)
-  - Includes `scratchpad TEXT` for per-session notepad content (debounced save, 500ms)
+- `sessions` — agent sessions with provider, model, mode, cost/token data, status, timestamps
+  - `agent_provider` (`claude` | `codex` | `hermes`) + `model`
+  - `agent_session_id` (+ history) — provider conversation id; `claude_session_id` (+ history) is the Claude-specific `--resume` JSONL id (Section 31)
+  - `mode`, `thinking_effort` — provider-native operating mode + reasoning effort
+  - `git_baseline_commit` — captured at create so per-session diffs scope to "what this agent changed"
+  - `scratchpad TEXT` (debounced save, 500ms), `tags` (JSON), `loader_variant`
+  - Conversation history is **not** stored here — it lives in the provider's on-disk transcript (Claude/Codex/Hermes JSONL/rollout). There is no PTY scrollback for sessions.
 - `session_events` — structured activity log per session (files read, files written, tools called)
 - `commands` — configured commands per project
 - `cost_records` — per-session token/cost snapshots over time
@@ -412,19 +424,29 @@ CREATE TABLE projects (
     created_at INTEGER NOT NULL
 );
 
+-- Illustrative; db/schema.sql is the source of truth. Sessions have NO PTY,
+-- so there is no scrollback_data; autorestart-family columns are kept only for
+-- backward compat and are commands-only in practice.
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    command TEXT NOT NULL,
+    agent_provider TEXT NOT NULL DEFAULT 'claude',  -- claude | codex | hermes
+    model TEXT,
     working_directory TEXT,
     autostart INTEGER NOT NULL DEFAULT 0,
-    autorespawn INTEGER NOT NULL DEFAULT 1,
-    status TEXT NOT NULL DEFAULT 'stopped',
+    status TEXT NOT NULL DEFAULT 'stopped',          -- stopped | running | errored
+    mode TEXT,
+    thinking_effort TEXT,
+    agent_session_id TEXT,
+    agent_session_id_history TEXT,                   -- JSON array
     claude_session_id TEXT,
+    claude_session_id_history TEXT,                  -- JSON array
     label TEXT,
     scratchpad TEXT,
-    scrollback_data BLOB,
+    tags TEXT,                                       -- JSON array
+    loader_variant TEXT,
+    git_baseline_commit TEXT,
     tokens_in INTEGER NOT NULL DEFAULT 0,
     tokens_out INTEGER NOT NULL DEFAULT 0,
     cost_usd REAL NOT NULL DEFAULT 0,
@@ -754,6 +776,8 @@ A 10px circle indicating process state.
 | Stopped | Filled gray `#9ca3af` |
 | Error / crashed | Filled red `#ef4444` |
 
+> The "idle" / "paused" rows apply to **commands & terminals** (PTY alive but quiet). **Sessions** only ever use three states — `running` (a turn is in flight, filled green), `stopped` (resting/ready, filled gray), `errored` (last turn threw, filled red). Sessions are never "idle".
+
 ### Badge / Tag
 
 Pill-shaped label with 1px border, 11px uppercase text, `--text-secondary` color. Used for "AUTO" indicators on processes.
@@ -843,7 +867,7 @@ Container for stacked `PermissionCard` instances. Positioned above the status ba
 
 ### OptionSelector
 
-Displays when Claude presents numbered choices. Appears as a bottom strip below the terminal area.
+Displays when an agent presents numbered choices (detected by parsing the provider transcript — Claude-only today). Appears as a bottom strip below the session chat.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -858,9 +882,8 @@ Displays when Claude presents numbered choices. Appears as a bottom strip below 
 - Question text: 14px, `--text-primary`, bold
 - Option buttons: secondary variant (outline), full-width, left-aligned text, 8px vertical gap
 - Button label: `"{n}. {option text}"` — truncated at 60 chars with ellipsis
-- **Keyboard**: digit keys 1–9 select the corresponding option (sends `{n}\r` to PTY)
-- **Auto-dismiss**: removed automatically when new PTY output arrives (user already responded via terminal)
-- **Manual dismiss**: Escape key or ✕ button (sends `option:dismiss` WS message)
+- **Keyboard**: digit keys 1–9 select the corresponding option (sends the choice as the next session turn via `session:send` — there is no PTY)
+- **Dismiss**: detected options are stored, not transient; Escape / ✕ sends an `option:dismiss` WS message
 - Height: auto, max 300px then scrollable within the strip
 
 ### ProcessCard
@@ -936,12 +959,11 @@ v  SESSIONS ————————— 2/3   Alt+S
 - Each session has a status dot (10px, colored per state)
 - Session name in 14px regular
 - Optional subtitle below in 12px secondary text (truncated with ellipsis) — updates in real-time based on agent output
-- Status dot colors for sessions:
-  - Filled green: actively working / processing
-  - Open green: running but idle, waiting for input
-  - Filled orange: transitional state
-  - Filled gray: stopped
-  - Filled red: crashed
+- Status dot colors for sessions (sessions have no "idle" state):
+  - Filled green: `running` — a turn is in flight
+  - Filled gray: `stopped` — resting, ready for the next message
+  - Filled red: `errored` — the last turn threw
+  - Filled orange: transitional (e.g. compacting / requesting)
 
 ### Section: TERMINALS
 
@@ -1057,21 +1079,16 @@ Below the active project's sections, other registered projects appear collapsed:
 
 ---
 
-## 15. Main Pane: Terminal View
+## 15. Main Pane: Session & Terminal Views
 
-Displayed when a session, terminal, or running command is selected.
+The main pane renders **one of two views** depending on the selected process type:
 
-- Full-bleed xterm.js instance filling the entire main pane (0px padding)
-- Full ANSI color and formatting support
-- Interactive — keystrokes are sent to the process's PTY stdin via WebSocket
-- Monospace font (Menlo on macOS, Consolas on Windows, system monospace on Linux)
-- The terminal renders the full output history of the process since it started
-- Scrollback buffer: configurable, default 10,000 lines
-- Cursor blinking enabled
+- **Session → Chat View.** Sessions have no PTY. The pane is a React chat: turn-grouped message list, assistant markdown (Streamdown + shiki), collapsible tool cards, reasoning cards, and a CodeMirror composer. Assistant text / tool output / reasoning stream in live over the WebSocket (`session:assistant-delta`, `session:tool-event`, `session:reasoning-delta`); the composer sends a turn via `session:send`. No xterm.js, no PTY input, no scrollback buffer.
+- **Command / Terminal → Terminal View.** A full-bleed xterm.js instance (0px padding), full ANSI support, interactive — keystrokes go to the process's PTY stdin via WebSocket. Monospace font, full scrollback (default 10,000 lines), cursor blinking.
 
-For sessions, the terminal shows whatever the agent's native TUI renders — Claude Code's interface, Codex's prompt, etc. No special treatment; it's just a PTY.
+### Terminal View
 
-### Terminal Instance Management
+The xterm.js details below apply to **commands and terminals only** — sessions never use this path.
 
 A singleton `TerminalManager` manages xterm.js instances, creating them lazily and caching them so switching between processes doesn't destroy terminal state:
 
@@ -1098,33 +1115,30 @@ Window resized → ResizeObserver fires → fitAddon.fit()
 
 ### Session Header Bar
 
-Sessions (type `"session"`) display a 40px header bar directly above the xterm.js area. This bar is not shown for terminals or commands.
+Sessions display a 40px header bar above the chat view (not shown for terminals or commands).
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ ● Claude Code   Editing src/api/routes.ts...    [↺] [🏷️][📑]│
-│ Session: abc123...def  ·  $0.42  ·  1,234 tokens            │
+│ ● Claude Code   Editing src/api/routes.ts...    [🏷️][📑]    │
+│ claude · Opus 4.7 · default  ·  $0.42  ·  1,234 tokens      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 **Top row (left to right):**
 - Status dot (10px) + session name (14px, `--text-primary`)
-- Live subtitle from `agent-subtitle` WS messages (12px, `--text-secondary`, truncated with ellipsis)
+- Live subtitle from streaming activity (12px, `--text-secondary`, truncated with ellipsis)
 - Right side: action buttons
-  - **[↺ Resume]**: shown only when `claudeSessionId` is set AND process is stopped. Writes `claude --resume {id}\r` to the PTY.
-  - **[🏷️ Re-summarize]**: shown when `userMessages.length > 0` at any time. Triggers label re-generation.
-  - **[📑 Files/Diff/Cost/Notes]**: tab-picker icon button that toggles the Session Detail Panel open to the last-used tab.
+  - **[🏷️ Re-summarize]**: shown when the session has user messages. Triggers AI label re-generation.
+  - **[📑 Files/Tasks/Cost]**: tab-picker icon button that toggles the Session Detail Panel open to the last-used tab.
+  - There is **no Start / Resume / Restart button.** Sending a message auto-starts or resumes the conversation. The mid-turn controls are `/stop` (abort the in-flight turn → `POST /api/sessions/:id/stop`) and `/reset` (clear the conversation → `POST /api/sessions/:id/reset`).
 
-**Second row:**
-- Claude session ID (monospace, 11px, truncated to 12 chars; click to copy full ID)
-- Session cost in USD
-- Token count
+**Second row:** provider · model · mode badges, then session cost (USD; hidden for Codex/Hermes) and token count. The provider conversation id is copyable from the cost detail panel.
 
 Background: `--bg-sidebar`, 1px `--border` bottom, padding: 8px 16px.
 
-### Stopped / Errored Process State
+### Stopped / Errored State
 
-When the selected process is `stopped` or `errored`, a status banner appears at the top of the terminal area (above any scrollback):
+**Commands & terminals.** When a command/terminal is `stopped` or `errored`, a status banner appears at the top of the terminal area (above any scrollback):
 
 **Stopped:**
 ```
@@ -1146,7 +1160,7 @@ When the selected process is `stopped` or `errored`, a status banner appears at 
 - Scrollback from the last run is shown behind/below the banner (opacity: 0.7)
 - Banner disappears immediately when process transitions to `running`
 
-**Exception — sessions with `autorespawn: true` (default):** The daemon auto-respawns the PTY shell on subscribe, so no banner is shown. Instead, the session header shows the [↺ Resume] button for Claude resume.
+**Sessions.** A `stopped` session shows **no banner** — it just renders the chat with the composer ready; sending a message starts the next turn (resuming the saved conversation id if one exists). An `errored` session shows the last turn's error as an inline alert/toast (`session:turn-error`); the composer stays ready to retry. There is no PTY to respawn and no `autorestart`/`autorespawn` for sessions.
 
 ### New Terminal Creation Behavior
 
@@ -1165,7 +1179,7 @@ When a new terminal is created (via `Ctrl+T`, the sidebar TERMINALS [+] button, 
 
 ### Session Detail Panel
 
-Sessions support a resizable detail panel below the terminal. It is hidden by default and opened by clicking a tab button in the session header bar.
+Sessions support a resizable detail panel below the chat view. It is hidden by default and opened by clicking a tab button in the session header bar.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -1173,7 +1187,7 @@ Sessions support a resizable detail panel below the terminal. It is hidden by de
 │  Session: abc123  ·  $0.42  ·  1,234 tokens               │
 ├────────────────────────────────────────────────────────────┤
 │                                                            │
-│                 xterm.js terminal area                     │
+│                  session chat area                         │
 │               (resizable, default ~60%)                    │
 │                                                            │
 ├────────────────────────────────────────────────────────────┤
@@ -1185,7 +1199,7 @@ Sessions support a resizable detail panel below the terminal. It is hidden by de
 └────────────────────────────────────────────────────────────┘
 ```
 
-- The divider between the terminal and detail panel is draggable (4px hit area)
+- The divider between the chat area and detail panel is draggable (4px hit area)
 - [✕ close] collapses the panel entirely; re-clicking a tab re-opens it
 - Active tab underlined with `--accent-blue`
 - Tab shortcuts: `Ctrl+Shift+F` (Files), `Ctrl+Shift+D` (Diff), `Ctrl+Shift+N` (Notes)
@@ -1253,7 +1267,7 @@ Full-width plain `<textarea>` filling the tab area.
 - Font: monospace 13px, `--text-primary` color, `--bg-primary` background
 - No border or outline; padding: 16px
 - Content auto-saved to SQLite (`sessions.scratchpad`) with 500ms debounce
-- Persists across daemon restarts and session respawns
+- Persists across daemon restarts and is reloaded when the session view is reopened (sessions have no PTY to "respawn")
 
 ---
 
@@ -1392,7 +1406,7 @@ Click the project name/header at the top of the sidebar (the `ProjectHeader` row
 
 | Button | Action | What Happens After |
 |---|---|---|
-| **+ Add Session** | Opens Add Agent Modal (§20.2) | Session created in `stopped` state. If `autostart` was checked: starts immediately, sidebar item turns green, main pane switches to its terminal. |
+| **+ Add Session** | Opens Add Agent Modal (§20.2) | Session created in `stopped` state (no process spawned). Main pane switches to its chat view; the first message sent starts the conversation. |
 | **+ Add Command** | Opens Add Process Modal (§20.1) | Command created in `stopped` state. If `autostart` was checked: starts, port/CPU appear in sidebar when detected. |
 | **+ Add Terminal** | No modal — immediate | New PTY terminal spawned with default shell. Main pane switches to the new terminal immediately. |
 
@@ -1508,23 +1522,25 @@ Process stopped:       CPU —     MEM —       npm:dev  ○ Stopped
 
 Process errored:       CPU —     MEM —       npm:dev  ● Error (code 1)
 
-Session (working):     CPU 1.4%  MEM 210 MB  Claude Code  ● Working
+Session (running):     Opus 4.7   $0.42   ↑12k ↓3k   Claude Code  ● Running
 
-Session (idle):        CPU 0.2%  MEM 210 MB  Claude Code  ○ Idle
+Session (stopped):     Opus 4.7   $0.42   ↑12k ↓3k   Claude Code  ○ Stopped
 ```
 
-- CPU/MEM: `--text-secondary`, 12px
+- CPU/MEM apply to commands/terminals (PTY processes). Sessions show model · cost · token counts instead (no pid/CPU/MEM — there is no child process).
 - Process name: monospace 12px, `--text-primary`
 - Status dot: 10px, colored per state; followed by state label text
 
 ### Left Side — Context-Dependent Buttons
 
-| State | Buttons Shown |
+| Process type / state | Buttons Shown |
 |---|---|
 | No process selected | (empty) |
-| Running | [Focus ↓] [Pause ‖] [Clear ⊘] [Stop ■] [Restart ↺] |
-| Stopped | [▶ Start] [Clear ⊘] |
-| Errored | [↺ Restart] [Clear ⊘] |
+| Command/Terminal — Running | [Focus ↓] [Pause ‖] [Clear ⊘] [Stop ■] [Restart ↺] |
+| Command/Terminal — Stopped | [▶ Start] [Clear ⊘] |
+| Command/Terminal — Errored | [↺ Restart] [Clear ⊘] |
+| Session — Running (turn in flight) | [Stop ■] (abort turn) |
+| Session — Stopped / Errored | (none — type a message to start/resume the turn) |
 
 ---
 
@@ -1737,7 +1753,7 @@ Triggered by `Ctrl+K`.
 | Settings | "Open global settings" | Open Global Settings Modal (§20.4) |
 | Settings | "Open project settings" | Open Project Settings Modal (§20.5) |
 | Settings | "Toggle theme" | Cycle: light → dark → system |
-| Session | "Resume Claude in {name}" | Resume Claude session (requires `claude_session_id`) |
+| Session | "Open {name}" | Switch to the session chat (sending a message auto-resumes its saved conversation; there is no explicit "resume" action) |
 | Session | "Re-summarize {name}" | Trigger session label re-generation |
 | Session | "View diff for {name}" | Open session detail, switch to Diff tab |
 | Session | "View cost for {name}" | Open session detail, switch to Cost tab |
@@ -1750,7 +1766,7 @@ Triggered by `Ctrl+K`.
 - Results grouped by category with light headers
 - Arrow keys to navigate, Enter to select, Escape to close
 - Recently used items appear first when the palette opens with an empty query
-- Items that aren't applicable in current context are hidden (e.g., "Resume Claude" hidden when no claude_session_id)
+- Items that aren't applicable in current context are hidden (e.g., session-only actions hidden when a command is selected)
 
 ---
 
@@ -1833,11 +1849,11 @@ Note: All shortcuts are browser-compatible. Conflicts with browser defaults are 
    - If found: hold startup, notify frontend to show OrphanDialog
 3. For each project: read `mt.yml`
 4. Open SQLite database (create if first run)
-5. **Initialize HookManager** — for each project, check `{project_path}/.claude/settings.json` for MultiTable hooks; install if missing (see Section 31)
-6. **Initialize PermissionManager** — create pending request map and auto-defer tool list (see Section 32)
-7. **Register HookReceiver routes** — Express routes at `/api/hooks/:eventName` for Claude Code callbacks
+5. **Create managers** — `PtyManager`, `PermissionManager`, `ElicitationManager`, `AgentSessionManager` (the agent manager registers the Claude / Codex / Hermes adapters)
+6. **Register sessions** — load DB sessions and `agentManager.register(...)` each (no PTY, no spawn); hooks run in-process via the adapters, not via `.claude/settings.json` or `/api/hooks/*`
+7. Initialize the Telegram bridge, file watcher, and per-project git watcher
 8. Set active project (last active, or first)
-9. For active project: start all autostart processes
+9. For the active project: start all autostart **commands**
    - For each: spawn PTY via node-pty, start monitor, update PID tracker
 10. Start file watcher on `mt.yml` + configured watch patterns
 11. Start metrics polling (every 2 seconds)
@@ -1869,9 +1885,18 @@ Note: All shortcuts are browser-compatible. Conflicts with browser defaults are 
          restart()
 ```
 
-### Process Spawning
+> **Scope:** the state machine, spawning, and `ManagedProcess` model in this
+> section describe **commands and terminals only** — they are owned by
+> `PtyManager`. **Sessions are not processes in this sense:** they have no PTY,
+> no pid, no scrollback ring buffer, and no autorestart. A session is owned by
+> `AgentSessionManager` and driven through a provider adapter (Claude SDK /
+> Codex app-server / Hermes ACP). Its only states are `stopped` / `running`
+> (a turn is in flight) / `errored`; sending a message starts or resumes a
+> turn. See §31 for the session lifecycle.
 
-Each process is spawned in its own PTY via `node-pty`. This gives full terminal emulation including ANSI colors, cursor movement, and interactive input (required for agents like Claude Code that use TUI frameworks).
+### Process Spawning (commands & terminals)
+
+Each command/terminal is spawned in its own PTY via `node-pty` — full terminal emulation (ANSI colors, cursor movement, interactive input). Sessions do **not** go through this path.
 
 **Shell detection** (cross-platform): If `default_shell` is empty (the default), the daemon auto-detects: `$SHELL` on macOS/Linux (typically bash or zsh), `powershell.exe` on Windows. On Windows, `node-pty` uses `conpty`; on macOS/Linux it uses the native PTY layer. Path separators and environment variable expansion are handled by the host shell.
 
@@ -1897,7 +1922,7 @@ interface ProcessConfig {
     autorestartMax: number;        // default 5
     autorestartDelayMs: number;    // default 2000
     autorestartWindowSecs: number; // reset restartCount after this (default 60)
-    autorespawn: boolean;          // respawn PTY on subscribe if dead (default true for sessions, false for commands)
+    autorespawn: boolean;          // legacy/back-compat; commands only. Sessions have no PTY to respawn.
     terminalAlerts: boolean;
     fileWatchPatterns: string[];
 }
@@ -2020,25 +2045,30 @@ On shutdown, all child processes receive SIGTERM, then SIGKILL after a 5-second 
 |---|---|---|
 | `GET` | `/api/search?q={query}` | Full-text search across session histories |
 
-### Claude Code Hooks
+### Agent Hooks
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/hooks/pre-tool-use` | PreToolUse hook callback. **Holds response open** until user permission decision or 110s timeout. See Section 32. |
-| `POST` | `/api/hooks/post-tool-use` | PostToolUse hook callback. Updates session state (tool, tokens). |
-| `POST` | `/api/hooks/stop` | Stop hook callback. Triggers option detection. See Section 31. |
-| `POST` | `/api/hooks/session-start` | SessionStart hook callback. Captures Claude session ID. |
-| `POST` | `/api/hooks/session-end` | SessionEnd hook callback. Clears session state. |
-| `POST` | `/api/hooks/subagent-start` | SubagentStart hook callback. Tracks subagent count. |
-| `POST` | `/api/hooks/subagent-stop` | SubagentStop hook callback. Decrements subagent count. |
-| `POST` | `/api/hooks/user-prompt-submit` | UserPromptSubmit hook callback. Appends to `userMessages`; triggers label auto-summary on first message. |
+> **Retired.** There is no HTTP `/api/hooks/*` receiver. Claude hook callbacks
+> run in-process via the Agent SDK's `options.hooks` (`ClaudeAdapter`);
+> Codex/Hermes lifecycle signals arrive over their JSON-RPC/ACP channels. All
+> are normalized into manager callbacks and surfaced as `session:*` WS events
+> (see Section 31). Permission decisions resolve the adapter's in-process
+> `canUseTool` promise, not a held-open HTTP response.
 
-### Claude Session Management
+### Session Lifecycle
+
+Sessions auto-start (and auto-resume their saved conversation id) on the first
+turn — there is **no** `start` / `restart` / `spawn-claude` / `resume-claude`
+endpoint. The only lifecycle endpoints are:
 
 | Method | Path | Description | Request Body |
 |---|---|---|---|
-| `POST` | `/api/sessions/:id/spawn-claude` | Spawn Claude in an existing PTY | — |
-| `POST` | `/api/sessions/:id/resume-claude` | Resume Claude with stored session ID | — |
+| `POST` | `/api/sessions/:id/stop` | Abort the in-flight turn (`agentManager.abortTurn`) | — |
+| `POST` | `/api/sessions/:id/reset` | Clear the conversation (backs `/clear`); nulls the provider conversation id | — |
+| `PUT` | `/api/sessions/:id/thinking-effort` | Set reasoning effort tier | `{ thinkingEffort }` |
+| `WS` | `session:send` | Send a user turn (auto-starts/resumes the conversation) | `{ processId, payload: { text } }` |
+
+> The old HTTP `/api/hooks/*` receiver was retired in the SDK migration —
+> Claude hook callbacks now run in-process via the Agent SDK's `options.hooks`.
 
 ### Terminal Management
 
@@ -2097,47 +2127,57 @@ interface WsClientState {
 
 | Type | Payload | Description |
 |---|---|---|
-| `pty-input` | `{ processId: string, data: string }` | Send keystrokes to a process's PTY |
-| `pty-resize` | `{ processId: string, cols: number, rows: number }` | Resize a process's PTY |
-| `subscribe` | `{ processId: string }` | Subscribe to a process's output stream |
-| `unsubscribe` | `{ processId: string }` | Unsubscribe from a process's output |
-| `permission:respond` | `{ id: string, decision: "allow" \| "deny" \| "always-allow" }` | Respond to a permission prompt (Section 32) |
-| `option:dismiss` | `{ id: string }` | Dismiss an option prompt |
+| `subscribe` | `{ processId: string }` | Subscribe to a process's stream |
+| `unsubscribe` | `{ processId: string }` | Unsubscribe |
+| `session:send` | `{ processId, payload: { text } }` | Send a user turn (auto-starts/resumes the conversation) — **sessions only** |
+| `pty-input` | `{ processId, data }` | Keystrokes to a process's PTY — **commands/terminals only** (silently dropped for sessions) |
+| `pty-resize` | `{ processId, cols, rows }` | Resize a PTY — **commands/terminals only** |
+| `permission:respond` | `{ id, decision, updatedInput?, alwaysAllow? }` | Respond to a permission prompt (Section 32) |
+| `permission:answer-question` | `{ id, answer }` | Answer an `AskUserQuestion` prompt |
+| `session:elicitation:respond` | `{ id, action, content? }` | Respond to an MCP elicitation prompt |
+| `option:dismiss` | `{ sessionId, optionId }` | Dismiss a detected option |
 
 ### Server -> Client Messages
 
-| Type | Payload | Description |
-|---|---|---|
-| `pty-output` | `{ processId: string, data: string }` | Terminal output from a process (base64 or UTF-8) |
-| `scrollback` | `{ processId: string, data: string }` | Full scrollback buffer replay on subscribe (see below) |
-| `process-state-changed` | `{ processId: string, state: ProcessState, exitCode?: number }` | Process state transition |
-| `process-metrics` | `{ processId: string, cpu: number, memory: number, port?: number }` | Metrics update (every 2s) |
-| `session:updated` | `{ session: Session }` | Session metadata/state changed (tool, tokens, status) |
-| `session:created` | `{ session: Session }` | New session, command, or terminal created |
-| `session:deleted` | `{ sessionId: string }` | Session, command, or terminal removed |
-| `session:label-updated` | `{ sessionId: string, label: string \| null }` | AI-generated session label updated (Section 31) |
-| `agent-subtitle` | `{ processId: string, subtitle: string }` | Live activity text for sessions (current tool name) |
-| `notification` | `{ type: "crash" \| "restart" \| "bell" \| "info", processId: string, message: string }` | Notification event |
-| `permission:prompt` | `{ prompt: PermissionPrompt }` | Tool permission request from Claude (Section 32) |
-| `permission:resolved` | `{ id: string }` | Permission request resolved |
-| `permission:expired` | `{ id: string }` | Permission request timed out (auto-denied) |
-| `option:prompt` | `{ sessionId: string, question: string, options: string[] }` | Claude presented numbered options (Section 31) |
-| `conflict-warning` | `{ sessionIds: string[], filePaths: string[] }` | Cross-session file overlap detected (Section 30) |
-| `config:reloaded` | `{ projectId: string }` | `mt.yml` reloaded after file change detected (Section 33) |
-| `project-state-changed` | `{ projectId: string, runningCount: number, totalCount: number, errorCount: number }` | Aggregate project process state changed (for Dashboard cards) |
+**Sessions** (no PTY — conversation streams as structured deltas):
+
+| Type | Description |
+|---|---|
+| `session:assistant-message` / `:assistant-delta` | Final assistant message / cumulative streaming text snapshot |
+| `session:reasoning-delta` | Cumulative chain-of-thought snapshot |
+| `session:tool-event` / `:tool-delta` / `:tool-progress` | Tool result / in-flight input·output / numeric progress |
+| `session:user-message` | Confirms the recorded user turn |
+| `session:turn-result` / `:turn-error` / `:turn-complete` | Canonical turn outcome / error toast / turn finished |
+| `session:idle` | Session finished work, ready for the next message |
+| `session:state-updated` | Live cost/token/currentTool snapshot |
+| `session:mode-changed` / `:thinking-effort-changed` | Mode / effort flipped |
+| `session:reconciled` / `:message-rekeyed` | Disk↔memory reconcile / synthetic id replaced by persisted id |
+| `session:status` / `:task-event` / `:options-detected` | Transient status / live task list / detected options |
+| `session:notification` / `session:alert` | Toast/chime / NotificationCenter alert |
+| `session:created` / `:updated` / `:deleted` / `:ended` | DB-row lifecycle (also fires for commands/terminals) |
+| `permission:prompt` / `:resolved` / `:expired` | Tool permission flow (Claude & Hermes; Section 32) |
+| `session:elicitation:prompt` / `:resolved` / `:expired` | MCP elicitation flow |
+
+**Commands & terminals** (PTY):
+
+| Type | Description |
+|---|---|
+| `pty-output` | Terminal output (delivered directly to the subscribed client — see Subscribe Flow) |
+| `scrollback` | Full scrollback buffer replay on subscribe (see below) |
+| `process-state-changed` / `process-metrics` / `process-exited` | State transition / metrics (2s) / exit |
+
+**Cross-cutting:** `daemon-log`, `git:status-changed`, `providers:catalog-updated`, `conflict-warning`, `config:reloaded`, `project-state-changed`.
 
 ### Subscribe Flow
 
 1. Client sends `{ type: "subscribe", processId }`
 2. Server unsubscribes from any previously subscribed process (cleanup listeners)
-3. If PTY is dead and `autorespawn` is enabled → respawn (see Section 31)
-4. Server sends `scrollback` message with full buffer content
-5. Server registers `onData` listener → forwards `pty-output` to this client
-6. Server registers `onExit` listener → forwards `process-state-changed` to this client
+3. **Session:** auto-register the session from the DB if missing (no spawn), parse its on-disk transcript into the message list, and emit `process-state-changed`. New deltas stream as the `session:*` events above; nothing is "respawned".
+4. **Command/terminal:** if the PTY is dead and `autorespawn` is enabled → respawn; send the `scrollback` message; register `onData` → forward `pty-output` **directly to this client only** (single-delivery; never also broadcast); register `onExit` → `process-state-changed`.
 
-### Scrollback Replay
+### Scrollback Replay (commands & terminals only)
 
-The server stores scrollback in a 512KB ring buffer per process, flushed to SQLite every 3 seconds. On subscribe, the full buffer is sent as a `scrollback` message.
+The server stores scrollback in a 512KB ring buffer per PTY process, flushed to SQLite every 3 seconds. On subscribe, the full buffer is sent as a `scrollback` message. Sessions have no scrollback buffer — their history is parsed from the provider transcript on disk.
 
 **Client-side chunked writing** prevents main thread blocking during large buffer replay:
 - If data ≤ 16KB: write to xterm.js in a single call
@@ -2359,147 +2399,124 @@ More sophisticated approaches (git worktrees per session, etc.) are deferred to 
 
 ---
 
-## 31. Claude Code Integration
+## 31. Agent Provider Integration
 
-MultiTable is agent-agnostic, but Claude Code is the primary agent. This section specifies deep integration via Claude Code's hook system, providing structured event data instead of fragile regex parsing.
+MultiTable drives **three live providers** behind one `ProviderAdapter`
+contract. There is no PTY and no fragile regex parsing — each adapter speaks
+its provider's native protocol in-process and emits structured events.
 
-### Agent Adapter Architecture
+### Provider Adapter Architecture
 
 ```typescript
-interface AgentAdapter {
-    type: string;                           // "claude-code", "codex", "aider", etc.
-    install(sessionId: string): Promise<void>;    // setup hooks/watchers for this agent
-    uninstall(sessionId: string): Promise<void>;  // teardown
-    getSessionId(): string | null;          // agent-native session ID (for resume)
-    canResume(): boolean;                   // does this agent support session resume?
-    getResumeCommand(sessionId: string): string;  // e.g., "claude --resume {id}"
+interface ProviderAdapter {
+    runTurn(s: AgentSession, text: string, ctrl, callbacks): Promise<void>;
+    reset?(s: AgentSession): Promise<void>;     // backs /reset (clear conversation)
+    destroy?(s: AgentSession): Promise<void>;
+    shutdown?(): Promise<void>;                 // graceful child teardown
 }
 ```
 
-`ClaudeCodeAdapter` is the first (and MVP-only) implementation. Other agents fall back to regex-based output parsing for cost/token tracking.
+Plus a `ProviderCapabilities` descriptor (cost surface, plan-mode flavor,
+per-call-approval type, elicitation, subagents, model-switch scope, native
+modes, …) that the UI renders against. The three implementations:
 
-### Hook System
+| Provider | Transport | Conversation id | Notes |
+|---|---|---|---|
+| `claude` | in-process `@anthropic-ai/claude-agent-sdk` `query()` | `claude_session_id` (JSONL filename) | Hooks + `canUseTool` + elicitation in-process |
+| `codex` | line-delimited JSON-RPC to a `codex app-server` child | thread id (rollout file) | `approvalPolicy: 'never'`; OS-sandbox-gated |
+| `hermes` | ACP JSON-RPC to a `hermes acp` child (one per cwd) | session id (`~/.hermes/sessions/`) | Self-gating perms; advisory modes |
 
-Claude Code supports hooks — HTTP callbacks fired at key lifecycle events. MultiTable registers these hooks in the **project-level** `.claude/settings.json` (inside the project directory), not the user-level `~/.claude/settings.json`. This keeps hooks scoped to projects managed by MultiTable and avoids polluting the user's global Claude Code configuration.
+`AgentSessionManager` is the provider-agnostic orchestrator: it owns the
+session state machine, registers the adapters in a map keyed by provider, and
+`sendTurn()` looks up the adapter and delegates. Adding a provider is a new
+adapter file + a map entry — see `CLAUDE.md` and the per-provider skills
+(`claude-agent-sdk`, `openai-codex-sdk`, `hermes-grok`) for depth.
 
-#### Hook Installation
+### Hook / Lifecycle Signals
 
-The `HookManager` checks `{project_path}/.claude/settings.json` on startup for each registered project. If MultiTable's hooks are not present, it adds them:
+> **Retired:** the old model — curl-based HTTP hooks written into project
+> `.claude/settings.json`, received at `/api/hooks/:eventName`, holding the
+> HTTP response open for permission decisions — is **gone**. There is no
+> `HookManager`, no `.claude/settings.json` mutation, and no `/api/hooks/*`
+> receiver.
 
-```jsonc
-// {project_path}/.claude/settings.json (managed entries)
-{
-  "hooks": {
-    "PreToolUse": [
-      { "type": "command", "command": "curl -s -X POST http://localhost:{port}/api/hooks/pre-tool-use -H 'Content-Type: application/json' -d \"$HOOK_DATA\"" }
-    ],
-    "PostToolUse": [
-      { "type": "command", "command": "curl -s -X POST http://localhost:{port}/api/hooks/post-tool-use -H 'Content-Type: application/json' -d \"$HOOK_DATA\"" }
-    ],
-    "Stop": [
-      { "type": "command", "command": "curl -s -X POST http://localhost:{port}/api/hooks/stop -H 'Content-Type: application/json' -d \"$HOOK_DATA\"" }
-    ],
-    "SessionStart": [
-      { "type": "command", "command": "curl -s -X POST http://localhost:{port}/api/hooks/session-start -H 'Content-Type: application/json' -d \"$HOOK_DATA\"" }
-    ],
-    "SessionEnd": [
-      { "type": "command", "command": "curl -s -X POST http://localhost:{port}/api/hooks/session-end -H 'Content-Type: application/json' -d \"$HOOK_DATA\"" }
-    ],
-    "SubagentStart": [
-      { "type": "command", "command": "curl -s -X POST http://localhost:{port}/api/hooks/subagent-start -H 'Content-Type: application/json' -d \"$HOOK_DATA\"" }
-    ],
-    "SubagentStop": [
-      { "type": "command", "command": "curl -s -X POST http://localhost:{port}/api/hooks/subagent-stop -H 'Content-Type: application/json' -d \"$HOOK_DATA\"" }
-    ],
-    "UserPromptSubmit": [
-      { "type": "command", "command": "curl -s -X POST http://localhost:{port}/api/hooks/user-prompt-submit -H 'Content-Type: application/json' -d \"$HOOK_DATA\"" }
-    ]
-  }
-}
-```
+For Claude, hook callbacks now run **in-process** via the Agent SDK's
+`options.hooks` (assembled in `ClaudeAdapter`'s `makeHooks`). Codex and Hermes
+expose their own lifecycle notifications over their JSON-RPC/ACP channels. The
+adapter normalizes all of them into manager-owned `AdapterCallbacks`, which
+update enriched session state and emit `session:*` WS events:
 
-The `HookManager` preserves any existing project hooks — it only adds MultiTable's entries, never removes others. On daemon shutdown, hooks are left in place (they fail silently when the daemon is not running). The `.claude/settings.json` file should be added to `.gitignore` (or the hooks section should be in `.claude/settings.local.json` if Claude Code supports local-only project settings) to avoid committing daemon-specific URLs to version control.
-
-#### Hook Receiver
-
-Express routes at `/api/hooks/:eventName` receive callbacks from Claude Code. Each hook maps to enriched session state:
-
-| Hook | Payload (from Claude) | MultiTable Action |
-|---|---|---|
-| `PreToolUse` | `{ tool_name, tool_input, session_id }` | Route to Permission System (Section 32). **Holds HTTP response open** until user decision. |
-| `PostToolUse` | `{ tool_name, tool_input, tool_result, session_id }` | Update `currentTool`, increment `toolCount`, update `tokenCount`, set status `active`. Emit `session:updated` WS. |
-| `Stop` | `{ session_id, stop_reason }` | Clear `currentTool`, set status `idle`. Trigger Option Detection (see below). Emit `session:updated` WS. |
-| `SessionStart` | `{ session_id }` | Capture and store `claude_session_id` in SQLite. |
-| `SessionEnd` | `{ session_id }` | Clear `currentTool`, set status `idle`. |
-| `SubagentStart` | `{ session_id, subagent_id }` | Track active subagent count. Set status `active`. |
-| `SubagentStop` | `{ session_id, subagent_id }` | Decrement subagent count. |
-| `UserPromptSubmit` | `{ session_id, prompt }` | Append prompt to `userMessages`. If this is the first message, trigger auto-summary (see Session Label Auto-Summary). |
+| Lifecycle signal | Manager action |
+|---|---|
+| Tool requested (Claude `canUseTool` / Hermes permission RPC) | Route to Permission System (Section 32); the adapter `await`s the user decision. Codex is sandbox-gated and never prompts. |
+| Tool started / finished | Update `currentTool`, increment `toolCount`, refresh token/cost; emit `session:tool-event` + `session:state-updated`. |
+| Turn finished | Clear `currentTool`, set status `stopped`, run Option Detection; emit `session:turn-result` → `session:turn-complete` → `session:idle`. |
+| Conversation id assigned (Claude `system:init` / Codex thread / Hermes session) | Persist `agent_session_id` (+ `claude_session_id` for Claude) to SQLite. |
+| Subagent start / stop (Claude) | Track active subagent count. |
+| User prompt submitted | Append to `userMessages`; on the **first** prompt, trigger label auto-summary. |
 
 ### Enriched Session State
 
-Claude Code sessions carry additional volatile state beyond the generic `ProcessState`:
+A session carries volatile state beyond its `stopped | running | errored` status:
 
 ```typescript
-interface ClaudeSessionState {
-    claudeSessionId: string | null;  // Claude's native session ID (for resume)
-    currentTool: string | null;      // tool currently being executed
-    toolCount: number;               // total tools used in this session
-    tokenCount: number;              // total tokens consumed
-    lastActivity: number;            // Unix timestamp of latest hook event
-    activeSubagents: number;         // count of running subagents
-    userMessages: string[];          // user prompt texts captured via UserPromptSubmit hook
-    label: string | null;            // AI-generated one-sentence session label
+interface AgentSessionState {
+    agentSessionId: string | null;   // provider conversation id (for resume)
+    claudeSessionId: string | null;  // Claude-specific --resume JSONL id
+    currentTool: string | null;      // tool currently executing
+    toolCount: number;
+    tokenCount: number;
+    lastActivity: number;            // Unix ts of latest adapter event
+    activeSubagents: number;         // Claude only
+    userMessages: string[];          // user prompt texts
+    label: string | null;            // AI-generated one-sentence label
 }
 ```
 
-This state is stored in-memory (volatile) and updated by hook callbacks. It supplements the generic `ManagedProcess` state. The `claudeSessionId` is also persisted to SQLite for resume capability.
+Held in-memory and updated by adapter callbacks; the conversation ids are
+persisted to SQLite for resume.
 
 ### Session ID Tracking
 
-When a Claude Code session starts, the `SessionStart` hook provides the Claude session ID. This is stored in the `sessions` table (`claude_session_id` column) and enables resume.
+The provider conversation id is captured the moment the provider assigns it —
+Claude at the SDK `system:init`, Codex at thread creation, Hermes at first
+prompt — and written to `sessions.agent_session_id` (and `claude_session_id`
+for Claude). On daemon boot, sessions hydrate their message list from the
+provider's on-disk transcript (Claude JSONL / Codex rollout / Hermes session
+JSON), parsed by `transcripts/{parser,codexParser,hermesParser}.ts`.
 
-**Fallback (for sessions started before hooks were installed):** Poll `~/.claude/projects/{encoded-cwd}/` for new `.jsonl` session files. Snapshot existing files before spawning Claude, then poll every 500ms for up to 15 seconds to detect the new file. Path encoding follows Claude Code's convention (e.g., `/home/user/project` → directory name under `~/.claude/projects/`).
+### Resuming a Session
 
-### Session Resume
-
-When a session's PTY is alive but Claude is not running, the user can resume the previous Claude conversation:
-
-1. User clicks "Resume" button in session header (visible when `claude_session_id` is set and Claude is not active)
-2. Frontend calls `POST /api/sessions/:id/resume-claude`
-3. Daemon writes `claude --resume {claudeSessionId}\r` to the session's PTY
-4. Claude Code reconnects to the existing conversation
-
-### Session Respawn on Subscribe
-
-When a client subscribes to a session whose PTY has exited:
-
-1. Server detects PTY is dead
-2. If session config has `autorespawn: true` (default for sessions, `false` for commands):
-   - Spawn a new PTY with the session's stored shell and cwd
-   - Send scrollback from DB to the client
-   - If `claude_session_id` is set: write `claude --resume {id}\r` to auto-resume
-   - Emit `process-state-changed` with new status
-3. If `autorespawn: false`: send scrollback only (for reviewing completed sessions)
+There is **no Resume button and no PTY**. Re-opening a session renders its
+prior messages from the on-disk transcript; the next `session:send`
+transparently resumes the saved conversation id through the adapter (Claude
+`query({ resume })`, Codex `thread/resume`, Hermes session reload). Past
+sessions are also browsable/resumable from disk via `GET /api/transcripts`
+(Claude) and `GET /api/transcripts/codex` → `POST .../resume`.
 
 ### Session Label Auto-Summary
 
-Each Claude Code session displays a one-sentence label in the sidebar, generated from the user's own messages — not from terminal output or agent responses. This keeps the label semantically clean and reflects the user's intent rather than the agent's activity.
+Each session displays a one-sentence label, derived from the user's own
+messages — never from agent responses or tool output — so it reflects intent,
+not activity. Applies to all three providers.
 
 #### Data Source
 
-Only `userMessages` (captured via the `UserPromptSubmit` hook) are sent to the summarizer. Agent output, tool results, and terminal scrollback are never included.
+Only the captured `userMessages` are sent to the summarizer. Agent output and
+tool results are never included.
 
 #### Trigger Rules
 
 | Event | Behavior |
 |---|---|
-| **First `UserPromptSubmit`** | Auto-trigger summarization. The first message alone usually defines the session's purpose. |
-| **Subsequent `UserPromptSubmit`** | Append to `userMessages`. No auto-trigger. |
-| **User clicks "Re-summarize" button** | Trigger summarization using all accumulated `userMessages`. |
+| **First user prompt** | The session is auto-renamed from a truncation of that prompt (the first message usually defines the session's purpose). |
+| **Subsequent prompts** | Appended to `userMessages`. No auto-trigger. |
+| **User clicks "Re-summarize"** | `POST /api/sessions/:id/rename-ai` → an AI one-line label is generated from all accumulated `userMessages`. |
 
 #### Summarization
 
-The daemon spawns `claude --model claude-haiku-4-5 --print` with the following prompt:
+The AI label is generated in-process via a Haiku call
+(`generateSessionLabel()`), independent of the session's own provider:
 
 ```
 Summarize what this user is working on in one sentence (max 12 words):
@@ -2507,7 +2524,7 @@ Summarize what this user is working on in one sentence (max 12 words):
 {userMessages.join('\n---\n')}
 ```
 
-The result is stored in `ClaudeSessionState.label` (in-memory) and broadcast via a `session:label-updated` WebSocket message to all subscribed clients.
+The result is stored on the session and broadcast via `session:updated` to all subscribed clients.
 
 #### UI
 
@@ -2520,31 +2537,29 @@ The result is stored in `ClaudeSessionState.label` (in-memory) and broadcast via
 
 ### Option Detection
 
-When Claude presents numbered options (e.g., "Which approach do you prefer? 1. Option A, 2. Option B"), MultiTable detects this and shows clickable buttons.
+When an agent presents numbered options (e.g., "Which approach do you prefer? 1. Option A, 2. Option B"), MultiTable detects this and shows clickable buttons. Implemented today by parsing **Claude's** JSONL transcript (`hooks/optionDetector.ts`); Codex/Hermes do not yet have option detection.
 
 **Detection flow:**
 
-1. `Stop` hook fires → daemon receives `session_id`
-2. Read last assistant message from Claude's JSONL transcript file at `~/.claude/projects/{encoded-cwd}/{session_id}.jsonl`
-3. Parse for consecutive numbered items (1 through N, where 2 ≤ N ≤ 8)
-4. Each option must be ≤ 150 characters
-5. Check surrounding text for question signal words: "which", "what", "choose", "select", "prefer", "option", "pick"
-6. If match: broadcast `option:prompt` WS message
+1. Turn finishes → daemon reads the last assistant message from Claude's JSONL transcript at `~/.claude/projects/{encoded-cwd}/{session_id}.jsonl`
+2. Parse for consecutive numbered items (1 through N, where 2 ≤ N ≤ 8)
+3. Each option must be ≤ 150 characters
+4. Check surrounding text for question signal words: "which", "what", "choose", "select", "prefer", "option", "pick"
+5. If match: emit `session:options-detected` WS message (results are stored, not transient)
 
 **UI:**
 
-- `OptionSelector` component appears below the terminal when `option:prompt` received
+- `OptionSelector` appears below the session chat when options are detected
 - Shows the question text and numbered buttons for each option
 - **Keyboard**: digit keys (1-9) select an option
-- **Click**: button click sends `pty-input` with `{number}\r`
-- **Auto-clear**: dismissed when new PTY output detected (user already answered via terminal)
-- **Manual dismiss**: Escape key or close button
+- **Click / key**: sends the chosen option as the next turn via `session:send` (there is no PTY)
+- **Dismiss**: Escape / close button → `option:dismiss` WS message
 
 ---
 
 ## 32. Agent Permission System
 
-MultiTable intercepts Claude Code's tool permission requests, allowing the user to approve or deny tools from the browser UI instead of requiring direct terminal interaction. This is critical for managing multiple concurrent sessions — the user can approve permissions across all sessions from one place.
+MultiTable intercepts tool permission requests from Claude (SDK `canUseTool`) and Hermes (ACP permission RPC), letting the user approve or deny tools from the browser UI. (Codex is OS-sandbox-gated and never prompts.) This is critical for managing multiple concurrent sessions — the user can approve permissions across all sessions from one place.
 
 ### Architecture
 
@@ -2578,20 +2593,20 @@ interface PermissionPrompt {
 ### Decision Flow
 
 ```
-1. Claude Code: POST /api/hooks/pre-tool-use { tool_name, tool_input, session_id }
-2. PermissionManager.createRequest(payload, res):
-   a. If tool is in auto-defer list → respond immediately with empty body (defer to Claude's native system)
-   b. If "${claudeSessionId}:${toolName}" in alwaysAllowed → respond with { permissionDecision: "allow" }
-   c. Otherwise → hold response, start 110s timer, broadcast permission:prompt via WS
+1. Adapter intercepts the tool call in-process (Claude SDK `canUseTool`,
+   Hermes ACP permission RPC) and awaits PermissionManager.requestFromSdk(...)
+2. PermissionManager:
+   a. If tool is in the auto-defer list → resolve immediately (defer to the provider's native handling)
+   b. If "${sessionId}:${toolName}" in alwaysAllowed → resolve with allow
+   c. Otherwise → create a pending request, start 110s timer, broadcast permission:prompt via WS
 3. UI shows PermissionCard with tool details and countdown
 4. User clicks Allow / Deny / Always Allow
-5. Client sends WS: { type: "permission:respond", id, decision }
+5. Client sends WS: { type: "permission:respond", id, decision, updatedInput?, alwaysAllow? }
 6. PermissionManager.resolveRequest(id, decision):
-   a. If "always-allow" → add to alwaysAllowed set, respond with allow
-   b. If "allow" → respond: 200 { hookSpecificOutput: { permissionDecision: "allow" } }
-   c. If "deny" → respond: 200 { hookSpecificOutput: { permissionDecision: "deny" } }
-   d. Clear timer
-7. Claude Code proceeds (or skips tool if denied)
+   a. If "always-allow" → add to alwaysAllowed set, then resolve with allow
+   b. Resolve the awaiting adapter promise with { behavior: "allow", updatedInput } or { behavior: "deny" }
+   c. Clear timer
+7. The adapter returns the decision to the provider; the turn proceeds (or the tool is skipped if denied)
 ```
 
 ### Auto-Defer List
@@ -2675,7 +2690,7 @@ When `mt.yml` is modified on disk (detected via chokidar), the daemon reloads th
 | Permission prompt pending | In-app overlay (PermissionBar) | Tool name, input, countdown timer |
 | Permission expired | In-app toast | "{session}: {tool} permission timed out" |
 | Option prompt detected | In-app overlay (OptionSelector) | Clickable numbered option buttons |
-| Session respawned | In-app toast | "{session} respawned automatically" |
+| Session turn error | In-app toast | "{session}: turn failed — {message}" (`session:turn-error`) |
 
 ### In-App Toasts
 
@@ -2776,13 +2791,13 @@ TailwindCSS dark mode uses the `class` strategy, toggled by the `data-theme` att
 9. SQLite persistence — process config and session state survive daemon restart
 10. Mobile layout: slide-in drawer sidebar, touch toolbar for special keys (Ctrl+C, Tab, Esc, arrows, Copy, Paste)
 
-### v0.2 — Claude Code Integration
+### v0.2 — Agent Provider Integration
 
-11. Claude Code hook system (Section 31) — structured state tracking, session ID capture
-12. Permission system (Section 32) — approve/deny tool use from browser UI
-13. Session resume — `claude --resume` for session continuity
-14. Session respawn on subscribe — auto-respawn dead PTYs
-15. Token / cost tracking per session (hook-based)
+11. Provider adapters (Section 31) — Claude SDK / Codex app-server / Hermes ACP; in-process hooks, structured state tracking, conversation-id capture
+12. Permission system (Section 32) — approve/deny tool use from browser UI (Claude & Hermes)
+13. Session resume — re-open + send auto-resumes the saved conversation id (no PTY, no explicit resume action)
+14. Past-session browser — hydrate/resume from on-disk transcripts (`/api/transcripts`, `/api/transcripts/codex`)
+15. Token / cost tracking per session (adapter-driven)
 
 ### v0.3 — Git & Session Detail
 
@@ -2934,9 +2949,9 @@ Note: The "MultiTable" name is retained as a brand. User-facing terminology uses
 ```
 1. User runs: mt session new --agent claude
 2. CLI reads ~/.config/multitable/config.yml to find daemon port
-3. CLI sends POST /api/projects/:id/sessions { name: "Claude Code", command: "claude" }
-4. Daemon creates session, spawns PTY, returns session object
-5. CLI prints confirmation: "Session 'Claude Code' started"
+3. CLI sends POST /api/projects/:id/sessions { name: "Claude Code", provider: "claude" }
+4. Daemon creates the session row (no PTY, no spawn) and returns the session object
+5. CLI prints confirmation: "Session 'Claude Code' created — send a message to start it"
 6. Frontend (if open) receives WebSocket event, updates UI
 ```
 
@@ -2950,7 +2965,8 @@ Note: The "MultiTable" name is retained as a brand. User-facing terminology uses
 |---|---|
 | `express` | HTTP server and REST API |
 | `ws` | WebSocket server |
-| `node-pty` | PTY session spawning |
+| `node-pty` | PTY spawning for commands & terminals (not sessions) |
+| `@anthropic-ai/claude-agent-sdk` | Claude session provider (in-process) |
 | `better-sqlite3` | SQLite database |
 | `chokidar` | File system watching |
 | `simple-git` | Git operations |

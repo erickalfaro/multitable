@@ -1,6 +1,8 @@
 # Three-Provider Integration Plan: Claude / Codex / Copilot
 
 > **Validated 2026-05-06** — every claim in this doc has been web-verified against the installed `node_modules` source, official SDK docs, and GitHub issues. Versions validated: Claude `0.2.119`, Codex `0.128.0`, Copilot `1.0.0-beta.2` (not installed; checked against npm tarball). Open questions and bonus capabilities discovered during validation are tracked in §6.
+>
+> **Status note (post-2026-05-06):** This is a point-in-time planning doc. Since it was written, the three *live* providers are **Claude, Codex, and Hermes (xAI Grok over ACP)** — not Copilot, which remains a forward-looking skill with no adapter. Codex also moved off `@openai/codex-sdk` to a `codex app-server` JSON-RPC child. For the current shipped architecture, `CLAUDE.md` is authoritative; for Hermes-specific gaps see [`../ideas/hermes-grok-gap-analysis.md`](../ideas/hermes-grok-gap-analysis.md). The cross-provider capability analysis below is retained for its design reasoning.
 
 ## Context
 
