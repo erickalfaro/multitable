@@ -1,8 +1,14 @@
 import type { AgentSession } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
 import type { ProviderAdapter, ProviderCapabilities, AdapterCallbacks } from './types.js';
+import type { PermissionManager } from '../../hooks/permissionManager.js';
 import { HermesAcpClient } from './hermes-acp/index.js';
-import type { RpcNotification, HermesAuthState } from './hermes-acp/index.js';
+import type {
+  RpcNotification,
+  HermesAuthState,
+  AcpPermissionRequest,
+  AcpPermissionOutcome,
+} from './hermes-acp/index.js';
 
 // HermesAdapter — driven by `hermes acp`, Hermes Agent's stdio JSON-RPC server
 // implementing the Agent Client Protocol (acp_adapter/ in NousResearch/hermes-agent).
@@ -37,11 +43,12 @@ import type { RpcNotification, HermesAuthState } from './hermes-acp/index.js';
 //
 // Mode mapping:
 //  Hermes' ACP today doesn't expose a per-thread sandbox enum the way Codex
-//  does — its "command approval" flows through session/request_permission
-//  which we auto-allow for now. So mode is essentially advisory and we keep
-//  the same session id across mode flips. This may change once ACP grows
-//  per-session modes; the cache is keyed by {sessionId, mode} precisely so
-//  the flip-recreates-session path works the day it does.
+//  does — its "command approval" flows through session/request_permission,
+//  which the adapter forwards to PermissionManager so the UI prompts the user.
+//  Mode is essentially advisory and we keep the same session id across mode
+//  flips. This may change once ACP grows per-session modes; the cache is keyed
+//  by {sessionId, mode} precisely so the flip-recreates-session path works the
+//  day it does.
 
 interface SessionCacheEntry {
   hermesSessionId: string;
@@ -121,10 +128,10 @@ export class HermesAdapter implements ProviderAdapter {
     // scope for v1. Mark as simulated so the UI's plan-mode toggle is hidden
     // (or stubbed) for Hermes sessions.
     planMode: 'simulated',
-    // No per-call host approval. Permission requests come via ACP
-    // session/request_permission, which the client auto-allows for the
-    // session duration (Codex-style). PermissionManager wiring is phase 2.
-    perCallApproval: 'sandbox',
+    // ACP session/request_permission is forwarded to PermissionManager, so
+    // every dangerous tool call surfaces a host approval prompt in the UI
+    // (same flow as Claude's canUseTool).
+    perCallApproval: 'callback',
     userQuestion: 'unsupported',
     elicitation: false,
     subagents: 'none',
@@ -143,7 +150,7 @@ export class HermesAdapter implements ProviderAdapter {
       {
         value: 'default',
         label: 'Default',
-        description: 'Standard Hermes behavior; tool approvals auto-allowed for the session.',
+        description: 'Standard Hermes behavior; dangerous tool calls prompt the host for approval.',
       },
       {
         value: 'plan',
@@ -162,25 +169,33 @@ export class HermesAdapter implements ProviderAdapter {
     thinkingEffort: 'native',
   };
 
+  private permManager: PermissionManager;
   private client: HermesAcpClient;
   private sessions = new Map<string, SessionCacheEntry>();
+  // Reverse map (Hermes ACP session id → MultiTable session id) so the
+  // permission handler — which only knows the ACP id — can resolve back to
+  // the host session for prompt routing.
+  private acpToMt = new Map<string, string>();
   // Per-session cache of the last reasoning effort we sent. Used so that the
   // `/reasoning <level>` prefix is only emitted when the effort actually
   // changes (Hermes persists the level on the ACP session after it's set).
   private lastSentEffort = new Map<string, string | null>();
 
-  constructor(client?: HermesAcpClient) {
+  constructor(permManager: PermissionManager, client?: HermesAcpClient) {
+    this.permManager = permManager;
     this.client =
       client ??
       new HermesAcpClient({
         // Pin xAI Grok OAuth at the Hermes runtime layer so the user's shell
         // default (`hermes config set model.provider …`) can't override us.
         envOverlay: { HERMES_INFERENCE_PROVIDER: 'xai-oauth' },
-        permissionPolicy: 'allow_session',
+        permissionHandler: (req) => this.handleAcpPermission(req),
       });
   }
 
   reset(s: AgentSession): void {
+    const existing = this.sessions.get(s.id);
+    if (existing) this.acpToMt.delete(existing.hermesSessionId);
     this.sessions.delete(s.id);
     this.lastSentEffort.delete(s.id);
   }
@@ -383,7 +398,67 @@ export class HermesAdapter implements ProviderAdapter {
     }
 
     this.sessions.set(s.id, { hermesSessionId, mode: s.mode });
+    this.acpToMt.set(hermesSessionId, s.id);
     return hermesSessionId;
+  }
+
+  // ACP session/request_permission → PermissionManager. The host UI renders
+  // the same prompt card it shows for Claude tool calls; the user's Allow /
+  // Deny answer becomes the optionId we return to Hermes. "Always Allow" is
+  // handled inside PermissionManager (sessionAllowList), so we always return
+  // `allow_once` to Hermes — subsequent calls short-circuit allow without
+  // re-prompting the user.
+  private async handleAcpPermission(req: AcpPermissionRequest): Promise<AcpPermissionOutcome> {
+    const mtSessionId = this.acpToMt.get(req.sessionId);
+    if (!mtSessionId) {
+      console.warn('[hermes] permission request for unknown acp session', req.sessionId);
+      return { outcome: { type: 'denied' } };
+    }
+
+    const tc = req.toolCall ?? {};
+    const toolName =
+      (typeof tc.kind === 'string' && tc.kind) ||
+      (typeof tc.title === 'string' && tc.title) ||
+      'hermes_tool';
+    const toolInput =
+      tc.rawInput && typeof tc.rawInput === 'object'
+        ? (tc.rawInput as Record<string, unknown>)
+        : {};
+    const firstLoc =
+      Array.isArray(tc.locations) && tc.locations[0]?.path
+        ? String(tc.locations[0].path)
+        : undefined;
+
+    // ACP doesn't surface an abort signal on permission requests. Use a fresh
+    // never-aborted controller — if the user cancels the turn while a prompt
+    // is open, answering it later just delivers a stale optionId that Hermes
+    // will ignore. Acceptable for v1.
+    const controller = new AbortController();
+    const result = await this.permManager.requestFromSdk(
+      mtSessionId,
+      '',
+      toolName,
+      toolInput as Record<string, any>,
+      controller.signal,
+      {
+        title: typeof tc.title === 'string' ? tc.title : undefined,
+        displayName: typeof tc.kind === 'string' ? tc.kind : undefined,
+        blockedPath: firstLoc,
+      },
+    );
+
+    if (result.behavior !== 'allow') {
+      return { outcome: { type: 'denied' } };
+    }
+
+    // Pick the most-restrictive "allow" option offered; PermissionManager
+    // owns longer-lived allowlist logic so per-call is fine.
+    const offered = new Set(req.options.map((o) => o.optionId));
+    const optionId =
+      ['allow_once', 'allow_session', 'allow_always'].find((id) => offered.has(id)) ??
+      req.options[0]?.optionId;
+    if (!optionId) return { outcome: { type: 'denied' } };
+    return { outcome: { type: 'allowed', optionId } };
   }
 
   private handleNotification(

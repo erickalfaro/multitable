@@ -108,7 +108,7 @@ export class AgentSessionManager extends EventEmitter {
     this.adapters = {
       claude: new ClaudeAdapter(permManager, elicitManager),
       codex: new CodexAdapter(),
-      hermes: new HermesAdapter(),
+      hermes: new HermesAdapter(permManager),
     };
   }
 
