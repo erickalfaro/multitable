@@ -134,3 +134,11 @@ Auth-not-configured surfaces as a persistent `auth` alert and a throw in `runTur
 ## 20. Frontend should ignore unknown session ids gracefully
 
 After session removal the daemon may still emit a few in-flight WS events (late `session/update`, replay tail). The store should drop them silently — don't crash on an unknown id.
+
+## 21. The 90s no-progress watchdog vs Hermes' non-streaming `terminal` tool
+
+**Symptom:** `hermes went silent for 90s mid-turn — aborted` on a turn that was working. `agent.log` shows `API call #N` (the tool call), a ~90s gap, then `acp_adapter.server: Cancelled session …` + `Tool terminal returned error (~91s): {"exit_code":130}` (130 = SIGINT — *we* killed it, not the user).
+
+**Cause:** the manager watchdog (`NO_PROGRESS_MS = 90_000`) aborts if no adapter callback fires for 90s. Hermes' `terminal` tool emits one `tool_call` (start) then **nothing** until `tool_call_update(completed)` — zero incremental output. Any command >90s (build/test/install) looks identical to a silent hang. (`agent_message_chunk`/`agent_thought_chunk` do stream and re-arm — this bites tool execution, terminal worst.)
+
+**Fix (don't regress):** the watchdog re-arms — instead of aborting — while a tool is in flight, bounded by `TOOL_GRACE_MS` (10 min) so a wedged tool still trips. `setCurrentTool(name)` stamps `s.currentToolStartedAt`; `setCurrentTool(null)` clears it. So: every `tool_call` MUST call `setCurrentTool(name)` and the terminal `tool_call_update` MUST call `setCurrentTool(null)` — `handleNotification` already does; preserve both if you refactor or long commands die at 90s again. Lives in the **provider-agnostic manager** (the signal is generic) — don't special-case the provider in the watchdog. `currentToolStartedAt` is internal runtime state: in the `RegisterInput` `Omit` list + defaulted in `register()` and the `/clear` reset (new runtime `AgentSession` fields need all three or `tsc` breaks every `register()` caller). A truly-dead child (no `tool_call` ever) still trips correctly — grace only protects observably-running tools.

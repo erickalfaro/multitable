@@ -72,5 +72,5 @@ When in doubt about behavior, these are authoritative (in this order):
 
 1. `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` — the actual installed types.
 2. [`packages/daemon/src/agent/manager.ts`](../../../packages/daemon/src/agent/manager.ts) — how MultiTable wires the SDK.
-3. [`docs/SDK_MIGRATION_PLAN.md`](../../../docs/SDK_MIGRATION_PLAN.md) — historical migration notes; explains *why* certain choices exist.
+3. [`docs/reference/archive/SDK_MIGRATION_PLAN.md`](../../../docs/reference/archive/SDK_MIGRATION_PLAN.md) — historical migration notes; explains *why* certain choices exist.
 4. The Anthropic public docs (URLs cited inside each reference file). Slower to update than the type defs; cross-check before trusting.

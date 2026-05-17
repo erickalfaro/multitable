@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-MultiTable is a local, browser-based dashboard for managing AI coding agents and dev processes. A Node.js daemon drives **multiple agent providers** (Claude Code via `@anthropic-ai/claude-agent-sdk`, Codex via JSON-RPC against `codex app-server`) through a unified `ProviderAdapter` contract — no PTY for agent sessions. It spawns commands and terminals via `node-pty`, persists state in SQLite, brokers permission + elicitation prompts (including a Telegram bridge for remote approval), and serves a React UI over REST + WebSocket on `localhost:3000`. See `docs/OVERVIEW.md`, `docs/SPEC.md`, `docs/SDK_MIGRATION_PLAN.md`, `docs/CODEX_APP_SERVER_MIGRATION.md`, and `docs/THREE_PROVIDER_INTEGRATION_PLAN.md` for the product concept and migration history; this file is about working in the code.
+MultiTable is a local, browser-based dashboard for managing AI coding agents and dev processes. A Node.js daemon drives **multiple agent providers** (Claude Code via `@anthropic-ai/claude-agent-sdk`, Codex via JSON-RPC against `codex app-server`) through a unified `ProviderAdapter` contract — no PTY for agent sessions. It spawns commands and terminals via `node-pty`, persists state in SQLite, brokers permission + elicitation prompts (including a Telegram bridge for remote approval), and serves a React UI over REST + WebSocket on `localhost:3000`. See `docs/reference/OVERVIEW.md`, `docs/reference/SPEC.md`, `docs/reference/archive/SDK_MIGRATION_PLAN.md`, `docs/reference/archive/CODEX_APP_SERVER_MIGRATION.md`, and `docs/reference/THREE_PROVIDER_INTEGRATION_PLAN.md` for the product concept and migration history; this file is about working in the code.
 
 ## Monorepo layout
 

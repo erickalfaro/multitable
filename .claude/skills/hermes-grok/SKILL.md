@@ -28,6 +28,7 @@ This single fact is why there's a `Map<string, HermesAcpClient>` (not a singleto
 | Know which Hermes slash-commands matter to us (and which are out of scope) | [`reference/slash-commands.md`](reference/slash-commands.md) |
 | Get oriented in `agent/providers/hermes.ts` + the adapter contract | [`multitable/adapter-architecture.md`](multitable/adapter-architecture.md) |
 | Fix a permission-prompt bug (approvals silently denied, etc.) | [`multitable/permission-wiring.md`](multitable/permission-wiring.md) |
+| Diagnose `hermes went silent for 90s mid-turn — aborted` (long terminal command killed) | [`pitfalls.md`](pitfalls.md) §21 |
 | Touch the bwrap filesystem jail (containment, toolchain binds, fail-closed) | [`multitable/sandbox.md`](multitable/sandbox.md) |
 | Diagnose duplicate messages after resume / the replay flood | [`multitable/hydration-and-replay.md`](multitable/hydration-and-replay.md) |
 | Scan known bugs before a PR | [`pitfalls.md`](pitfalls.md) |

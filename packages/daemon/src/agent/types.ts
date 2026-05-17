@@ -72,6 +72,13 @@ export interface AgentSession {
   cacheReadTokens: number;
   toolCount: number;
   currentTool: string | null;
+  // Wall-clock ms when currentTool last transitioned to a non-null value
+  // (null when no tool is running). The turn watchdog treats an in-flight
+  // tool as a legitimate quiet window — providers like Hermes run long
+  // terminal commands (builds, test suites, installs) with NO incremental
+  // ACP output — but only up to a generous cap so a genuinely wedged tool
+  // still trips the watchdog.
+  currentToolStartedAt: number | null;
   activeSubagents: number;
   lastActivity: number;
   userMessages: string[]; // accumulated user prompts (used by AI rename)

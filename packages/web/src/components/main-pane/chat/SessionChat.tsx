@@ -129,13 +129,16 @@ export function SessionChat({ sessionId, session }: Props) {
   // the initial history to be safe. Handled by the key-based effect above.
   // (No extra wiring needed here — claudeSessionId change retriggers load.)
 
-  // Drain queued sends: whenever the session is idle and there's a head
-  // message in the queue, pop it and dispatch via wsClient.sendTurn. The
-  // daemon flips state back to 'running', which gates the next iteration —
-  // so this naturally serializes one queued message per turn. We skip the
-  // 'errored' state because that requires explicit recovery.
+  // Drain queued sends: whenever the session is NOT running and there's a
+  // head message in the queue, pop it and dispatch via wsClient.sendTurn.
+  // The daemon flips state to 'running', which gates the next iteration —
+  // so this naturally serializes one queued message per turn. We drain on
+  // 'errored' as well as 'stopped': sending the next prompt is exactly the
+  // recovery action, and the daemon accepts a new turn on an errored
+  // session (currentTurn is null after a failure). Skipping 'errored' here
+  // is what stranded follow-up messages forever after a Hermes/SDK failure.
   useEffect(() => {
-    if (session.state !== 'stopped') return;
+    if (session.state === 'running') return;
     if (!pendingHead) return;
     const text = popPendingSend(sessionId);
     if (text) wsClient.sendTurn(sessionId, text);

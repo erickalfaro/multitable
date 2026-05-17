@@ -147,4 +147,4 @@ The proper fix if 5 minutes is too short is to let users configure it per-sessio
 - Read [`multitable/architecture.md`](multitable/architecture.md) to find the right file.
 - Read [`multitable/event-map.md`](multitable/event-map.md) to find where an event flows.
 - Read the SDK type defs at `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` if you're unsure about a type shape.
-- The migration plan at [`docs/SDK_MIGRATION_PLAN.md`](../../../docs/SDK_MIGRATION_PLAN.md) has historical context for why specific decisions exist.
+- The migration plan at [`docs/reference/archive/SDK_MIGRATION_PLAN.md`](../../../docs/reference/archive/SDK_MIGRATION_PLAN.md) has historical context for why specific decisions exist.
