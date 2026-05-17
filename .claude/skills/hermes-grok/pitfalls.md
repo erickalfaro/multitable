@@ -59,6 +59,8 @@ detect_dangerous_command(cmd)  →  matches DANGEROUS_PATTERNS / HARDLINE_PATTER
 
 `DANGEROUS_PATTERNS` for `rm` only match **recursive/root** deletes (`rm -r`, `rm --recursive`, `rm … /`). A plain `rm -f foo.py`, `mv`, `>file`, `git reset`, single-file overwrite, etc. are **not** flagged → Hermes runs them with no prompt and **nothing reaches MultiTable**. There is no ACP server-request, so `handleAcpPermission` is never called — adding code there cannot help.
 
+**Gating is by command CONTENT, not by PATH/location — there is NO repo/workspace confinement.** The `cwd` we pass via `session/new` is a relative-path base + the agent's self-perception root (and context-file discovery root since #23) — it is **not a jail**. Hermes will, with no prompt, read/write/delete *anywhere the OS user can*: `cat ~/.ssh/id_rsa`, `echo x >> ~/.bashrc`, `rm -f ~/Documents/other-project/file`, `cp ~/.aws/credentials /tmp` all run silently. The only path-aware refusals are HARDLINE absolute-path catastrophes (`rm -rf /`, `rm -rf ~`, `rm -rf /etc`, `mkfs`, `dd of=/dev/sd*`) and `file_tools` write-blocks on sensitive *system* prefixes (`/etc/`, `/boot/`, `/usr/lib/systemd/`, docker.sock). "Is this outside the project?" is simply not a question Hermes' approval layer asks. If a user needs filesystem confinement, that's an OS-level sandbox around the `hermes` child (containers/firejail/bubblewrap) — not something the adapter or ACP can provide.
+
 There is **no host-side lever** to widen this:
 - No ACP "ask me about every tool" channel; `capabilities.hooks: 'none'`, no `canUseTool` equivalent (that's Claude — do not reach for it).
 - No sandbox/trust enum we set (we advertise `fs:false, terminal:false`; Hermes runs tools in *its own* sandbox).
