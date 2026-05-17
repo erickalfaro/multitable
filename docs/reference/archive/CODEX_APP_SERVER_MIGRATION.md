@@ -41,7 +41,7 @@ Two alternatives considered and rejected:
 
 ## 3. Architecture
 
-This is the same pattern the Copilot integration plan ([docs/THREE_PROVIDER_INTEGRATION_PLAN.md §2.1](THREE_PROVIDER_INTEGRATION_PLAN.md)) calls for. Codex moves from "per-turn subprocess" to "one long-lived child + multiplexed sessions."
+This is the same pattern the Copilot integration plan ([docs/THREE_PROVIDER_INTEGRATION_PLAN.md §2.1](../THREE_PROVIDER_INTEGRATION_PLAN.md)) calls for. Codex moves from "per-turn subprocess" to "one long-lived child + multiplexed sessions."
 
 ```
 ┌─ AgentSessionManager (middle layer, unchanged) ──────────────┐
@@ -114,8 +114,8 @@ Responsibilities:
 - Error handling: stderr → log; non-JSON stdout → log; unhandled notifications → log + drop
 
 **Reference patterns to copy:**
-- Process spawn / stdio handling from existing [`packages/daemon/src/pty/manager.ts`](../packages/daemon/src/pty/manager.ts) (uses `node-pty`; for app-server, use plain `child_process.spawn` since we want stdio not a PTY)
-- Reconnect/lifecycle pattern from the planned Copilot integration in [THREE_PROVIDER_INTEGRATION_PLAN.md §2.1](THREE_PROVIDER_INTEGRATION_PLAN.md)
+- Process spawn / stdio handling from existing [`packages/daemon/src/pty/manager.ts`](../../../packages/daemon/src/pty/manager.ts) (uses `node-pty`; for app-server, use plain `child_process.spawn` since we want stdio not a PTY)
+- Reconnect/lifecycle pattern from the planned Copilot integration in [THREE_PROVIDER_INTEGRATION_PLAN.md §2.1](../THREE_PROVIDER_INTEGRATION_PLAN.md)
 
 ### Phase 3 — Build the CodexAppServerClient singleton (½ day)
 
@@ -139,7 +139,7 @@ Responsibilities:
 
 ### Phase 4 — Rewrite CodexAdapter against the new client (½ day)
 
-Modify: [`packages/daemon/src/agent/providers/codex.ts`](../packages/daemon/src/agent/providers/codex.ts).
+Modify: [`packages/daemon/src/agent/providers/codex.ts`](../../../packages/daemon/src/agent/providers/codex.ts).
 
 Replace the `@openai/codex-sdk` `Thread` usage with the new client.
 
@@ -177,7 +177,7 @@ The Thread cache becomes `Map<sessionId, { threadId, mode }>`. On mode flip, dis
 
 ### Phase 5 — Capability flag + delta semantics fix (½ hour)
 
-In [`providers/types.ts`](../packages/daemon/src/agent/providers/types.ts), update CodexAdapter's capabilities:
+In [`providers/types.ts`](../../../packages/daemon/src/agent/providers/types.ts), update CodexAdapter's capabilities:
 ```diff
 - streamingDeltaSemantics: 'cumulative',
 + streamingDeltaSemantics: 'additive',
@@ -292,9 +292,9 @@ The repo has no automated test setup. Verification is manual + `npm run lint` + 
 
 ## 10. Related docs
 
-- [docs/THREE_PROVIDER_INTEGRATION_PLAN.md](THREE_PROVIDER_INTEGRATION_PLAN.md) — middle layer architecture; this migration is one instance of the long-lived-CLI-client pattern
+- [docs/THREE_PROVIDER_INTEGRATION_PLAN.md](../THREE_PROVIDER_INTEGRATION_PLAN.md) — middle layer architecture; this migration is one instance of the long-lived-CLI-client pattern
 - [docs/THREE_PROVIDER_INTEGRATION_VALIDATION.md](THREE_PROVIDER_INTEGRATION_VALIDATION.md) — *(may not exist yet — was folded into the integration plan)*
-- [docs/CLAUDE.md](../CLAUDE.md) — project overview; "Codex specifics" section needs updating after Phase 7
+- [CLAUDE.md](../../../CLAUDE.md) — project overview; "Codex specifics" section needs updating after Phase 7
 - Upstream Codex source files referenced:
   - [codex-rs/protocol/src/protocol.rs](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs) — internal event types
   - [codex-rs/exec/src/event_processor_with_jsonl_output.rs](https://github.com/openai/codex/blob/main/codex-rs/exec/src/event_processor_with_jsonl_output.rs) — what `--json` filters out

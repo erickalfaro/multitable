@@ -74,6 +74,7 @@ type RegisterInput = Omit<
   | 'cacheReadTokens'
   | 'toolCount'
   | 'currentTool'
+  | 'currentToolStartedAt'
   | 'activeSubagents'
   | 'lastActivity'
   | 'userMessages'
@@ -183,6 +184,7 @@ export class AgentSessionManager extends EventEmitter {
       cacheReadTokens: 0,
       toolCount: 0,
       currentTool: null,
+      currentToolStartedAt: null,
       activeSubagents: 0,
       lastActivity: 0,
       userMessages: [],
@@ -451,6 +453,16 @@ export class AgentSessionManager extends EventEmitter {
     // budget this per quiet stretch otherwise. Logged via trackedTimeout so
     // the DevLog panel surfaces every arm/re-arm.
     const NO_PROGRESS_MS = 90_000;
+    // While a tool is actively executing the agent IS making progress even
+    // though we see no SDK traffic — Hermes' terminal tool emits zero
+    // incremental ACP output for the entire duration of a command, so a
+    // legit multi-minute build/test/install is indistinguishable from a
+    // silent hang at the NO_PROGRESS_MS boundary. Re-arm while a tool is in
+    // flight, but only up to this generous ceiling so a genuinely wedged
+    // tool (interactive prompt waiting on stdin, server that never exits)
+    // still eventually trips the watchdog instead of pinning the session
+    // in "Running…" forever.
+    const TOOL_GRACE_MS = 10 * 60_000;
     let stuckTimer: TrackedTimer | null = null;
     let abortedDueToStuck = false;
     let sawAnyMessage = false;
@@ -458,9 +470,16 @@ export class AgentSessionManager extends EventEmitter {
       if (stuckTimer) stuckTimer.cancel();
       stuckTimer = trackedTimeout(
         () => {
+          // A tool that's been running for less than TOOL_GRACE_MS is a
+          // legitimate quiet window, not a hang (see TOOL_GRACE_MS above).
+          const toolInFlight =
+            s.currentTool != null &&
+            s.currentToolStartedAt != null &&
+            Date.now() - s.currentToolStartedAt < TOOL_GRACE_MS;
           if (
             this.permManager.hasPending(sessionId) ||
-            this.elicitManager.hasPending(sessionId)
+            this.elicitManager.hasPending(sessionId) ||
+            toolInFlight
           ) {
             armStuckTimer();
             return;
@@ -690,7 +709,16 @@ export class AgentSessionManager extends EventEmitter {
       emitTurnResult: (input) => this.emit('turn-result', { sessionId, ...input }),
       setCurrentTool: (name) => {
         const s = this.sessions.get(sessionId);
-        if (s) s.currentTool = name;
+        if (!s) return;
+        // Stamp the start time on a transition INTO a tool (or to a different
+        // tool); clear it when the tool finishes. The watchdog uses this to
+        // grant an in-flight tool a longer quiet window than a silent SDK.
+        if (name) {
+          if (s.currentTool !== name) s.currentToolStartedAt = Date.now();
+        } else {
+          s.currentToolStartedAt = null;
+        }
+        s.currentTool = name;
       },
       bumpActivity: () => {
         const s = this.sessions.get(sessionId);
@@ -798,6 +826,7 @@ export class AgentSessionManager extends EventEmitter {
     s.messages = [];
     s.toolCount = 0;
     s.currentTool = null;
+    s.currentToolStartedAt = null;
     s.tokensIn = 0;
     s.tokensOut = 0;
     s.cacheCreationTokens = 0;

@@ -352,19 +352,27 @@ export const ChatInputCM = memo(function ChatInputCM({
         : text;
 
       // If a turn is in flight, queue the message client-side. SessionChat
-      // drains the queue when the daemon flips state back to 'stopped'.
+      // drains the queue when the daemon flips state out of 'running'.
       //
       // Race-safety: `session.state === 'running'` lags the actual send by
       // ~70ms (the daemon must round-trip a `process-state-changed` event
       // before the store updates). If the user clicks Send twice in quick
-      // succession, the second send sees state still 'stopped' and goes
+      // succession, the second send sees state still terminal and goes
       // through directly — the daemon then errors with "turn already in
       // flight" 10s later. Also queue if the queue ALREADY has a head OR
-      // state isn't an idle terminal — that catches the in-flight gap.
+      // a turn is in flight — that catches the in-flight gap.
+      //
+      // 'errored' is a terminal, NOT-in-flight state: a failed turn (e.g.
+      // Hermes went silent and the watchdog aborted) leaves currentTurn
+      // null on the daemon, so a fresh prompt starts a new turn and clears
+      // the error. Treat it like 'stopped' here, otherwise every follow-up
+      // after a failure gets queued forever (the queue only drains out of a
+      // non-running state) and the user can never recover the session.
       const live = useAppStore.getState();
       const session = live.sessions[processId];
       const queueHasHead = !!live.pendingSendsBySession?.[processId]?.length;
-      const isIdle = session?.state === 'stopped' && !queueHasHead;
+      const st = session?.state;
+      const isIdle = (st === 'stopped' || st === 'errored') && !queueHasHead;
       if (!isIdle) {
         live.enqueueSend(processId, finalText);
       } else {

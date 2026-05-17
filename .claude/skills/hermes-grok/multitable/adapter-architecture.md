@@ -115,7 +115,9 @@ async runTurn(s, text, ctrl, cb) {
 }
 ```
 
-The manager wraps this in: a 5-minute no-progress watchdog (`bumpActivity()` re-arms it on every chunk/tool event), and a `try/catch/finally` that turns a throw into `session:turn-error`, sets `s.state = 'errored'`, and always emits `turn-complete`.
+The manager wraps this in: a **90-second** no-progress watchdog (`NO_PROGRESS_MS = 90_000` in `manager.ts` — *not* 5 minutes; that figure is stale in older docs/CLAUDE.md), and a `try/catch/finally` that turns a throw into `session:turn-error`, sets `s.state = 'errored'`, and always emits `turn-complete`.
+
+The watchdog re-arms (instead of aborting) on every adapter callback (`bumpActivity()`, `emitToolEvent`, etc. — the manager Proxies the whole `AdapterCallbacks` bag) **and** in three explicit quiet-window cases checked when it fires: (1) a permission/elicitation prompt is pending, (2) a tool is in flight and has been running < `TOOL_GRACE_MS` (10 min). This second case exists **specifically for Hermes**: see pitfalls.md §21 — Hermes' `terminal` tool emits zero incremental ACP output for the entire duration of a command, so without the tool-in-flight grace a legit >90 s build/test/install is killed mid-run with `hermes went silent for 90s mid-turn — aborted`. The grace is bounded so a genuinely wedged tool still trips.
 
 The canonical assistant `Message` is emitted **from the accumulated buffer**, not from the prompt response (the response only carries `stopReason` + `usage`). If the turn produced no assistant text (pure-tool turn, or cancelled before any chunk), it's skipped — the user already saw the streamed tool_result messages.
 

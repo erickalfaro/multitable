@@ -59,7 +59,7 @@ This implements `/clear` semantics in the composer: clear the chat, start fresh,
 
 ## Multi-machine sessions
 
-The SDK supports custom `SessionStore` adapters for storing JSONL outside `~/.claude/projects`. We don't use this. If we ever sync sessions cross-machine, the migration plan in [`docs/SDK_MIGRATION_PLAN.md`](../../../../docs/SDK_MIGRATION_PLAN.md) flags it as future work.
+The SDK supports custom `SessionStore` adapters for storing JSONL outside `~/.claude/projects`. We don't use this. If we ever sync sessions cross-machine, the migration plan in [`docs/reference/archive/SDK_MIGRATION_PLAN.md`](../../../../docs/reference/archive/SDK_MIGRATION_PLAN.md) flags it as future work.
 
 ## Common mistakes
 
