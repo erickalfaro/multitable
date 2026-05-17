@@ -412,7 +412,7 @@ export class HermesAdapter implements ProviderAdapter {
     const mtSessionId = this.acpToMt.get(req.sessionId);
     if (!mtSessionId) {
       console.warn('[hermes] permission request for unknown acp session', req.sessionId);
-      return { outcome: { type: 'denied' } };
+      return { outcome: { outcome: 'cancelled' } };
     }
 
     const tc = req.toolCall ?? {};
@@ -448,17 +448,23 @@ export class HermesAdapter implements ProviderAdapter {
     );
 
     if (result.behavior !== 'allow') {
-      return { outcome: { type: 'denied' } };
+      return { outcome: { outcome: 'cancelled' } };
     }
 
     // Pick the most-restrictive "allow" option offered; PermissionManager
-    // owns longer-lived allowlist logic so per-call is fine.
-    const offered = new Set(req.options.map((o) => o.optionId));
-    const optionId =
-      ['allow_once', 'allow_session', 'allow_always'].find((id) => offered.has(id)) ??
-      req.options[0]?.optionId;
-    if (!optionId) return { outcome: { type: 'denied' } };
-    return { outcome: { type: 'allowed', optionId } };
+    // owns longer-lived allowlist logic so per-call is fine. Prefer matching
+    // by `kind` because option ids are agent-defined and may vary; fall back
+    // to Hermes' canonical id names (allow_once / allow_session / allow_always)
+    // and finally to the first non-deny option.
+    const allowOption =
+      req.options.find((o) => o.kind === 'allow_once') ??
+      req.options.find((o) => o.kind === 'allow_always') ??
+      req.options.find((o) => o.optionId === 'allow_once') ??
+      req.options.find((o) => o.optionId === 'allow_session') ??
+      req.options.find((o) => o.optionId === 'allow_always') ??
+      req.options.find((o) => o.kind !== 'reject_once' && o.kind !== 'reject_always');
+    if (!allowOption?.optionId) return { outcome: { outcome: 'cancelled' } };
+    return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
   }
 
   private handleNotification(
