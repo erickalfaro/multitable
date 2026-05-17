@@ -1,6 +1,11 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { createInterface, Interface } from 'readline';
 import { EventEmitter } from 'events';
+import {
+  buildSandboxArgs,
+  resolveHermesHome,
+  sandboxDisabledByEnv,
+} from './sandbox.js';
 
 // Line-delimited JSON-RPC 2.0 transport for `hermes acp` (a.k.a.
 // `python -m acp_adapter.entry`). Hermes implements the standard Agent Client
@@ -83,8 +88,36 @@ export class HermesAcpTransport extends EventEmitter {
     const hermes = this.options.hermesPath ?? 'hermes';
     const args = ['acp', ...(this.options.extraArgs ?? [])];
     const env = { ...process.env, ...(this.options.envOverlay ?? {}) };
-    const child = spawn(hermes, args, {
-      cwd: this.options.cwd ?? process.cwd(),
+    const projectDir = this.options.cwd ?? process.cwd();
+
+    // Mandatory OS-level containment: confine the child to projectDir +
+    // ~/.hermes so a Hermes turn can't touch the rest of $HOME. Hermes has
+    // no path-based gating of its own (see sandbox.ts). buildSandboxArgs
+    // throws SandboxUnavailableError if bwrap is missing — fail closed; the
+    // adapter surfaces it as an actionable alert. The only bypass is the
+    // explicit env opt-out, logged loudly.
+    let spawnCmd = hermes;
+    let spawnArgs = args;
+    if (sandboxDisabledByEnv()) {
+      console.warn(
+        '[hermes-acp] MULTITABLE_HERMES_SANDBOX=off — running Hermes WITHOUT ' +
+          'filesystem containment. The agent can read/write anywhere this ' +
+          'user can. Unset the env var to enforce project-only confinement.',
+      );
+    } else {
+      const { command, prefixArgs, hermesBin } = buildSandboxArgs({
+        projectDir,
+        hermesHome: resolveHermesHome(),
+        hermesPath: hermes,
+      });
+      spawnCmd = command;
+      // Use the resolved absolute binary — inside the namespace $HOME is a
+      // tmpfs so a PATH lookup of `hermes` (a ~/.local/bin shim) would fail.
+      spawnArgs = [...prefixArgs, hermesBin, ...args];
+    }
+
+    const child = spawn(spawnCmd, spawnArgs, {
+      cwd: projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
     });

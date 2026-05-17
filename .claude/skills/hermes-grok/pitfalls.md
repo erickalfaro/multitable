@@ -69,6 +69,32 @@ There is **no host-side lever** to widen this:
 
 What you *can* truthfully tell a user: gating granularity is Hermes', not MultiTable's. Options are (a) accept Hermes' model, (b) set `approvals.mode: manual` in `~/.hermes/config.yaml` so flagged commands at least always hit the UI instead of LLM-auto-approve (default is already `manual`; only helps if they'd switched to `smart`), or (c) use Claude/Codex for workflows that need per-tool host approval. Do **not** "fix" this by faking interception in the adapter — there is no tool call to intercept.
 
+## 10c. Every Hermes child is bwrap-jailed — mandatory, fail-closed
+
+Because Hermes has no path confinement (§10b), MultiTable wraps every
+`hermes acp` spawn in **bubblewrap**. The child can only write the project
+dir + `~/.hermes`, read its Python toolchain + `/usr` etc., and sees an
+**empty ephemeral tmpfs where `$HOME` was** (`~/.ssh`, `~/.aws`, sibling
+projects gone). Full detail: [`multitable/sandbox.md`](multitable/sandbox.md).
+
+Traps:
+- **It's fail-closed.** No `bwrap` → `SandboxUnavailableError` → the turn does
+  not run (distinct alert). Only `MULTITABLE_HERMES_SANDBOX=off` bypasses, and
+  it's logged loudly. Never add a silent unconfined fallback.
+- **The toolchain is outside `~/.hermes`.** The `hermes` launcher is a
+  `~/.local/bin` shim and the venv interpreter is a uv-managed CPython under
+  `~/.local/share/uv` — both wiped by the `$HOME` tmpfs unless re-bound.
+  `collectToolchainBinds()` handles it; changing the spawned binary or
+  Hermes' install layout means re-running the sandbox smoke test, or you get
+  a namespace-only "python: No such file or directory".
+- **Exec the resolved absolute binary, not `'hermes'`.** PATH lookup of the
+  shim fails inside the namespace (its dir is tmpfs). `buildSandboxArgs`
+  returns `hermesBin`; transport must spawn that.
+- **bwrap is Linux-only.** macOS/Windows dev boxes must set the env opt-out;
+  there is no `sandbox-exec`/AppContainer equivalent wired.
+- It does **not** restrict network — not data-loss prevention, just disk
+  scope. Don't claim it sandboxes exfiltration.
+
 ## 11. Permission requests have no abort signal (v1 limitation)
 
 `handleAcpPermission` passes a fresh never-aborted controller. Cancelling a turn while a prompt is open leaves it open; a late answer returns a stale optionId Hermes ignores. Accepted. Don't fake an abort (it'd become a deny).
