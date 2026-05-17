@@ -386,8 +386,12 @@ export function createProjectsRouter(
     }
 
     try {
-      const provider: 'claude' | 'codex' | undefined =
-        agentProvider === 'claude' || agentProvider === 'codex' ? agentProvider : undefined;
+      const provider: 'claude' | 'codex' | 'hermes' | undefined =
+        agentProvider === 'claude' ||
+        agentProvider === 'codex' ||
+        agentProvider === 'hermes'
+          ? agentProvider
+          : undefined;
       const modelId =
         typeof model === 'string' && model.trim().length > 0 ? model.trim() : null;
       // Seed thinking effort from the user's last choice so newly-created
@@ -418,7 +422,13 @@ export function createProjectsRouter(
         id: session.id,
         projectId: session.projectId,
         name: session.name,
-        workingDir: session.workingDirectory || '',
+        // Falling back to project.path matches the boot-time register in
+        // index.ts and the other register sites below. An empty workingDir
+        // gets passed through to provider adapters and ends up as the agent
+        // child's `os.getcwd()` (in Hermes' case, the daemon's cwd —
+        // `packages/daemon` under `npm run dev -w` — which breaks per-session
+        // shell tools).
+        workingDir: session.workingDirectory || project.path,
         provider: session.agentProvider,
         model: session.model,
         mode: session.mode,

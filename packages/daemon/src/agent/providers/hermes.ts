@@ -1,3 +1,4 @@
+import { homedir } from 'os';
 import type { AgentSession } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
 import type { ProviderAdapter, ProviderCapabilities, AdapterCallbacks } from './types.js';
@@ -190,6 +191,14 @@ export class HermesAdapter implements ProviderAdapter {
         // default (`hermes config set model.provider …`) can't override us.
         envOverlay: { HERMES_INFERENCE_PROVIDER: 'xai-oauth' },
         permissionHandler: (req) => this.handleAcpPermission(req),
+        // Hermes' terminal tool falls back to `os.getcwd()` on the agent
+        // child whenever a session's per-task cwd override is missing/empty.
+        // If we spawn with the daemon's cwd, that fallback becomes
+        // `packages/daemon` under `npm run dev -w` — confusing and wrong for
+        // every project. Pin to the user's home so the fallback is at least
+        // a sane neutral location. Per-session cwds are still passed via
+        // session/new and session/load.
+        cwd: homedir(),
       });
   }
 
@@ -371,11 +380,26 @@ export class HermesAdapter implements ProviderAdapter {
     const existing = this.sessions.get(s.id);
     if (existing && existing.mode === s.mode) return existing.hermesSessionId;
 
+    // Hard guard against empty cwd reaching session/new or session/load. An
+    // empty cwd ends up registered as `{"cwd": ""}` in Hermes' per-task
+    // override registry; the terminal tool's `or config["cwd"]` fallback
+    // then runs commands from the Hermes process's own cwd. Surface stale
+    // DB rows loudly so we fix them upstream instead of debugging "rm ran
+    // from the wrong directory" again.
+    const cwd = s.workingDir;
+    if (!cwd) {
+      console.warn('[hermes] session has empty workingDir; falling back to homedir', {
+        sessionId: s.id,
+        projectId: s.projectId,
+      });
+    }
+    const safeCwd = cwd || homedir();
+
     let hermesSessionId: string;
     let loaded = false;
     if (s.agentSessionId) {
       try {
-        hermesSessionId = await this.client.loadSession(s.agentSessionId, s.workingDir);
+        hermesSessionId = await this.client.loadSession(s.agentSessionId, safeCwd);
         loaded = true;
       } catch (err) {
         console.warn('[hermes] session/load failed, creating fresh', {
@@ -383,10 +407,10 @@ export class HermesAdapter implements ProviderAdapter {
           hermesSessionId: s.agentSessionId,
           error: err instanceof Error ? err.message : String(err),
         });
-        hermesSessionId = await this.client.newSession({ cwd: s.workingDir });
+        hermesSessionId = await this.client.newSession({ cwd: safeCwd });
       }
     } else {
-      hermesSessionId = await this.client.newSession({ cwd: s.workingDir });
+      hermesSessionId = await this.client.newSession({ cwd: safeCwd });
     }
 
     // Hermes schedules _replay_session_history (acp_adapter/server.py) AFTER
