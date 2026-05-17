@@ -1,12 +1,13 @@
-// Provider registry. Each AgentProvider has one adapter file. Adding a new
-// provider (Gemini, Amp, Aider, ...) is two lines: an import + an entry in
-// `adapters` below. The adapter implements the ProviderAdapter contract from
-// ./types.ts.
+// Provider registry barrel. Each AgentProvider (`claude` | `codex` | `hermes`)
+// has its own adapter file implementing the ProviderAdapter contract from
+// ./types.ts. They are registered in AgentSessionManager's `adapters` map
+// (agent/manager.ts); adding a new provider (Gemini, Amp, Aider, ...) is an
+// import + one entry there.
 //
-// Today only Codex is fully behind this seam. Claude's logic still lives
-// inline in agent/manager.ts because its handlers are tightly coupled to the
-// manager's permission / elicitation / hook plumbing. Treat the manager as
-// the de-facto Claude adapter; the explicit ones cover the rest.
+// The manager is fully provider-agnostic — every turn is delegated through
+// ProviderAdapter. There is no "Claude lives inline in the manager" path
+// anymore; ClaudeAdapter is a peer of CodexAdapter and HermesAdapter.
 export type { ProviderAdapter, AdapterCallbacks } from './types.js';
+export { ClaudeAdapter } from './claude.js';
 export { CodexAdapter } from './codex.js';
 export { HermesAdapter } from './hermes.js';
