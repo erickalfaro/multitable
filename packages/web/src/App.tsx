@@ -39,7 +39,7 @@ import { NotificationCenter } from './components/notifications/NotificationCente
 import { ElicitationModalHost } from './components/elicitation/ElicitationModal';
 import { DevLogPanel } from './components/dev-log/DevLogPanel';
 import { deriveAttentionEvents, attentionPatchForToolResult } from './lib/attention';
-import type { Session } from './lib/types';
+import type { Session, AgentProvider } from './lib/types';
 
 // Slow safety-net poll for sessions that are mid-turn. The primary path is
 // event-driven (turn-complete, ws-reconnected, session:reconciled, focus,
@@ -332,9 +332,10 @@ function App() {
       .catalog()
       .then((snapshot) => {
         const setModelCatalog = useAppStore.getState().setModelCatalog;
-        for (const provider of ['claude', 'codex', 'hermes'] as const) {
-          const entry = snapshot[provider];
-          if (entry?.models?.length) setModelCatalog(provider, entry.models);
+        // Seed every provider the daemon's catalog returned — don't hardcode the
+        // set, so a newly-added provider (grok, …) is picked up automatically.
+        for (const [provider, entry] of Object.entries(snapshot)) {
+          if (entry?.models?.length) setModelCatalog(provider as AgentProvider, entry.models);
         }
       })
       .catch(() => {
@@ -864,13 +865,11 @@ function App() {
       // becomes accurate.
       wsClient.on('providers:catalog-updated', (msg: any) => {
         const { provider, models } = msg.payload || {};
-        if (
-          (provider !== 'claude' && provider !== 'codex' && provider !== 'hermes') ||
-          !Array.isArray(models)
-        ) {
-          return;
-        }
-        useAppStore.getState().setModelCatalog(provider, models);
+        // Accept any provider the daemon discovers (claude/codex/hermes/grok/…).
+        // setModelCatalog ignores providers without a catalog slot (e.g. copilot),
+        // so we don't need to hardcode the set here.
+        if (typeof provider !== 'string' || !Array.isArray(models)) return;
+        useAppStore.getState().setModelCatalog(provider as AgentProvider, models);
       }),
       wsClient.on('session:state-updated', (msg: any) => {
         // The daemon's AgentSessionManager broadcasts a snapshot of cost,

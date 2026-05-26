@@ -1,55 +1,43 @@
-# Modes: `code` / `plan` / `ask`
+# Modes: Grok's `--permission-mode` (identical to Claude's enum)
 
-Grok Build has **three native modes**. MultiTable does **not** invent or translate modes — the value passed to the adapter is forwarded verbatim, and the adapter declares the native set in `capabilities.modes` (see [`../../../packages/daemon/src/agent/providers/types.ts`](../../../../packages/daemon/src/agent/providers/types.ts), `ModeOption`).
+> **VERIFIED on grok v0.2.2.** Earlier drafts of this doc guessed `code`/`plan`/`ask` — that was wrong. Grok Build's `--permission-mode` enum is **exactly Claude's `PermissionMode`**, and `session/new` accepts a `permissionMode` param (the adapter forwards `s.mode` verbatim).
 
-| Grok mode | Behavior (per xAI docs) | Switch via |
-|---|---|---|
-| `code` | **Default.** Reads, edits, and runs commands automatically (Grok self-gates which calls prompt — see [`../pitfalls.md`](../pitfalls.md) §6). | default; `/code` (`VERIFY`) |
-| `plan` | Shows diffs before applying; **requires approval** before writing. xAI markets a real plan mode: review/edit/approve the plan before execution. | `/plan` or `--mode plan` |
-| `ask` | **Read-only**, no file modifications. | `/ask` (`VERIFY`) |
+`grok --help` lists:
 
-## Proposed `capabilities.modes`
-
-```ts
-modes: [
-  {
-    value: 'code',
-    label: 'Code',
-    description: 'Grok reads, edits, and runs commands automatically; it prompts only for calls it deems sensitive.',
-    tone: 'standard',
-  },
-  {
-    value: 'plan',
-    label: 'Plan',
-    description: 'Grok proposes a plan and shows diffs before applying — changes require your approval.',
-    tone: 'safe',
-  },
-  {
-    value: 'ask',
-    label: 'Ask (read-only)',
-    description: 'Read-only — Grok answers and inspects but makes no file modifications.',
-    tone: 'safe',
-  },
-],
+```
+--permission-mode <MODE>   [possible values: default, acceptEdits, auto, dontAsk, bypassPermissions, plan]
+--sandbox <PROFILE>        Sandbox profile for filesystem and network access  [env: GROK_SANDBOX=]
 ```
 
-Tones drive UI coloring only (`ModeTone` in `types.ts`); `code` is `standard` (amber), the two non-mutating modes are `safe`. There is no `danger`-tier mode for Grok in v1 (no equivalent of Codex's `danger-full-access` / Claude's `bypassPermissions`). **VERIFY** whether Grok has a "full access / yolo" mode worth exposing as `elevated`/`danger`.
+So Grok has **two** orthogonal axes: a Claude-style **permission mode** (soft gating, what we wire as `modes`) and an OS-enforced **sandbox profile** (deferred to v2 — see below).
 
-## `planMode`: native or simulated? — the key VERIFY
+MultiTable does **not** invent or translate modes. The adapter declares the native set in `capabilities.modes` (see [`grok.ts`](../../../../packages/daemon/src/agent/providers/grok.ts)) and passes `s.mode` straight into `session/new`'s `permissionMode`.
 
-`ProviderCapabilities.planMode` is `'native' | 'simulated' | 'none'`:
+## The six modes (as declared in the adapter)
 
-- If Grok exposes mode switching **over the agent-stdio ACP surface** — i.e. a `session/set_mode` RPC, a `mode`/`modeId` param on `session/new`, or `availableModes` + `current_mode_update` in the session — then `planMode: 'native'` and the adapter sends the mode through ACP on session start / mode flip.
-- If `plan`/`ask` are **TUI-only** (the `/plan` slash command and `--mode` flag only work in the interactive UI, not the stdio agent), then `planMode: 'simulated'` (or `'none'`) and the modes are advisory passthrough, like Hermes.
+| `permissionMode` | Label | Tone | Behavior |
+|---|---|---|---|
+| `default` | Ask first | standard | Prompts before sensitive tools. |
+| `acceptEdits` | Accept edits | elevated | Auto-accepts file edits; still prompts for other sensitive actions. |
+| `auto` | Auto | elevated | Proceeds autonomously, prompting only when necessary. |
+| `plan` | Plan | safe | Proposes a plan / shows diffs before applying; requires approval. |
+| `dontAsk` | Don't ask | danger | Suppresses permission prompts for the session. |
+| `bypassPermissions` | Bypass | danger | Runs every tool without asking. |
 
-**This is unverified.** The ACP spec *does* define session modes (`availableModes`, `setSessionMode`, `current_mode_update`), and Grok advertises "full ACP support," so `'native'` is plausible — but confirm against a live `grok agent stdio` before claiming it. Until then, default the capability to `'simulated'` (safe: the UI shows the modes but doesn't promise enforcement) and leave a `// VERIFY: flip to 'native' if session/set_mode works` marker.
+These reuse Claude's exact values, so `packages/web/src/lib/modeTone.ts`'s `MODE_TONE_FALLBACK` already maps all six — the web side needed **zero** new mode knowledge.
 
-## Mode change mechanics in MultiTable
+## `planMode` capability = `'native'`
 
-- `PUT /api/sessions/:id/mode` validates the value against `capabilities.modes` and emits `session:mode-changed` (provider-agnostic manager behavior — don't special-case Grok).
-- If `planMode === 'native'`: on a mode flip the adapter should push the new mode to the live ACP session (`session/set_mode`) — or, if Grok options are immutable post-session-start (the Codex constraint), bust the cached session id so the next turn re-creates the session in the new mode. **VERIFY** which model Grok follows; record it in the session-cache key (key by `{sessionId, mode}` so a flip can bust the cache, exactly as the cache is structured for the ACP sibling adapter).
-- If `planMode === 'simulated'`: modes are advisory, same session id across flips, no ACP call.
+Grok has a real `plan` permission-mode (proposes a plan, shows diffs, requires approval). `capabilities.planMode = 'native'`.
+
+## How a mode change applies
+
+`PUT /api/sessions/:id/mode` validates against `capabilities.modes` and emits `session:mode-changed` (provider-agnostic). The adapter keys its session cache by `{grokSessionId, mode, effort, model}`; when `s.mode` changes the cache misses and `ensureSessionId` re-issues `session/new`/`session/load` with the new `permissionMode`. (Whether Grok re-applies `permissionMode` on `session/load` of an existing session vs. only on a fresh `session/new` is the one residual uncertainty — new sessions definitely get the right mode; verify continuity behavior if a mode flip mid-session ever looks ignored.)
+
+## `--sandbox` (deferred to v2)
+
+The separate `--sandbox <PROFILE>` axis (OS-enforced FS/network confinement, env `GROK_SANDBOX`) is **not wired in v1**: the adapter leaves it at Grok's default and gates via `permissionMode`, so `capabilities.hardSandbox = false`. To wire it later: enumerate the valid profile names (`grok --help` doesn't list them inline), decide whether to expose them as a second UI control or fold into the mode set, and flip `hardSandbox`.
 
 ## What modes are NOT
 
-Not a permission allowlist, not a sandbox enum we set, not a substitute for `session/request_permission`. Even in `code` mode Grok still emits permission server-requests for calls it flags; even in `ask` mode the enforcement is Grok's, not ours. Don't conflate mode with the per-call approval channel ([`../multitable/permission-wiring.md`](../multitable/permission-wiring.md)).
+Not a substitute for `session/request_permission`: even in `default` mode Grok only prompts for calls it deems sensitive, and even in `bypassPermissions` the enforcement is Grok's. Don't conflate the mode with the per-call approval channel ([`../multitable/permission-wiring.md`](../multitable/permission-wiring.md)).

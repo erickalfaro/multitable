@@ -11,3 +11,4 @@ export type { ProviderAdapter, AdapterCallbacks } from './types.js';
 export { ClaudeAdapter } from './claude.js';
 export { CodexAdapter } from './codex.js';
 export { HermesAdapter } from './hermes.js';
+export { GrokAdapter } from './grok.js';

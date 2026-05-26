@@ -80,23 +80,27 @@ function Preview({ text }: { text: string }) {
   const anyHex = lines.some(l => HEX_RE.test(l));
 
   if (!anyHex) {
+    // Prose preview: render as a light quote-style aside (thin accent rule,
+    // sans-serif, muted) rather than a heavy monospace code box. Reads as the
+    // option elaborating on itself; only shown for the selected option.
     return (
-      <pre
+      <div
         className="mt-scroll"
         style={{
-          fontSize: 10,
+          fontSize: 10.5,
+          lineHeight: 1.4,
           color: 'var(--text-muted)',
-          margin: '6px 0 0',
-          padding: '6px 8px',
-          backgroundColor: 'var(--bg-sidebar)',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          whiteSpace: 'pre',
-          overflow: 'auto',
-          maxHeight: 80,
+          marginTop: 5,
+          paddingLeft: 9,
+          borderLeft: '2px solid var(--border-strong)',
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+          overflowY: 'auto',
+          maxHeight: 120,
         }}
       >
         {text}
-      </pre>
+      </div>
     );
   }
 
@@ -176,63 +180,41 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
   return (
     <div
       style={{
-        position: 'relative',
         backgroundColor: 'var(--bg-elevated)',
-        padding: '14px 14px 12px',
-        marginBottom: 8,
+        padding: '6px 8px',
+        marginBottom: 6,
       }}
     >
-      <span
+      <div
         style={{
-          position: 'absolute',
-          top: 8,
-          left: 12,
-          fontSize: 9.5,
+          fontSize: 9,
           color: 'var(--accent-amber)',
           textTransform: 'uppercase',
-          letterSpacing: '0.18em',
+          letterSpacing: '0.16em',
           fontWeight: 500,
+          marginBottom: 4,
         }}
       >
         question
-      </span>
-      <span
-        style={{
-          position: 'absolute',
-          top: 8,
-          right: 12,
-          fontSize: 9.5,
-          color: 'var(--text-faint)',
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        {prompt.sessionId.slice(0, 12)}
-      </span>
-      <div style={{ height: 22 }} />
+      </div>
 
       {questions.map((q, qIdx) => {
         const multi = !!q.multiSelect;
         const picked = selections[qIdx] ?? [];
         return (
-          <div key={qIdx} style={{ marginBottom: qIdx < questions.length - 1 ? 16 : 8 }}>
+          <div key={qIdx} style={{ marginBottom: qIdx < questions.length - 1 ? 10 : 4 }}>
             {q.header && (
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>
                 {q.header}
               </div>
             )}
-            <div style={{ fontSize: 13, color: 'var(--text-primary)', marginBottom: 10, fontWeight: 500 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--text-primary)', marginBottom: 5, fontWeight: 500, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
               {q.question}
               {multi && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>(select multiple)</span>}
             </div>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-                gap: 6,
-              }}
-            >
+            {/* Single-column list: can't overflow at any width — minimal and
+                fully responsive without column-width math. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {q.options.map((opt, oIdx) => {
                 const selected = picked.includes(opt.label);
                 return (
@@ -241,8 +223,9 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                     style={{
                       display: 'flex',
                       alignItems: 'flex-start',
-                      gap: 8,
-                      padding: 8,
+                      gap: 7,
+                      padding: '4px 7px',
+                      minWidth: 0,
                       border: `1px solid ${selected ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
                       borderRadius: 'var(--radius-snug)',
                       backgroundColor: selected ? 'color-mix(in srgb, var(--accent-amber) 10%, transparent)' : 'transparent',
@@ -258,11 +241,26 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                       style={{ marginTop: 2, flexShrink: 0 }}
                     />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)' }}>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 500,
+                          color: 'var(--text-primary)',
+                          overflowWrap: 'anywhere',
+                        }}
+                      >
                         {opt.label}
                       </div>
                       {opt.description && (
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.35 }}>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: 'var(--text-secondary)',
+                            marginTop: 1,
+                            lineHeight: 1.3,
+                            overflowWrap: 'anywhere',
+                          }}
+                        >
                           {opt.description}
                         </div>
                       )}
@@ -276,9 +274,9 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
         );
       })}
 
-      <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
+      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
         <Button size="sm" variant="primary" onClick={submit} disabled={!allAnswered}>
-          Submit answer
+          Submit
         </Button>
         <div style={{ flex: 1 }} />
         <Button size="sm" variant="secondary" onClick={skip}>
@@ -304,16 +302,16 @@ export function PermissionBar({ sessionId }: PermissionBarProps = {}) {
       className="mt-scroll"
       style={{
         position: 'absolute',
-        left: 12,
-        right: 12,
-        bottom: 12,
-        padding: 12,
+        left: 6,
+        right: 6,
+        bottom: 6,
+        padding: 6,
         borderRadius: 'var(--radius-soft)',
         border: '1px solid var(--border-strong)',
         backgroundColor: 'var(--bg-sidebar)',
         boxShadow: 'none',
         zIndex: 10,
-        maxHeight: '60%',
+        maxHeight: '70%',
         overflowY: 'auto',
         animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
       }}

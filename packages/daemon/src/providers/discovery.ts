@@ -198,6 +198,68 @@ export async function discoverHermes(env: NodeJS.ProcessEnv): Promise<Discovered
   return models;
 }
 
+// === Grok Build ============================================================
+//
+// Grok exposes its model list through the ACP `session/new` response rather
+// than a standalone command, so there's no cheap discovery probe today. We try
+// `grok models --json` defensively (in case a future build adds it) and
+// otherwise resolve to `[]` so the seeded GROK_BASELINE shows through.
+
+export async function discoverGrok(env: NodeJS.ProcessEnv): Promise<DiscoveredModel[]> {
+  let stdout: string;
+  try {
+    stdout = await execStdout('grok', ['models', '--json'], env, 5000);
+  } catch {
+    return [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+
+  const raw: any[] = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray((parsed as any)?.models)
+      ? (parsed as any).models
+      : [];
+
+  const models: DiscoveredModel[] = raw
+    .filter((m: any) => m && typeof (m.id ?? m.modelId ?? m.slug) === 'string')
+    .map((m: any, idx: number) => {
+      const id = String(m.id ?? m.modelId ?? m.slug);
+      const rawLevels = Array.isArray(m.effortLevels)
+        ? m.effortLevels
+        : Array.isArray(m.supported_reasoning_levels)
+          ? m.supported_reasoning_levels
+          : [];
+      const effortLevels = rawLevels
+        .map((r: any) => clampEffort(typeof r === 'string' ? r : r?.effort))
+        .filter((x: EffortLevel | undefined): x is EffortLevel => !!x);
+      const supportsEffort =
+        typeof m.supportsEffort === 'boolean' ? m.supportsEffort : effortLevels.length > 0;
+      const defaultEffort = clampEffort(m.default_reasoning_level ?? m.defaultEffort);
+      return {
+        id,
+        displayName:
+          typeof m.name === 'string' && m.name
+            ? m.name
+            : typeof m.displayName === 'string' && m.displayName
+              ? m.displayName
+              : id,
+        description: typeof m.description === 'string' ? m.description : undefined,
+        ...(idx === 0 ? { isDefault: true } : {}),
+        supportsEffort,
+        ...(supportsEffort && effortLevels.length ? { effortLevels } : {}),
+        ...(defaultEffort ? { defaultEffort } : {}),
+      };
+    });
+
+  return models;
+}
+
 // === Claude ================================================================
 //
 // The Claude Agent SDK exposes the authoritative per-model metadata through

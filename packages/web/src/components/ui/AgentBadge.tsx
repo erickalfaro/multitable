@@ -18,6 +18,7 @@ const LABEL: Record<AgentProvider, string> = {
   codex: 'codex',
   copilot: 'copilot',
   hermes: 'hermes',
+  grok: 'grok',
 };
 
 const GLYPH: Record<AgentProvider, string> = {
@@ -25,6 +26,7 @@ const GLYPH: Record<AgentProvider, string> = {
   codex: 'X',
   copilot: 'G',
   hermes: 'H',
+  grok: 'K',
 };
 
 // Provider-distinct hue. Subtle in monochrome themes; the tint distinguishes
@@ -42,6 +44,9 @@ function tintFor(provider: AgentProvider): string {
     case 'hermes':
       // Subtle violet, distinct from amber/grey/blue. Hermes' brand colour.
       return 'var(--accent-violet, #a48cff)';
+    case 'grok':
+      // Subtle sky/cyan, distinct from amber/grey/blue/violet. xAI's accent.
+      return 'var(--accent-sky, #38bdf8)';
     default:
       return 'var(--text-secondary)';
   }

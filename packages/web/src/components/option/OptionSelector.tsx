@@ -56,6 +56,19 @@ export function OptionSelector() {
               wsClient.sendInput(currentOption.sessionId, `${i + 1}\r`);
               setOption(null);
             }}
+            // Let long options wrap instead of overflowing the viewport on
+            // small screens — the container already wraps rows (flexWrap), this
+            // wraps text within a single oversized option. Short options keep
+            // their pill height via minHeight.
+            style={{
+              maxWidth: '100%',
+              whiteSpace: 'normal',
+              height: 'auto',
+              minHeight: 24,
+              paddingTop: 3,
+              paddingBottom: 3,
+              textAlign: 'left',
+            }}
           >
             <span style={{ opacity: 0.7, marginRight: 4, fontVariantNumeric: 'tabular-nums' }}>
               {i + 1}.

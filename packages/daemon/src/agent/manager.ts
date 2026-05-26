@@ -8,6 +8,7 @@ import type {
 import type { ProcessState } from '../types.js';
 import { parseCodexThread, listCodexThreads } from '../transcripts/codexParser.js';
 import { parseHermesSession } from '../transcripts/hermesParser.js';
+import { parseGrokSession } from '../transcripts/grokParser.js';
 import type { PermissionManager } from '../hooks/permissionManager.js';
 import type { ElicitationManager } from '../hooks/elicitationManager.js';
 import { createAlert } from './alerts.js';
@@ -16,6 +17,7 @@ import { detectOptions } from '../hooks/optionDetector.js';
 import { CodexAdapter } from './providers/codex.js';
 import { ClaudeAdapter } from './providers/claude.js';
 import { HermesAdapter } from './providers/hermes.js';
+import { GrokAdapter } from './providers/grok.js';
 import { trackedTimeout, type TrackedTimer } from '../devLog.js';
 import type {
   AdapterCallbacks,
@@ -110,6 +112,7 @@ export class AgentSessionManager extends EventEmitter {
       claude: new ClaudeAdapter(permManager, elicitManager),
       codex: new CodexAdapter(),
       hermes: new HermesAdapter(permManager),
+      grok: new GrokAdapter(permManager),
     };
   }
 
@@ -238,6 +241,16 @@ export class AgentSessionManager extends EventEmitter {
         if (hydrated.length > 0) session.messages = hydrated;
       } catch (err) {
         console.error('[agent] hermes hydration failed for', session.id, err);
+      }
+    }
+    // Grok hydration from on-disk session updates log — Grok Build's ACP child
+    // is the source of truth (~/.grok/sessions/<enc-cwd>/<id>/updates.jsonl).
+    if (session.provider === 'grok' && session.agentSessionId) {
+      try {
+        const hydrated = parseGrokSession(session.agentSessionId, session.workingDir);
+        if (hydrated.length > 0) session.messages = hydrated;
+      } catch (err) {
+        console.error('[agent] grok hydration failed for', session.id, err);
       }
     }
     return session;
