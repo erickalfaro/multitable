@@ -6,7 +6,7 @@ allowed-tools: Read, Grep, Glob, Bash, Edit, Write
 
 # Grok Build (xAI) provider reference for MultiTable
 
-> **Status: forward-looking skill, adapter planned but not yet shipped.** Like the `github-copilot-sdk` skill once was, this folder is the authoritative knowledge base that the Grok Build adapter will be built against — see [`../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md`](../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md). Every wire fact here is **research-derived** (xAI docs + third-party ACP integrations) and tagged **`VERIFY`** where it must be confirmed against a running `grok agent stdio` before code relies on it. When the adapter lands, replace each `VERIFY` with a quote from our own transport/client/adapter code — that becomes the contract that matters for *us*.
+> **Status: SHIPPED.** The adapter is live: [`grok.ts`](../../../packages/daemon/src/agent/providers/grok.ts) + [`grok-acp/`](../../../packages/daemon/src/agent/providers/grok-acp/) + [`grokParser.ts`](../../../packages/daemon/src/transcripts/grokParser.ts), registered in `agent/manager.ts`. The wire contract was **verified against grok v0.2.2** via a handshake spike — see the resolution table in [`multitable/known-bugs.md`](multitable/known-bugs.md). Some early-draft guesses in this skill were wrong and have been corrected (modes are Claude's `PermissionMode` enum, not `code`/`plan`/`ask`; effort is native). A few `VERIFY` markers remain only for paths the spike didn't exercise (e.g. the real `session/request_permission` payload on a tool-using turn). Re-baseline after each `grok` upgrade — it's early beta. Design rationale: [`../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md`](../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md).
 
 There is **no pinned SDK**. Grok Build is not an npm package — it's xAI's official agent **binary** (`grok`) that MultiTable drives as a long-lived child over **line-delimited JSON-RPC 2.0 on stdio**, speaking the **Agent Client Protocol (ACP)** via the `grok agent stdio` subcommand. The version is whatever `grok` is on the operator's `PATH` (`grok --version`). Re-verify against a running `grok agent stdio` after any upstream Grok release — the CLI is in early beta and moves fast.
 
@@ -57,22 +57,30 @@ Need to STOP a turn mid-stream?
     Wire off ctrl.signal 'abort' in runTurn. (Same ACP primitive as any agent.)
 
 Need to RESUME a prior conversation?
-└── client.loadSession(agentSessionId, cwd) → ACP `session/load`. Grok then
-    REPLAYS history as session/update notifications — dedupe like the parser
-    describes. VERIFY the exact load RPC + replay behavior on a live binary.
+└── client.loadSession(agentSessionId, opts) → ACP `session/load`
+    (agentCapabilities.loadSession=true on 0.2.2). The adapter re-sends
+    model/permissionMode/effort on load. 500ms drain kept defensively in case
+    Grok replays history as session/update.
 
 Need cost in USD?
-└── NOT WIRED for v1. The `x.ai/billing` ACP extension exists but in grok 0.1.x
-    is TUI-only and returns -32601 over agent-stdio. capabilities.costUsd=false.
-    See reference/xai-auth.md (billing) + pitfalls.md §3.
+└── NOT WIRED. `x.ai/billing` is TUI-only / account-level, not per-turn USD.
+    capabilities.costUsd=false. BUT real token usage IS available in the
+    session/prompt response `_meta` (input/output/cachedRead/reasoning tokens)
+    → applyUsage. See reference/xai-auth.md.
 
 Need the agent to ASK the user a free-form question / MCP elicitation?
-└── VERIFY — assume unsupported over agent-stdio until proven. capabilities
-    userQuestion='unsupported', elicitation=false until a live channel is found.
+└── Not seen over agent-stdio. capabilities.userQuestion='unsupported',
+    elicitation=false. Don't invent a channel.
 
 Need to change reasoning depth?
-└── VERIFY whether grok-build-0.1 honors an effort knob over ACP. Until proven,
-    capabilities.thinkingEffort='unsupported' and the UI toggle is disabled.
+└── NATIVE. capabilities.thinkingEffort='native'. Grok takes --effort
+    low|medium|high|xhigh|max; the adapter passes `effort` on session/new
+    (NO /reasoning prefix — that's Hermes). See reference/models-and-effort.md.
+
+Need PLAN mode / a behavior mode?
+└── NATIVE. --permission-mode = Claude's enum (default/acceptEdits/auto/
+    dontAsk/bypassPermissions/plan). Forwarded as `permissionMode` on
+    session/new. capabilities.planMode='native'. See reference/modes.md.
 ```
 
 ## Four rules that get violated most (carried over from ACP; re-verify for Grok)
