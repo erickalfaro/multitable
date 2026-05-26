@@ -92,7 +92,7 @@ function Preview({ text }: { text: string }) {
           color: 'var(--text-muted)',
           marginTop: 5,
           paddingLeft: 9,
-          borderLeft: '2px solid color-mix(in srgb, var(--accent-amber) 55%, transparent)',
+          borderLeft: '2px solid var(--border-strong)',
           whiteSpace: 'pre-wrap',
           overflowWrap: 'anywhere',
           overflowY: 'auto',
@@ -264,7 +264,7 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                           {opt.description}
                         </div>
                       )}
-                      {opt.preview && selected && <Preview text={opt.preview} />}
+                      {opt.preview && <Preview text={opt.preview} />}
                     </div>
                   </label>
                 );
