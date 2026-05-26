@@ -229,7 +229,10 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                // `min(280px, 100%)` lets columns collapse to full width on
+                // narrow screens — a bare `minmax(280px, 1fr)` forces every
+                // column ≥280px and overflows (gets cut off) on phones.
+                gridTemplateColumns: 'repeat(auto-fill, minmax(min(280px, 100%), 1fr))',
                 gap: 6,
               }}
             >
@@ -258,11 +261,26 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                       style={{ marginTop: 2, flexShrink: 0 }}
                     />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)' }}>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 500,
+                          color: 'var(--text-primary)',
+                          overflowWrap: 'anywhere',
+                        }}
+                      >
                         {opt.label}
                       </div>
                       {opt.description && (
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.35 }}>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: 'var(--text-secondary)',
+                            marginTop: 2,
+                            lineHeight: 1.35,
+                            overflowWrap: 'anywhere',
+                          }}
+                        >
                           {opt.description}
                         </div>
                       )}
