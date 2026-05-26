@@ -196,6 +196,15 @@ export class HermesAdapter implements ProviderAdapter {
   // `/reasoning <level>` prefix is only emitted when the effort actually
   // changes (Hermes persists the level on the ACP session after it's set).
   private lastSentEffort = new Map<string, string | null>();
+  // Per-MT-session prior ACP `plan` snapshot, used to diff successive plan
+  // session/update notifications into synthetic Tasks-panel events. `turnSeq`
+  // namespaces task ids per turn so each turn's plan is a distinct row set
+  // (prior turns persist as completed history). `logged` gates a one-shot
+  // shape probe. Cleared in reset().
+  private planState = new Map<
+    string,
+    { turnSeq: number; entries: Array<{ status: string }>; logged: boolean }
+  >();
 
   constructor(permManager: PermissionManager, client?: HermesAcpClient) {
     this.permManager = permManager;
@@ -237,6 +246,7 @@ export class HermesAdapter implements ProviderAdapter {
     if (existing) this.acpToMt.delete(existing.hermesSessionId);
     this.sessions.delete(s.id);
     this.lastSentEffort.delete(s.id);
+    this.planState.delete(s.id);
   }
 
   /** Daemon shutdown hook. Closes every per-project acp child. */
@@ -308,6 +318,18 @@ export class HermesAdapter implements ProviderAdapter {
 
     // 3. Wire streaming. Subscribe BEFORE prompt so we can't miss early chunks.
     const buffers = makeBuffers();
+
+    // Open a fresh plan namespace for this turn: bump turnSeq and drop the
+    // prior turn's entry snapshot so this turn's plan is treated as all-new
+    // (its rows get distinct task ids; old rows stay as completed history).
+    const prevPlan = this.planState.get(s.id);
+    if (prevPlan) {
+      prevPlan.turnSeq += 1;
+      prevPlan.entries = [];
+    } else {
+      this.planState.set(s.id, { turnSeq: 0, entries: [], logged: false });
+    }
+
     const off = client.subscribe(hermesSessionId, (n) => {
       try {
         this.handleNotification(s, n, cb, buffers);
@@ -670,12 +692,65 @@ export class HermesAdapter implements ProviderAdapter {
         return;
       }
 
+      // ACP `plan`: Hermes maps todo-tool results here (Zed renders this as a
+      // task panel). Each entry is a plan step `{ content, status, priority? }`
+      // with status pending|in_progress|completed. We diff the full entry list
+      // against the prior snapshot and normalize into the Claude-shaped
+      // task_started/task_updated events the frontend reducer consumes.
+      case 'plan': {
+        const entries = Array.isArray(update.entries)
+          ? (update.entries as Array<Record<string, unknown>>)
+          : [];
+        let st = this.planState.get(s.id);
+        if (!st) {
+          st = { turnSeq: 0, entries: [], logged: false };
+          this.planState.set(s.id, st);
+        }
+        if (!st.logged) {
+          // One-shot shape probe: confirm the live ACP plan field names
+          // (content/status) before treating this normalization as final.
+          st.logged = true;
+          console.info('[hermes] plan update (shape probe)', JSON.stringify(update));
+        }
+        const turnSeq = st.turnSeq;
+        const prior = st.entries;
+        const next: Array<{ status: string }> = [];
+        entries.forEach((e, i) => {
+          const content =
+            typeof e.content === 'string' && e.content ? e.content : `Step ${i + 1}`;
+          const status = mapAcpPlanStatus(e.status);
+          const taskId = `hermes-plan-t${turnSeq}-${i}`;
+          next.push({ status });
+          const before = prior[i];
+          if (!before) {
+            cb.emitTaskEvent('task_started', {
+              task_id: taskId,
+              description: content,
+              task_type: 'plan',
+              skip_transcript: true,
+            });
+            if (status !== 'pending') {
+              cb.emitTaskEvent('task_updated', {
+                task_id: taskId,
+                patch: { status, description: content },
+              });
+            }
+          } else if (before.status !== status) {
+            cb.emitTaskEvent('task_updated', {
+              task_id: taskId,
+              patch: { status, description: content },
+            });
+          }
+        });
+        st.entries = next;
+        cb.bumpActivity();
+        return;
+      }
+
       // ACP also defines:
-      //   - plan: Hermes maps todo tool results here (Zed renders as task panel)
       //   - available_commands_update / config_option_update / current_mode_update
       //   - usage_update: per-turn usage refresh
       // None of these block the v1 chat surface; surface later as needed.
-      case 'plan':
       case 'available_commands_update':
       case 'config_option_update':
       case 'current_mode_update':
@@ -688,6 +763,15 @@ export class HermesAdapter implements ProviderAdapter {
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+// ACP plan-entry status → frontend TaskState. ACP uses pending|in_progress|
+// completed; the reducer's isTaskState accepts pending|running|completed (no
+// 'stopped' — which ACP plans never produce anyway).
+function mapAcpPlanStatus(s: unknown): 'pending' | 'running' | 'completed' {
+  if (s === 'in_progress') return 'running';
+  if (s === 'completed') return 'completed';
+  return 'pending';
 }
 
 // True if the toolCallId already exists as a tool_use Message in the session's

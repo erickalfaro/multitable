@@ -42,6 +42,22 @@ export class GitWatcher {
         '**/build/**',
         '**/.next/**',
         '**/.cache/**',
+        // Python virtualenvs + caches — site-packages can contain tens of
+        // thousands of files (e.g. playwright trace bundles) and blows past
+        // the inotify watcher limit (ENOSPC) on Linux.
+        '**/venv/**',
+        '**/.venv/**',
+        '**/env/**',
+        '**/__pycache__/**',
+        '**/.pytest_cache/**',
+        '**/.mypy_cache/**',
+        '**/.ruff_cache/**',
+        '**/.tox/**',
+        // Other language build artifacts.
+        '**/target/**',          // Rust / Java
+        '**/.gradle/**',
+        '**/.idea/**',
+        '**/.vscode/**',
         path.join(projectPath, '.git', 'objects', '**'),
         path.join(projectPath, '.git', 'logs', '**'),
         path.join(projectPath, '.git', 'lfs', '**'),
@@ -65,6 +81,20 @@ export class GitWatcher {
     watcher.on('unlink', debounced);
     watcher.on('addDir', debounced);
     watcher.on('unlinkDir', debounced);
+    // Swallow watcher errors (e.g. ENOSPC when inotify is exhausted) so they
+    // don't surface as unhandled rejections from chokidar's internals.
+    watcher.on('error', (err: unknown) => {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code === 'ENOSPC') {
+        console.warn(
+          `[git/watcher] inotify limit reached for ${projectPath}; ` +
+            'some files will not be watched. ' +
+            'Consider raising fs.inotify.max_user_watches.',
+        );
+        return;
+      }
+      console.warn(`[git/watcher] watcher error (${projectPath}):`, err);
+    });
 
     this.watchers.set(projectId, entry);
 

@@ -6,6 +6,7 @@ import type { RpcNotification } from './codex-app-server/index.js';
 import type { ThreadItem } from './codex-protocol/v2/ThreadItem.js';
 import type { TurnCompletedNotification } from './codex-protocol/v2/TurnCompletedNotification.js';
 import type { TurnStartedNotification } from './codex-protocol/v2/TurnStartedNotification.js';
+import type { TurnPlanUpdatedNotification } from './codex-protocol/v2/TurnPlanUpdatedNotification.js';
 import type { ThreadStartedNotification } from './codex-protocol/v2/ThreadStartedNotification.js';
 import type { ItemStartedNotification } from './codex-protocol/v2/ItemStartedNotification.js';
 import type { ItemCompletedNotification } from './codex-protocol/v2/ItemCompletedNotification.js';
@@ -166,6 +167,11 @@ export class CodexAdapter implements ProviderAdapter {
   // we have to rebuild the thread on mode flip.
   private threads = new Map<string, { threadId: string; mode: string }>();
   private turnStates = new Map<string, TurnState>();
+  // Per-MT-session prior plan snapshot for diffing turn/plan/updated
+  // notifications into synthetic Tasks-panel events. Re-namespaced per turnId
+  // so each turn's plan is a distinct row set (prior turns persist as
+  // completed history). Cleared in reset().
+  private planState = new Map<string, { turnId: string | null; steps: string[] }>();
 
   constructor(client?: CodexAppServerClient) {
     this.client = client ?? new CodexAppServerClient();
@@ -176,6 +182,7 @@ export class CodexAdapter implements ProviderAdapter {
     const state = this.turnStates.get(s.id);
     if (state?.reconcileTimer) clearTimeout(state.reconcileTimer);
     this.turnStates.delete(s.id);
+    this.planState.delete(s.id);
   }
 
   /**
@@ -579,6 +586,48 @@ export class CodexAdapter implements ProviderAdapter {
         return;
       }
 
+      case 'turn/plan/updated': {
+        const params = n.params as TurnPlanUpdatedNotification;
+        // Scope to the in-flight turn; ignore stragglers from other turns.
+        if (completion.turnId && params.turnId !== completion.turnId) return;
+        let st = this.planState.get(s.id);
+        if (!st || st.turnId !== params.turnId) {
+          st = { turnId: params.turnId, steps: [] };
+          this.planState.set(s.id, st);
+        }
+        const prior = st.steps;
+        const nextStatuses: string[] = [];
+        params.plan.forEach((p, i) => {
+          const status = mapCodexPlanStatus(p.status);
+          nextStatuses.push(status);
+          // turnId in the id so each turn's plan is a distinct task set.
+          const taskId = `codex-plan-${params.turnId}-${i}`;
+          const before = prior[i];
+          if (before === undefined) {
+            cb.emitTaskEvent('task_started', {
+              task_id: taskId,
+              description: p.step,
+              task_type: 'plan',
+              skip_transcript: true,
+            });
+            if (status !== 'pending') {
+              cb.emitTaskEvent('task_updated', {
+                task_id: taskId,
+                patch: { status, description: p.step },
+              });
+            }
+          } else if (before !== status) {
+            cb.emitTaskEvent('task_updated', {
+              task_id: taskId,
+              patch: { status, description: p.step },
+            });
+          }
+        });
+        st.steps = nextStatuses;
+        cb.bumpActivity();
+        return;
+      }
+
       case 'turn/completed': {
         const params = n.params as TurnCompletedNotification;
         if (!completion.turnId || params.turn.id !== completion.turnId) return;
@@ -931,6 +980,16 @@ export class CodexAdapter implements ProviderAdapter {
         return [];
     }
   }
+}
+
+// Codex plan-step status → frontend TaskState. The generated protocol type
+// (TurnPlanStepStatus) claims camelCase `inProgress`, but the real update_plan
+// wire payload uses snake_case `in_progress` — accept both so an in-progress
+// step doesn't silently fall through to `pending`.
+function mapCodexPlanStatus(s: unknown): 'pending' | 'running' | 'completed' {
+  if (s === 'inProgress' || s === 'in_progress') return 'running';
+  if (s === 'completed') return 'completed';
+  return 'pending';
 }
 
 function isToolThreadItem(item: ThreadItem): boolean {

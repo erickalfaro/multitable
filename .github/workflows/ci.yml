@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Manual dispatch for when GH Actions misses a push/pull_request event
+  # (it happens). Lets the rollup `ci` check be regenerated on demand from
+  # the Actions tab or via `gh workflow run CI --ref <branch>`.
+  workflow_dispatch:
 
 permissions:
   contents: read

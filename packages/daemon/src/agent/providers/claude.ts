@@ -831,6 +831,15 @@ export class ClaudeAdapter implements ProviderAdapter {
 
   private handleTaskEvent(subtype: string, msg: unknown, cb: AdapterCallbacks): void {
     const m = (msg ?? {}) as Record<string, unknown>;
+
+    // Forward all four subtypes verbatim — the SDK message fields
+    // (task_id, description, patch, usage, status, summary, output_file, …)
+    // already match the frontend `applyTaskEvent` reducer, which ignores
+    // extras (uuid, session_id, tool_use_id), so a raw passthrough is safe.
+    cb.emitTaskEvent(subtype, m);
+
+    // Preserve the existing failure/stop alert: the Tasks panel surfaces the
+    // row, but a failed/stopped subagent should still raise a toast/chime.
     if (subtype !== 'task_notification') return;
     const status = typeof m.status === 'string' ? m.status : '';
     const summary = typeof m.summary === 'string' ? m.summary : undefined;
