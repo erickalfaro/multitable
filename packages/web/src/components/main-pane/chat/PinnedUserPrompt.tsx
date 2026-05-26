@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 import { useChatScroller } from './ChatScroller';
+import { useIsMobile } from '../../../lib/useIsMobile';
 
 interface PinnedMessage {
   id: string;
@@ -31,6 +32,7 @@ interface Props {
 export function PinnedUserPrompt({ userMessages }: Props) {
   const { scrollRoot, scrollToElement } = useChatScroller();
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     if (!scrollRoot) {
@@ -119,13 +121,13 @@ export function PinnedUserPrompt({ userMessages }: Props) {
         style={{
           display: 'flex',
           alignItems: 'flex-start',
-          gap: 10,
-          padding: '10px 16px',
+          gap: isMobile ? 6 : 10,
+          padding: isMobile ? '6px 12px' : '10px 16px',
           backgroundColor: 'var(--bg-elevated)',
           color: 'var(--text-primary)',
           borderBottom: '1px solid var(--border)',
           boxShadow: 'var(--shadow-elevated-message)',
-          fontSize: 12,
+          fontSize: isMobile ? 11.5 : 12,
           lineHeight: 1.45,
           cursor: 'pointer',
         }}
@@ -144,7 +146,14 @@ export function PinnedUserPrompt({ userMessages }: Props) {
         >
           {current.text}
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: isMobile ? 'row' : 'column',
+            gap: 4,
+            flexShrink: 0,
+          }}
+        >
           <NavButton
             disabled={!hasPrev}
             onClick={jumpTo(currentIndex - 1)}

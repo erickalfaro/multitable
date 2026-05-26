@@ -1153,38 +1153,34 @@ function App() {
         </>
       )}
 
-      {/* Mobile detail-panel overlay — on desktop the SessionDetailPanel lives
-          in the right PanelGroup column, but the mobile branch below renders
-          only <MainPane />. Without this, SessionHeaderBar's "Toggle detail
-          panel" button flips `detailPanelOpen` but nothing ever mounts the
-          panel. Render it as a right-anchored drawer instead. */}
+      {/* Mobile detail-panel — on desktop the SessionDetailPanel lives in the
+          right PanelGroup column, but the mobile branch below renders only
+          <MainPane />. Without this, SessionHeaderBar's "Toggle detail panel"
+          button flips `detailPanelOpen` but nothing ever mounts the panel.
+          On mobile it takes over the full screen with a back button (passed
+          via isMobile/onClose) rather than a cramped side drawer. */}
       {isMobile && detailPanelOpen && selectedSession && (
-        <>
-          <div
-            onClick={() => setDetailPanelOpen(false)}
-            style={{
-              position: 'fixed',
-              inset: 0,
-              backgroundColor: 'var(--bg-overlay)',
-              backdropFilter: 'blur(6px) saturate(1.1)',
-              WebkitBackdropFilter: 'blur(6px) saturate(1.1)',
-              zIndex: 900,
-              animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
-            }}
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 901,
+            width: '100%',
+            height: '100%',
+            backgroundColor: 'var(--bg-primary)',
+            animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <SessionDetailPanel
+            key={selectedSession.id}
+            session={selectedSession}
+            isMobile
+            onClose={() => setDetailPanelOpen(false)}
           />
-          <div
-            style={{
-              position: 'fixed', top: 0, right: 0, bottom: 0,
-              width: 'min(440px, 90vw)',
-              zIndex: 901, backgroundColor: 'var(--bg-primary)',
-              boxShadow: 'var(--shadow-xl)',
-              animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
-              display: 'flex', flexDirection: 'column', overflow: 'hidden',
-            }}
-          >
-            <SessionDetailPanel key={selectedSession.id} session={selectedSession} />
-          </div>
-        </>
+        </div>
       )}
 
       {/* Main content area */}

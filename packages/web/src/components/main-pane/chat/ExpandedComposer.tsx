@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, Paperclip, X } from 'lucide-react';
+import { Check, Paperclip, Save, X } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Streamdown } from 'streamdown';
 import 'streamdown/styles.css';
 
 import { Modal } from '../../ui/Modal';
+import { api } from '../../../lib/api';
+import { clearDraft, firstLineTitle } from '../../../lib/composerDrafts';
 import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
 import { buildCmTheme } from '../../../lib/cm-theme';
@@ -119,6 +121,7 @@ export function ExpandedComposer({
   const [text, setText] = useState(initialText);
   const [acceptHover, setAcceptHover] = useState(false);
   const [attachHover, setAttachHover] = useState(false);
+  const [saveHover, setSaveHover] = useState(false);
 
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
@@ -145,6 +148,36 @@ export function ExpandedComposer({
     const t = view ? view.state.doc.toString() : text;
     onCloseRef.current(t);
   }, [text]);
+
+  // Save the draft as a project-scoped note, then clear and close back to an
+  // empty inline composer (this modal is a drafting surface only — all exits
+  // funnel through onClose). Mirrors the inline composer's Save behavior.
+  const doSaveExpanded = useCallback(() => {
+    const view = viewRef.current;
+    const raw = view ? view.state.doc.toString() : text;
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const live = useAppStore.getState();
+    const pid = projectIdRef.current;
+    const originId = live.composerOriginNoteBySession[processId];
+    const payload = { title: firstLineTitle(trimmed), content: trimmed };
+    const request = originId
+      ? api.notes.update(originId, payload)
+      : api.notes.create({ projectId: pid, scope: 'project', ...payload });
+    request
+      .then(() => {
+        live.bumpNotesVersion(pid);
+        toast.success(originId ? 'Prompt updated' : 'Prompt saved');
+      })
+      .catch((err) => toast.error(`Save failed: ${err?.message ?? err}`));
+    if (view) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '' } });
+    }
+    setText('');
+    clearDraft(processId);
+    live.clearComposerOriginNote(processId);
+    onCloseRef.current('');
+  }, [text, processId]);
 
   // Mount CM once on modal open. We DO NOT include `tab` in deps — the editor
   // div stays in the tree across tab switches (display: none on the wrapper),
@@ -359,6 +392,34 @@ export function ExpandedComposer({
         }}
       >
         <Paperclip size={14} />
+      </button>
+      <button
+        type="button"
+        onClick={doSaveExpanded}
+        disabled={!text.trim()}
+        onMouseEnter={() => setSaveHover(true)}
+        onMouseLeave={() => setSaveHover(false)}
+        title="Save as prompt note"
+        aria-label="Save as prompt note"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 14px',
+          borderRadius: 'var(--radius-snug)',
+          border: '1px solid var(--border)',
+          background: text.trim() && saveHover ? 'var(--bg-hover)' : 'transparent',
+          color: text.trim() ? 'var(--text-secondary)' : 'var(--text-faint)',
+          cursor: text.trim() ? 'pointer' : 'not-allowed',
+          fontSize: 12,
+          fontWeight: 500,
+          fontFamily: 'inherit',
+          transition:
+            'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+        }}
+      >
+        <Save size={13} />
+        Save
       </button>
       <button
         type="button"

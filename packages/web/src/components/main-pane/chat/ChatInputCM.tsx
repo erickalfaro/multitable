@@ -1,5 +1,14 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Paperclip, X, Clock, Square, Maximize2, File as FileIcon } from 'lucide-react';
+import {
+  ArrowUp,
+  Paperclip,
+  X,
+  Clock,
+  Square,
+  Maximize2,
+  File as FileIcon,
+  Save,
+} from 'lucide-react';
 
 import { ModeBadge } from '../ModeBadge';
 import { ExpandedComposer, type ImageAttachment } from './ExpandedComposer';
@@ -13,6 +22,7 @@ const EMPTY_FILES: string[] = [];
 import { toast } from 'react-hot-toast';
 import { wsClient } from '../../../lib/ws';
 import { api } from '../../../lib/api';
+import { modeToneColor, resolveModeTone } from '../../../lib/modeTone';
 import type { ProcessState } from '../../../lib/types';
 import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
@@ -26,6 +36,7 @@ import {
 import { uploadAttachment, quotePath } from '../../../lib/attachments';
 import {
   clearDraft,
+  firstLineTitle,
   flushDraft,
   loadDraft,
   saveDraft,
@@ -132,6 +143,7 @@ export const ChatInputCM = memo(function ChatInputCM({
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onSendRef = useRef<() => boolean>(() => false);
+  const onSaveRef = useRef<() => void>(() => {});
   const disabledRef = useRef(false);
 
   const [hasText, setHasText] = useState(false);
@@ -202,9 +214,18 @@ export const ChatInputCM = memo(function ChatInputCM({
   const toggleSelectedFile = useAppStore((s) => s.toggleSelectedFile);
   const selectedFilesRef = useRef(selectedFiles);
   selectedFilesRef.current = selectedFiles;
+  // Recall bridge: the Prompt Builder tab pushes a saved note's content here so
+  // it can be loaded into this composer for editing.
+  const recall = useAppStore((s) => s.composerRecallBySession[processId]);
+  const consumeComposerRecall = useAppStore((s) => s.consumeComposerRecall);
   // Live session for the mode dropdown. ModeBadge self-hides when the
   // adapter only supports one mode, so it's safe to render unconditionally.
   const session = useAppStore((s) => s.sessions[processId]);
+
+  // Send button reflects the active behavior's risk tier so the current posture
+  // is obvious at a glance (green = safe, amber = ask-first, orange = elevated,
+  // red = danger). Falls back to amber when no tone is declared.
+  const sendAccent = modeToneColor(resolveModeTone(session));
 
   // On mobile, the model chip + mode/effort controls move up to the
   // SessionHeaderBar (below the title) to free vertical space in the composer.
@@ -400,6 +421,42 @@ export const ChatInputCM = memo(function ChatInputCM({
     };
     onSendRef.current = doSend;
 
+    // Save the current composer text as a project-scoped note (a "parked"
+    // prompt the user can recall later from the Prompt Builder tab), then clear
+    // the composer like the Send path does. Reuses the existing notes API — no
+    // new persistence. Clears optimistically; the toast reports the real result.
+    //
+    // If the text was loaded from an existing note (origin tracked in the store),
+    // Save overwrites that note instead of creating a duplicate.
+    const doSave = (): void => {
+      const view = viewRef.current;
+      if (!view) return;
+      const text = view.state.doc.toString().trim();
+      if (!text) return;
+      const live = useAppStore.getState();
+      const pid = projectIdRef.current;
+      const originId = live.composerOriginNoteBySession[processId];
+      const payload = { title: firstLineTitle(text), content: text };
+      const request = originId
+        ? api.notes.update(originId, payload)
+        : api.notes.create({ projectId: pid, scope: 'project', ...payload });
+      request
+        .then(() => {
+          live.bumpNotesVersion(pid);
+          toast.success(originId ? 'Prompt updated' : 'Prompt saved');
+        })
+        .catch((err) => {
+          toast.error(`Save failed: ${err?.message ?? err}`);
+        });
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: '' },
+      });
+      clearImageAttachments();
+      clearDraft(processId);
+      live.clearComposerOriginNote(processId);
+    };
+    onSaveRef.current = doSave;
+
     const uploadFile = async (file: File) => {
       if (!file.type.startsWith('image/')) return false;
       const id = toast.loading(`Uploading ${file.name || 'image'}…`);
@@ -515,6 +572,11 @@ export const ChatInputCM = memo(function ChatInputCM({
         const doc = vu.state.doc.toString();
         setHasText(doc.length > 0);
         saveDraft(processId, doc);
+        // Once the composer is emptied, the text no longer represents the note
+        // it was loaded from — drop the origin so the next Save creates fresh.
+        if (doc.length === 0) {
+          useAppStore.getState().clearComposerOriginNote(processId);
+        }
       }
     });
 
@@ -664,6 +726,25 @@ export const ChatInputCM = memo(function ChatInputCM({
     });
   }, [disabled]);
 
+  // Recall bridge: when the Prompt Builder tab requests a recall, replace the
+  // editor doc with the note's content, move the cursor to the end, focus, and
+  // consume the request so it doesn't re-apply on unrelated re-renders. The
+  // `recall` object identity changes on every request (nonce), so repeated
+  // recalls of the same text still fire.
+  useEffect(() => {
+    if (!recall) return;
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: recall.text },
+      selection: { anchor: recall.text.length },
+    });
+    setHasText(recall.text.length > 0);
+    saveDraft(processId, recall.text);
+    view.focus();
+    consumeComposerRecall(processId);
+  }, [recall, processId, consumeComposerRecall]);
+
   // Global Cmd/Ctrl+K → focus the composer.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -717,6 +798,10 @@ export const ChatInputCM = memo(function ChatInputCM({
   void detectLangFromFilename;
 
   const canSend = hasText && !disabled;
+  // Save gates on having text only — it's independent of send/queue state, so
+  // it stays enabled even while a turn is in flight.
+  const canSave = hasText && !disabled;
+  const [saveHover, setSaveHover] = useState(false);
 
   return (
     <div
@@ -978,7 +1063,34 @@ export const ChatInputCM = memo(function ChatInputCM({
             {session && !isMobile && <ModeBadge session={session} />}
           </div>
 
-          {active ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => onSaveRef.current()}
+              disabled={!canSave}
+              onMouseEnter={() => setSaveHover(true)}
+              onMouseLeave={() => setSaveHover(false)}
+              title={canSave ? 'Save as prompt note' : 'Type a message to save'}
+              aria-label="Save as prompt note"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 28,
+                height: 28,
+                borderRadius: 'var(--radius-snug)',
+                border: 'none',
+                backgroundColor: canSave && saveHover ? 'var(--bg-hover)' : 'transparent',
+                color: canSave ? 'var(--text-muted)' : 'var(--text-faint)',
+                cursor: canSave ? 'pointer' : 'not-allowed',
+                flexShrink: 0,
+                transition:
+                  'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+              }}
+            >
+              <Save size={14} />
+            </button>
+            {active ? (
             // Agent is mid-turn → the button at the send slot becomes Stop.
             // Click aborts the in-flight turn via /api/sessions/:id/stop, which
             // calls agentManager.abortTurn → ctrl.abort() → the SDK iterator
@@ -1036,26 +1148,26 @@ export const ChatInputCM = memo(function ChatInputCM({
                 width: 28,
                 height: 28,
                 borderRadius: 'var(--radius-snug)',
-                border: canSend ? 'none' : '1px solid var(--border)',
-                // Filled affordance: when there's text to send the button reads
-                // as a primary action (light pill on dark, dark pill on light).
-                // When idle, falls back to a hairline outline so it doesn't
-                // dominate the empty state.
-                backgroundColor: canSend
-                  ? sendHover
-                    ? 'var(--text-secondary)'
-                    : 'var(--text-primary)'
-                  : 'transparent',
-                color: canSend ? 'var(--bg-elevated)' : 'var(--text-faint)',
+                border: 'none',
+                // Filled affordance, always tinted by the active behavior's risk
+                // tier (see sendAccent). Hover darkens the accent slightly. When
+                // there's nothing to send the same colored pill is dimmed via
+                // opacity to read as disabled rather than dropping the color.
+                backgroundColor: canSend && sendHover
+                  ? `color-mix(in srgb, ${sendAccent} 86%, black)`
+                  : sendAccent,
+                color: 'var(--bg-elevated)',
+                opacity: canSend ? 1 : 0.4,
                 cursor: canSend ? 'pointer' : 'not-allowed',
                 flexShrink: 0,
                 transition:
-                  'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
+                  'background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out)',
               }}
             >
               <ArrowUp size={15} strokeWidth={2.4} />
             </button>
           )}
+          </div>
         </div>
       </div>
 

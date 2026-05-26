@@ -22,10 +22,15 @@ export interface DiscoveredModel {
 // native SDK string the adapter declared (Claude `PermissionMode`, Codex
 // `SandboxMode`, etc.) — UI renders it verbatim, API/store passes it back
 // to the adapter unchanged. There is no MultiTable-side translation layer.
+// Risk tier of a mode — purely a UI presentation hint, mirrors the daemon's
+// ModeTone. Drives the color of the behavior badge marker + the send button.
+export type ModeTone = 'safe' | 'standard' | 'elevated' | 'danger';
+
 export interface ModeOption {
   value: string;
   label: string;
   description: string;
+  tone?: ModeTone;
 }
 
 // Cross-provider reasoning-effort level. Mirrors daemon's ThinkingEffort and
