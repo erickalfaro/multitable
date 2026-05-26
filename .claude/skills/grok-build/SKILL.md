@@ -1,0 +1,130 @@
+---
+name: grok-build
+description: Authoritative reference for working on MultiTable's Grok Build (xAI) provider, driven by `grok agent stdio` over line-delimited JSON-RPC (Agent Client Protocol). Trigger when the user mentions Grok Build, the Grok adapter, `grok agent stdio`, GrokAdapter, grok-build-0.1, ACP for Grok, `~/.grok/`, the `code`/`plan`/`ask` modes, `--mode plan`, `x.ai/billing`, the SuperGrok/SuperHeavy subscription, `GROK_CODE_XAI_API_KEY`, or modifying anything under `packages/daemon/src/agent/providers/grok.ts`, `packages/daemon/src/agent/providers/grok-acp/`, or `packages/daemon/src/transcripts/grokParser.ts`.
+allowed-tools: Read, Grep, Glob, Bash, Edit, Write
+---
+
+# Grok Build (xAI) provider reference for MultiTable
+
+> **Status: forward-looking skill, adapter planned but not yet shipped.** Like the `github-copilot-sdk` skill once was, this folder is the authoritative knowledge base that the Grok Build adapter will be built against — see [`../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md`](../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md). Every wire fact here is **research-derived** (xAI docs + third-party ACP integrations) and tagged **`VERIFY`** where it must be confirmed against a running `grok agent stdio` before code relies on it. When the adapter lands, replace each `VERIFY` with a quote from our own transport/client/adapter code — that becomes the contract that matters for *us*.
+
+There is **no pinned SDK**. Grok Build is not an npm package — it's xAI's official agent **binary** (`grok`) that MultiTable drives as a long-lived child over **line-delimited JSON-RPC 2.0 on stdio**, speaking the **Agent Client Protocol (ACP)** via the `grok agent stdio` subcommand. The version is whatever `grok` is on the operator's `PATH` (`grok --version`). Re-verify against a running `grok agent stdio` after any upstream Grok release — the CLI is in early beta and moves fast.
+
+This skill is **strictly Grok-Build-only**. Do **not** import Claude Agent SDK concepts (`query()`, `canUseTool` as an SDK callback, `onElicitation`, SDK `hooks`, `permissionMode`, `AskUserQuestion`), Codex concepts (`Thread`, `runStreamed`, `sandboxMode`, the cumulative-text rule), **or Hermes specifics** (`hermes acp`, the bwrap jail, `HERMES_INFERENCE_PROVIDER`, `/reasoning` prefix, `~/.hermes/`) into Grok code or reasoning. Grok Build and Hermes *both* speak ACP, but they are **separate providers with separate wire details** — keeping them isolated is the explicit design value here (see [[feedback_separate_sdks]]). For Claude see [`../claude-agent-sdk/SKILL.md`](../claude-agent-sdk/SKILL.md); for Codex [`../openai-codex-sdk/SKILL.md`](../openai-codex-sdk/SKILL.md); for Hermes (the *other* ACP/xAI agent) [`../hermes-grok/SKILL.md`](../hermes-grok/SKILL.md) — read that one only to understand what NOT to copy.
+
+## The one fact that shapes everything
+
+Grok Build is an **ACP agent behind a long-lived stdio child** spawned via **`grok agent stdio`**, and the integration is **architecturally a sibling of the Hermes adapter** — but a *separate* `grok.ts` + `grok-acp/` + `grokParser.ts`, never shared code.
+
+The second fact that shapes the adapter: **Grok's ACP parser does not unescape `\/` in JSON-RPC method names.** A method sent as `"session\/prompt"` (the default `JSON.stringify` escaping in some serializers) arrives at Grok literally as `session\/prompt`, fails to match `session/prompt`, and the request times out (~12 s). The transport **must** post-process every outbound frame to rewrite `\/` → `/` in the `method` field. This is the single most likely "it just hangs" bug and is documented in [`pitfalls.md`](pitfalls.md) §1.
+
+## Quick task → file map
+
+| What you want to do | Read |
+|---|---|
+| Understand the ACP wire protocol (initialize / authenticate / session lifecycle / `session/update` kinds) as Grok speaks it | [`reference/acp-protocol.md`](reference/acp-protocol.md) |
+| Wire or debug Grok auth (`~/.grok/auth.json`, OAuth login, `GROK_CODE_XAI_API_KEY` fallback, auth-state alerts) | [`reference/xai-auth.md`](reference/xai-auth.md) |
+| Map Grok's `code`/`plan`/`ask` modes onto `ProviderCapabilities.modes` and ACP set-mode | [`reference/modes.md`](reference/modes.md) |
+| Know the model (`grok-build-0.1`), `/model` switching, and whether a reasoning-effort knob exists | [`reference/models-and-effort.md`](reference/models-and-effort.md) |
+| Know which Grok slash-commands matter to us (and which are TUI-only / out of scope) | [`reference/slash-commands.md`](reference/slash-commands.md) |
+| Get oriented in the planned `agent/providers/grok.ts` + the adapter contract | [`multitable/adapter-architecture.md`](multitable/adapter-architecture.md) |
+| Wire / debug the permission prompt (approvals silently denied, etc.) | [`multitable/permission-wiring.md`](multitable/permission-wiring.md) |
+| Parse `~/.grok/` session history into `Message[]` and dedupe replay | [`multitable/persistence-and-parser.md`](multitable/persistence-and-parser.md) |
+| Scan version-pinned quirks before a PR | [`multitable/known-bugs.md`](multitable/known-bugs.md) + [`pitfalls.md`](pitfalls.md) |
+
+## Decision tree: which lever to pull?
+
+```
+Need to BLOCK / approve a tool call?
+└── Grok sends `session/request_permission` (a JSON-RPC SERVER-request) over ACP.
+    GrokAdapter.handleAcpPermission → PermissionManager.requestFromSdk → UI prompt.
+    Return a SELECTED optionId or CANCELLED, in ACP's NESTED outcome shape
+    { outcome: { outcome: 'selected', optionId } }. See permission-wiring.md.
+    NOTE: like every ACP agent, Grok decides for itself WHICH calls need
+    approval — `code` mode runs many tools with no prompt. The host cannot
+    force-prompt every call. See pitfalls.md §6.
+
+Need PLAN mode?
+└── Grok has a REAL plan mode (`--mode plan` / `/plan`: shows diffs, requires
+    approval) — unlike Hermes' advisory one. Whether it is reachable over the
+    agent-stdio surface (an ACP set-mode RPC / session/new param) is VERIFY.
+    If yes → capabilities.planMode = 'native'; if TUI-only → 'simulated'.
+    See reference/modes.md.
+
+Need to STOP a turn mid-stream?
+└── client.cancel(grokSessionId) sends the `session/cancel` NOTIFICATION
+    (no response). The pending `session/prompt` resolves stopReason:'cancelled'.
+    Wire off ctrl.signal 'abort' in runTurn. (Same ACP primitive as any agent.)
+
+Need to RESUME a prior conversation?
+└── client.loadSession(agentSessionId, cwd) → ACP `session/load`. Grok then
+    REPLAYS history as session/update notifications — dedupe like the parser
+    describes. VERIFY the exact load RPC + replay behavior on a live binary.
+
+Need cost in USD?
+└── NOT WIRED for v1. The `x.ai/billing` ACP extension exists but in grok 0.1.x
+    is TUI-only and returns -32601 over agent-stdio. capabilities.costUsd=false.
+    See reference/xai-auth.md (billing) + pitfalls.md §3.
+
+Need the agent to ASK the user a free-form question / MCP elicitation?
+└── VERIFY — assume unsupported over agent-stdio until proven. capabilities
+    userQuestion='unsupported', elicitation=false until a live channel is found.
+
+Need to change reasoning depth?
+└── VERIFY whether grok-build-0.1 honors an effort knob over ACP. Until proven,
+    capabilities.thinkingEffort='unsupported' and the UI toggle is disabled.
+```
+
+## Four rules that get violated most (carried over from ACP; re-verify for Grok)
+
+1. **ACP deltas are ADDITIVE; the StreamBuffer boundary wants CUMULATIVE.** `agent_message_chunk` / `agent_thought_chunk` each carry a *fresh piece* of text to append (per the ACP spec). The adapter must accumulate into `buffers.assistantText` / `buffers.reasoningText` and emit the **running total** via `cb.emitAssistantDelta(buffers.assistantText)`. This is the *opposite* of Codex's "payload is already cumulative, replace don't append" rule. Append to the buffer, emit the buffer. `capabilities.streamingDeltaSemantics = 'additive'`.
+
+2. **The permission response is a NESTED literal.** Return `{ outcome: { outcome: 'selected', optionId } }` or `{ outcome: { outcome: 'cancelled' } }`. The *inner* `outcome` string is the ACP discriminator — **not** `'allowed'`/`'denied'`, **not** a flat `{ outcome: 'selected' }`. Returning the wrong shape can silently coerce every approval to a deny. See [`multitable/permission-wiring.md`](multitable/permission-wiring.md).
+
+3. **Rewrite `\/` → `/` in outbound method names.** Grok's ACP parser does not unescape it. A serializer that escapes forward slashes will make every request time out. The transport post-processes each frame's `method`. See [`pitfalls.md`](pitfalls.md) §1.
+
+4. **stdout is JSON-RPC only; logs go to stderr.** Drop non-JSON stdout lines with a warning; never parse stderr for state; never write non-JSON to the child's stdin.
+
+## Three things to confirm Grok does NOT have before wiring them
+
+These are **`VERIFY` / assumed-absent for v1** — don't build them speculatively:
+
+- **No per-turn USD cost surface over agent-stdio** (`x.ai/billing` is TUI-only in 0.1.x → `-32601`). `capabilities.costUsd = false`; `applyUsage({ …, costUsd: 0 })`. Don't derive USD from tokens even though grok-build-0.1 pricing is published.
+- **No confirmed host-brokered filesystem / terminal.** Advertise `clientCapabilities: { fs: { readTextFile:false, writeTextFile:false }, terminal:false }` and defensively reject `fs/*` / `terminal/*` server-requests — Grok runs its own tools under its own workspace-trust/sandbox model.
+- **No confirmed elicitation, mid-turn input, or per-session BYOK over agent-stdio.** Auth is machine-wide (`~/.grok/auth.json`) or a process-env API key. Grok's native hooks/skills/subagents/plugins run **inside** Grok, not host-brokered to us.
+
+If a live `grok agent stdio` proves any of these *is* reachable, flip the capability and wire it — but verify first, don't assume parity with the TUI feature list.
+
+## Ground-truth files (once the adapter exists)
+
+When in doubt about behavior, these will be authoritative (in this order):
+
+1. `packages/daemon/src/agent/providers/grok-acp/transport.ts` — the JSON-RPC wire (frame kinds, id correlation, server-request handling, the `\/` shim). *The* contract for what we send/receive.
+2. `packages/daemon/src/agent/providers/grok-acp/client.ts` — spawn / `initialize` / `authenticate` / session methods / permission fan-out / the `AcpPermissionOutcome` shape.
+3. `packages/daemon/src/agent/providers/grok.ts` — the adapter; its top-of-file comment block should capture every constraint that's bitten us.
+4. `packages/daemon/src/transcripts/grokParser.ts` — `~/.grok/<sessions path>` → `Message[]`; the format we trust as "what really happened."
+5. A locally running `grok agent stdio` (`grok --version`, `grok inspect`). xAI's own CLI is the upstream source of truth.
+6. xAI docs: [Introducing Grok Build](https://x.ai/news/grok-build-cli), [Grok Build CLI](https://x.ai/cli), [xAI Docs — enterprise](https://docs.x.ai/build/enterprise). The Agent Client Protocol spec: [agentclientprotocol.com](https://agentclientprotocol.com/get-started/introduction). Docs lag the binary — cross-check against a running `grok agent stdio`.
+
+## Where this provider will live in our codebase
+
+```
+packages/daemon/src/
+├── agent/
+│   ├── manager.ts                       ← will register `grok: new GrokAdapter(permManager)`
+│   ├── providers/
+│   │   ├── grok.ts                      ← THE adapter: cwd pool, turn loop, notification
+│   │   │                                  router, permission bridge, mode plumbing
+│   │   ├── grok-acp/
+│   │   │   ├── transport.ts             ← line-delimited JSON-RPC 2.0 over child stdio + \/ shim
+│   │   │   ├── client.ts                ← spawn/init/auth, session methods, perm fan-out
+│   │   │   └── index.ts                 ← re-exports
+│   │   └── types.ts                     ← ProviderAdapter / AdapterCallbacks / Capabilities (add 'grok')
+│   └── types.ts                         ← AgentProvider = …| 'grok'
+├── transcripts/
+│   └── grokParser.ts                    ← ~/.grok/<sessions> → Message[]
+└── api/
+    └── sessions.ts                      ← re-hydrate via parseGrokSession
+```
+
+The manager is provider-agnostic. Grok-specific behavior belongs **only** in `agent/providers/grok.ts`, `agent/providers/grok-acp/*`, and (for parsing) `transcripts/grokParser.ts`. If you're editing the manager for Grok behavior, the change almost certainly belongs in the `AdapterCallbacks` bag instead. See the full file-by-file plan in [`../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md`](../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md).
