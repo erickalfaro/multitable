@@ -84,10 +84,11 @@ function Preview({ text }: { text: string }) {
       <pre
         className="mt-scroll"
         style={{
-          fontSize: 10,
+          fontSize: 9.5,
+          lineHeight: 1.3,
           color: 'var(--text-muted)',
-          margin: '4px 0 0',
-          padding: '4px 6px',
+          margin: '3px 0 0',
+          padding: '3px 6px',
           backgroundColor: 'var(--bg-sidebar)',
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           // pre-wrap (not pre) so long preview lines wrap instead of forcing
@@ -95,7 +96,7 @@ function Preview({ text }: { text: string }) {
           whiteSpace: 'pre-wrap',
           overflowWrap: 'anywhere',
           overflowY: 'auto',
-          maxHeight: 72,
+          maxHeight: 52,
         }}
       >
         {text}
@@ -180,18 +181,18 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
     <div
       style={{
         backgroundColor: 'var(--bg-elevated)',
-        padding: '8px 10px',
-        marginBottom: 8,
+        padding: '6px 8px',
+        marginBottom: 6,
       }}
     >
       <div
         style={{
-          fontSize: 9.5,
+          fontSize: 9,
           color: 'var(--accent-amber)',
           textTransform: 'uppercase',
-          letterSpacing: '0.18em',
+          letterSpacing: '0.16em',
           fontWeight: 500,
-          marginBottom: 8,
+          marginBottom: 4,
         }}
       >
         question
@@ -201,19 +202,19 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
         const multi = !!q.multiSelect;
         const picked = selections[qIdx] ?? [];
         return (
-          <div key={qIdx} style={{ marginBottom: qIdx < questions.length - 1 ? 12 : 6 }}>
+          <div key={qIdx} style={{ marginBottom: qIdx < questions.length - 1 ? 10 : 4 }}>
             {q.header && (
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>
                 {q.header}
               </div>
             )}
-            <div style={{ fontSize: 13, color: 'var(--text-primary)', marginBottom: 6, fontWeight: 500, overflowWrap: 'anywhere' }}>
+            <div style={{ fontSize: 12.5, color: 'var(--text-primary)', marginBottom: 5, fontWeight: 500, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
               {q.question}
               {multi && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>(select multiple)</span>}
             </div>
             {/* Single-column list: can't overflow at any width — minimal and
                 fully responsive without column-width math. */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {q.options.map((opt, oIdx) => {
                 const selected = picked.includes(opt.label);
                 return (
@@ -222,8 +223,8 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                     style={{
                       display: 'flex',
                       alignItems: 'flex-start',
-                      gap: 8,
-                      padding: '6px 8px',
+                      gap: 7,
+                      padding: '4px 7px',
                       minWidth: 0,
                       border: `1px solid ${selected ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
                       borderRadius: 'var(--radius-snug)',
@@ -255,8 +256,8 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                           style={{
                             fontSize: 11,
                             color: 'var(--text-secondary)',
-                            marginTop: 2,
-                            lineHeight: 1.35,
+                            marginTop: 1,
+                            lineHeight: 1.3,
                             overflowWrap: 'anywhere',
                           }}
                         >
@@ -273,7 +274,7 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
         );
       })}
 
-      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
         <Button size="sm" variant="primary" onClick={submit} disabled={!allAnswered}>
           Submit
         </Button>
@@ -301,10 +302,10 @@ export function PermissionBar({ sessionId }: PermissionBarProps = {}) {
       className="mt-scroll"
       style={{
         position: 'absolute',
-        left: 8,
-        right: 8,
-        bottom: 8,
-        padding: 8,
+        left: 6,
+        right: 6,
+        bottom: 6,
+        padding: 6,
         borderRadius: 'var(--radius-soft)',
         border: '1px solid var(--border-strong)',
         backgroundColor: 'var(--bg-sidebar)',
