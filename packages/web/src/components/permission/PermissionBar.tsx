@@ -80,27 +80,27 @@ function Preview({ text }: { text: string }) {
   const anyHex = lines.some(l => HEX_RE.test(l));
 
   if (!anyHex) {
+    // Prose preview: render as a light quote-style aside (thin accent rule,
+    // sans-serif, muted) rather than a heavy monospace code box. Reads as the
+    // option elaborating on itself; only shown for the selected option.
     return (
-      <pre
+      <div
         className="mt-scroll"
         style={{
-          fontSize: 9.5,
-          lineHeight: 1.3,
+          fontSize: 10.5,
+          lineHeight: 1.4,
           color: 'var(--text-muted)',
-          margin: '3px 0 0',
-          padding: '3px 6px',
-          backgroundColor: 'var(--bg-sidebar)',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          // pre-wrap (not pre) so long preview lines wrap instead of forcing
-          // the option wider than the screen and clipping it.
+          marginTop: 5,
+          paddingLeft: 9,
+          borderLeft: '2px solid color-mix(in srgb, var(--accent-amber) 55%, transparent)',
           whiteSpace: 'pre-wrap',
           overflowWrap: 'anywhere',
           overflowY: 'auto',
-          maxHeight: 52,
+          maxHeight: 120,
         }}
       >
         {text}
-      </pre>
+      </div>
     );
   }
 
@@ -264,7 +264,7 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                           {opt.description}
                         </div>
                       )}
-                      {opt.preview && <Preview text={opt.preview} />}
+                      {opt.preview && selected && <Preview text={opt.preview} />}
                     </div>
                   </label>
                 );
