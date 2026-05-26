@@ -127,6 +127,11 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
     { value: currentMode, label: currentMode, description: '' };
   const showModes = supportedModes.length > 1;
 
+  // The trigger chip reflects the active mode's risk tone so the chip itself
+  // reads as its assigned color — matching the dot + rail on the dropdown rows.
+  const triggerTone = modeOptionTone(current);
+  const triggerToneColor = modeToneColor(triggerTone);
+
   // If neither modes nor effort can be changed, there's nothing to show.
   if (!showModes && !effortEnabled) return null;
 
@@ -191,16 +196,18 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 6,
-          height: 22,
-          padding: '0 8px',
+          gap: 3,
+          height: 14,
+          padding: '0 5px',
           fontFamily: 'inherit',
-          fontSize: 11.5,
-          fontWeight: 500,
+          fontSize: 8.5,
+          fontWeight: 600,
           letterSpacing: '0.01em',
-          color: 'var(--text-primary)',
-          background: triggerActive ? 'var(--bg-hover)' : 'var(--bg-elevated)',
-          border: '1px solid var(--border)',
+          color: triggerToneColor,
+          background: triggerActive
+            ? `color-mix(in srgb, ${triggerToneColor} 24%, var(--bg-elevated))`
+            : `color-mix(in srgb, ${triggerToneColor} 12%, var(--bg-elevated))`,
+          border: `1px solid color-mix(in srgb, ${triggerToneColor} 55%, var(--border))`,
           borderRadius: 'var(--radius-snug)',
           cursor: 'pointer',
           outline: 'none',
