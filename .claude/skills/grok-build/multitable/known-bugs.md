@@ -47,3 +47,9 @@ The original VERIFY checklist, now answered against 0.2.2:
 | `session/request_permission` payload | not exercised in the spike (no tool calls on "hi") — the option matcher mirrors the ACP `allow_once`/`allow_session`/`allow_always` ids; re-verify the real `optionId`/`kind` on a tool-using turn. |
 
 Re-baseline (re-run the handshake spike) after each `grok` upgrade and update this table.
+
+## `ask_user_question` is non-interactive over agent-stdio (read-only render)
+
+Grok has an `ask_user_question` tool (Claude `AskUserQuestion` shape: `tool_call` with `rawInput.questions[].options[{label, description, preview}]`). Over `grok agent stdio` it is **not interactive** — verified in session `019e6655`: the tool's permission auto-resolves (`wait_ms:0`) and it `tool_completed` in `0ms` without waiting for an answer (interactive answering is TUI-only; there's no ACP channel to deliver a choice back). So `capabilities.userQuestion` stays `'unsupported'`.
+
+MultiTable therefore renders it **read-only**: `ToolCallCard` (web) special-cases `ask_user_question` / `AskUserQuestion`, showing the question + options legibly (not raw JSON) with a "Reply in chat with your choice" hint — the user answers by sending the next message. Do **not** wire clickable options that pretend to send an answer back to Grok; it already moved on.
