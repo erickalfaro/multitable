@@ -278,7 +278,7 @@ interface AppState {
   setModelCatalog: (provider: AgentProvider, models: DiscoveredModel[]) => void;
 }
 
-export type DetailPanelTab = 'tasks' | 'cost' | 'prompt-builder';
+export type DetailPanelTab = 'activity' | 'cost' | 'notes' | 'info';
 
 export type AttentionKind = 'read' | 'edit' | 'command' | 'search' | 'mcp' | 'reasoning';
 
@@ -571,7 +571,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   globalSettingsOpen: false,
   projectSettingsOpen: false,
   detailPanelOpen: true,
-  detailPanelTab: 'tasks',
+  detailPanelTab: 'activity',
   // Start optimistic. The fullscreen "Cannot connect to daemon" overlay is
   // intrusive — only show it after a real connect attempt has failed, never
   // during the initial mount window. ws.connect() flips this to 'reconnecting'

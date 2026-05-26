@@ -1,23 +1,27 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { X, Plus, MessageSquare, Check, Copy, Sparkles, Trash2 } from 'lucide-react';
+import { X, ArrowLeft, Plus, MessageSquare, Check, Copy, Sparkles, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import type { DetailPanelTab } from '../../stores/appStore';
 import { api } from '../../lib/api';
 import { copyToClipboard } from '../../lib/clipboard';
 import type { Session, Note } from '../../lib/types';
 import { IconButton, Spinner } from '../ui';
-import { TasksTab } from './chat/TasksTab';
-import { AttentionStream } from './context/AttentionStream';
-import { ProviderCapabilityStrip } from './context/ProviderCapabilityStrip';
+import { ActivityTab } from './context/ActivityTab';
+import { InfoTab } from './context/InfoTab';
 
 interface Props {
   session: Session;
+  /** Mobile only — renders a back button in the tab bar that calls onClose. */
+  isMobile?: boolean;
+  /** Invoked by the mobile back button to dismiss the full-screen panel. */
+  onClose?: () => void;
 }
 
 const TABS: { id: DetailPanelTab; label: string }[] = [
-  { id: 'tasks', label: 'Tasks' },
+  { id: 'activity', label: 'Activity' },
   { id: 'cost', label: 'Cost' },
-  { id: 'prompt-builder', label: 'Prompt Builder' },
+  { id: 'notes', label: 'Notes' },
+  { id: 'info', label: 'Info' },
 ];
 
 function CostTab({ session }: { session: Session }) {
@@ -681,7 +685,7 @@ function PromptBuilderTab({ session }: { session: Session }) {
   );
 }
 
-export function SessionDetailPanel({ session }: Props) {
+export function SessionDetailPanel({ session, isMobile, onClose }: Props) {
   const detailPanelTab = useAppStore((s) => s.detailPanelTab);
   const setDetailPanelTab = useAppStore((s) => s.setDetailPanelTab);
   const setDetailPanelOpen = useAppStore((s) => s.setDetailPanelOpen);
@@ -691,9 +695,9 @@ export function SessionDetailPanel({ session }: Props) {
   // empty tab body. Runs once per mount and is a no-op for fresh stores.
   useEffect(() => {
     const tab = detailPanelTab as string;
-    if (tab === 'brainstorm') setDetailPanelTab('prompt-builder');
-    else if (tab === 'files' || tab === 'prompts' || tab === 'diff')
-      setDetailPanelTab('tasks');
+    if (tab === 'tasks' || tab === 'files' || tab === 'prompts' || tab === 'diff')
+      setDetailPanelTab('activity');
+    else if (tab === 'prompt-builder' || tab === 'brainstorm') setDetailPanelTab('notes');
   }, [detailPanelTab, setDetailPanelTab]);
 
   return (
@@ -703,24 +707,18 @@ export function SessionDetailPanel({ session }: Props) {
         flexDirection: 'column',
         overflow: 'hidden',
         height: '100%',
-        borderLeft: '1px solid var(--border)',
+        borderLeft: isMobile ? 'none' : '1px solid var(--border)',
         backgroundColor: 'var(--bg-primary)',
       }}
     >
-      {/* Top: Attention Stream — the headline differentiator. Lives at ~45%
-          of the panel height so it never crowds the tab content out. */}
-      <div style={{ flex: '0 0 45%', minHeight: 120, display: 'flex', flexDirection: 'column' }}>
-        <AttentionStream sessionId={session.id} />
-      </div>
-
-      {/* Mini tab bar */}
+      {/* Tab bar */}
       <div
         style={{
-          height: 32,
+          height: isMobile ? 44 : 32,
           display: 'flex',
           alignItems: 'center',
           backgroundColor: 'var(--bg-sidebar)',
-          borderTop: '1px solid var(--border)',
+          borderBottom: '1px solid var(--border)',
           flexShrink: 0,
           paddingLeft: 4,
           paddingRight: 6,
@@ -729,6 +727,11 @@ export function SessionDetailPanel({ session }: Props) {
         }}
         className="mt-scroll"
       >
+        {isMobile && (
+          <IconButton size="md" onClick={() => onClose?.()} label="Back to chat">
+            <ArrowLeft size={18} />
+          </IconButton>
+        )}
         {TABS.map((tab) => {
           const active = detailPanelTab === tab.id;
           return (
@@ -741,9 +744,9 @@ export function SessionDetailPanel({ session }: Props) {
                 background: 'transparent',
                 border: 'none',
                 color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontSize: 11.5,
+                fontSize: isMobile ? 13 : 11.5,
                 fontWeight: active ? 600 : 500,
-                padding: '0 10px',
+                padding: isMobile ? '0 14px' : '0 10px',
                 height: '100%',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -767,29 +770,32 @@ export function SessionDetailPanel({ session }: Props) {
           );
         })}
         <div style={{ flex: 1 }} />
-        <IconButton size="sm" onClick={() => setDetailPanelOpen(false)} label="Close panel (Cmd+.)">
-          <X size={13} />
-        </IconButton>
+        {!isMobile && (
+          <IconButton size="sm" onClick={() => setDetailPanelOpen(false)} label="Close panel (Cmd+.)">
+            <X size={13} />
+          </IconButton>
+        )}
       </div>
 
-      {/* Tab content */}
+      {/* Tab content — each tab manages its own scroll. */}
       <div
-        className="mt-scroll"
         style={{
           flex: 1,
-          overflow: 'auto',
+          minHeight: 0,
+          overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          minHeight: 0,
         }}
       >
-        {detailPanelTab === 'tasks' && <TasksTab sessionId={session.id} />}
-        {detailPanelTab === 'cost' && <CostTab session={session} />}
-        {detailPanelTab === 'prompt-builder' && <PromptBuilderTab session={session} />}
+        {detailPanelTab === 'activity' && <ActivityTab sessionId={session.id} />}
+        {detailPanelTab === 'cost' && (
+          <div className="mt-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <CostTab session={session} />
+          </div>
+        )}
+        {detailPanelTab === 'notes' && <PromptBuilderTab session={session} />}
+        {detailPanelTab === 'info' && <InfoTab session={session} />}
       </div>
-
-      {/* Footer: Provider Capability Strip */}
-      <ProviderCapabilityStrip session={session} />
     </div>
   );
 }
