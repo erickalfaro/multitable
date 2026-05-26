@@ -19,5 +19,6 @@ export function buildResumeCommand(provider: AgentProvider, id: string): string 
 export function sessionIdLabel(provider: AgentProvider): string {
   if (provider === 'codex') return 'Thread ID';
   if (provider === 'hermes') return 'Hermes session ID';
+  if (provider === 'grok') return 'Grok session ID';
   return 'Session ID';
 }
