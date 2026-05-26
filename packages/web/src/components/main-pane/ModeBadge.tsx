@@ -9,6 +9,7 @@ import type {
 } from '../../lib/types';
 import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
+import { useIsMobile } from '../../lib/useIsMobile';
 
 interface Props {
   session: Session;
@@ -51,6 +52,16 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
   const [triggerHover, setTriggerHover] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const upsertSession = useAppStore((s) => s.upsertSession);
+  const isMobile = useIsMobile();
+
+  // On mobile the badge lives in the top header (left edge), so an
+  // absolutely-positioned 300px menu anchored to the trigger overflows the
+  // viewport and gets clipped by the chat's `overflow: hidden`. Instead we
+  // pin the menu with `position: fixed`, measured from the trigger and
+  // clamped to the screen, so it always lands fully on-screen.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(
+    null,
+  );
 
   const provider = session.agentProvider;
   const catalog = useAppStore((s) => s.modelCatalog[provider]);
@@ -143,15 +154,34 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
     }
   };
 
+  const toggleOpen = () => {
+    // Measure before opening so the fixed-position mobile menu knows where to
+    // land. Reading `open` here is safe — it's this render's value.
+    if (!open && isMobile && ref.current) {
+      const r = ref.current.getBoundingClientRect();
+      const margin = 8;
+      const width = Math.min(320, window.innerWidth - margin * 2);
+      let left = r.left;
+      if (left + width > window.innerWidth - margin) left = window.innerWidth - margin - width;
+      if (left < margin) left = margin;
+      setMenuPos({ top: r.bottom + 6, left, width });
+    }
+    setOpen((o) => !o);
+  };
+
   const triggerActive = open || triggerHover;
   const currentEffortLabel =
     EFFORT_OPTIONS.find((o) => o.value === currentEffort)?.label ?? 'Medium';
+
+  // Mobile menus pin to the viewport (fixed) and clamp to screen width;
+  // desktop keeps the trigger-anchored absolute dropdown.
+  const useFixedMenu = isMobile && !!menuPos;
 
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggleOpen}
         onMouseEnter={() => setTriggerHover(true)}
         onMouseLeave={() => setTriggerHover(false)}
         title={`${current.description} — click to change`}
@@ -183,14 +213,9 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
       {open && (
         <div
           role="menu"
+          className={useFixedMenu ? 'mt-scroll' : undefined}
           style={{
-            position: 'absolute',
-            ...(placement === 'top'
-              ? { bottom: 'calc(100% + 6px)' }
-              : { top: 'calc(100% + 6px)' }),
-            left: 0,
-            zIndex: 50,
-            minWidth: 300,
+            zIndex: useFixedMenu ? 200 : 50,
             padding: 4,
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-strong)',
@@ -198,7 +223,26 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
             display: 'flex',
             flexDirection: 'column',
             animation: 'mt-slide-up var(--dur-fast) var(--ease-out)',
-            transformOrigin: placement === 'top' ? 'bottom left' : 'top left',
+            ...(useFixedMenu
+              ? {
+                  position: 'fixed',
+                  top: menuPos!.top,
+                  left: menuPos!.left,
+                  width: menuPos!.width,
+                  maxHeight: `calc(100vh - ${menuPos!.top + 16}px)`,
+                  overflowY: 'auto',
+                  transformOrigin: 'top left',
+                  boxShadow: 'var(--shadow-xl)',
+                }
+              : {
+                  position: 'absolute',
+                  ...(placement === 'top'
+                    ? { bottom: 'calc(100% + 6px)' }
+                    : { top: 'calc(100% + 6px)' }),
+                  left: 0,
+                  minWidth: 300,
+                  transformOrigin: placement === 'top' ? 'bottom left' : 'top left',
+                }),
           }}
         >
           {showModes && (

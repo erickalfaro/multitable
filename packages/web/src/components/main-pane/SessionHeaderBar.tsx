@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { PanelBottom, Copy, Check, Pencil, Sparkles, Menu } from 'lucide-react';
 import { AttachButton } from './AttachButton';
+import { ModeBadge } from './ModeBadge';
+import { ModelChip } from './chat/ModelChip';
 import type { Session } from '../../lib/types';
 import { IconButton, Spinner } from '../ui';
 import { api } from '../../lib/api';
@@ -149,10 +151,12 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
           boxSizing: 'border-box',
           flexShrink: 0,
           display: 'flex',
-          alignItems: 'center',
-          gap: 8,
+          flexDirection: 'column',
+          gap: 6,
         }}
       >
+        {/* Row 1: menu + title + actions */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {onOpenDrawer && (
           <IconButton size="lg" onClick={onOpenDrawer} label="Open menu">
             <Menu size={20} />
@@ -257,6 +261,24 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
           <IconButton size="lg" onClick={onToggleDetailPanel} label="Toggle detail panel">
             <PanelBottom size={16} />
           </IconButton>
+        </div>
+        </div>
+
+        {/* Row 2: model selection + behavior (mode/effort) controls. Moved off
+            the composer toolbar on mobile to free up vertical space in the
+            chatbox. Menus open downward since the header sits at the top.
+            Left-aligned to the header edge — the title row leaves this space
+            unused, so the chips fill it rather than indenting under the title. */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'wrap',
+          }}
+        >
+          <ModelChip session={session} />
+          <ModeBadge session={session} placement="bottom" />
         </div>
       </div>
     );
