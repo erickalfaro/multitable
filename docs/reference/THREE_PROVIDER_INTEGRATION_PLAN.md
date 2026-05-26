@@ -518,6 +518,7 @@ Used by the "open in Finder" button and the transcript browser.
 - `packages/daemon/src/transcripts/copilotParser.ts` — checkpoint-to-`Message[]` parser. Defensive: re-verify schema after each SDK upgrade. Mirror function names from [codexParser.ts](packages/daemon/src/transcripts/codexParser.ts) (`parseCopilotSession`, `findCopilotSessionFile`, `listCopilotSessions`).
 - `packages/daemon/src/api/transcripts.ts` — add `GET /api/transcripts/copilot` and `POST /api/transcripts/copilot/:sessionId/resume` (mirror Codex routes).
 - `packages/daemon/src/agent/streamBuffer.ts` — small helper class for additive vs cumulative reducers.
+- **`.claude/skills/<provider>-sdk/` — REQUIRED. The provider's skill folder is a mandatory deliverable of the integration, not a follow-up.** Mirror an existing one (`hermes-grok/`, `openai-codex-sdk/`) exactly: `SKILL.md` (frontmatter with concrete trigger terms + a strictly-`<provider>`-only isolation note + the one shaping fact + a task→file map), `pitfalls.md`, `reference/` (protocol / auth / per-feature deep-dives), `multitable/` (adapter architecture, permission wiring, parser). Keep it single-provider — never blend SDKs. See `CLAUDE.md` → "Provider skill folders (required)" for the authoritative spec.
 
 ---
 

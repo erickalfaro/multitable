@@ -50,6 +50,12 @@ export interface AdapterCallbacks {
   // Manager re-emits as `session:reconciled` so the frontend can do a no-op
   // REST sync to confirm consistency.
   emitReconciled(addedMessageIds: string[]): void;
+  // Provider produced a Tasks-panel event (subagent task, plan step, …).
+  // `subtype` is 'task_started' | 'task_progress' | 'task_updated' |
+  // 'task_notification'; `payload` is the Claude-native SDK shape the
+  // frontend `applyTaskEvent` reducer consumes. Codex/Hermes normalize
+  // their plan notifications INTO this shape.
+  emitTaskEvent(subtype: string, payload: Record<string, unknown>): void;
   // Live in-progress tool execution snapshot — fires on every item.updated
   // for command_execution / file_change / mcp_tool_call / web_search items
   // so the chat UI can render the cumulative output as it arrives, before

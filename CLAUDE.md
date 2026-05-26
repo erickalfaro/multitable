@@ -56,7 +56,20 @@ Missing credentials fail the first turn, surfaced via `session:turn-error`.
 
 `agent/manager.ts` is a thin, provider-agnostic orchestrator: session state machine, DB persistence, WS dispatch, a 5-min no-progress watchdog, capability advertisement. `sendTurn()` looks up the adapter and delegates.
 
-**To add a provider:** drop a `<provider>.ts` adapter, register it in the manager's adapter map, and (if it persists to disk) add a `transcripts/<provider>Parser.ts`. No surgery on the manager's turn logic. Deep per-provider semantics live in the `claude-agent-sdk` / `openai-codex-sdk` / `hermes-grok` skills and `docs/reference/THREE_PROVIDER_INTEGRATION_PLAN.md` — consult those before changing an adapter.
+**To add a provider:** drop a `<provider>.ts` adapter, register it in the manager's adapter map, (if it persists to disk) add a `transcripts/<provider>Parser.ts`, **and create the provider's `.claude/skills/<provider>-sdk/` skill folder** (mandatory — see "Provider skill folders" below; a provider integration is not complete without it). No surgery on the manager's turn logic. Deep per-provider semantics live in the `claude-agent-sdk` / `openai-codex-sdk` / `hermes-grok` skills and `docs/reference/THREE_PROVIDER_INTEGRATION_PLAN.md` — consult those before changing an adapter.
+
+### Provider skill folders (required)
+
+**Every agent framework MUST ship its own skill folder under `.claude/skills/<provider>-sdk/`.** This is not optional and not deferrable — landing an adapter without its skill folder is an incomplete integration. The folder is the authoritative, provider-isolated knowledge base future work depends on (it's what makes adding the *next* provider, or fixing this one, correct rather than guesswork).
+
+Mirror the existing folders (`claude-agent-sdk/`, `openai-codex-sdk/`, `hermes-grok/`, the forward-looking `github-copilot-sdk/`) exactly:
+
+- `SKILL.md` — YAML frontmatter (`name`, `description` with concrete trigger terms, `allowed-tools`), then the authoritative reference: a "strictly `<provider>`-only" isolation note (do **not** import other providers' SDK/protocol concepts — see [[feedback_separate_sdks]]), the one fact that shapes everything, and a quick task→file map.
+- `pitfalls.md` — the provider-specific traps (wire-shape gotchas, auth edge cases, abort/replay quirks).
+- `reference/` — protocol / auth / feature deep-dives (one file per axis).
+- `multitable/` — how the adapter integrates here (adapter architecture, permission wiring, persistence/parser).
+
+Keep each skill **strictly single-provider** — never blend two providers' SDK or protocol content in one skill or doc. Register the new skill's trigger terms so it auto-loads when its adapter files (`packages/daemon/src/agent/providers/<provider>.ts`, its parser) are touched.
 
 ### Modes
 

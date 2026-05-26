@@ -728,6 +728,8 @@ export class AgentSessionManager extends EventEmitter {
         this.maybeRenameFromFirstPrompt(sessionId, prompt),
       emitReconciled: (addedMessageIds) =>
         this.emit('reconciled', { sessionId, addedMessageIds }),
+      emitTaskEvent: (subtype, payload) =>
+        this.emit('task-event', { sessionId, subtype, payload }),
       emitToolDelta: (payload) => this.emit('tool-delta', { sessionId, payload }),
       emitReasoningDelta: (text) => this.emit('reasoning-delta', { sessionId, text }),
       emitMessageRekey: (oldId, newId) =>
