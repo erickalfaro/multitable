@@ -243,6 +243,12 @@ class WsClient {
     this.send({ type: 'permission:answer-question', payload: { id, answers } });
   }
 
+  // Tell the daemon to drop a session's detected options so they don't
+  // re-hydrate on the next refresh (the client clears its own copy locally).
+  dismissOption(sessionId: string): void {
+    this.send({ type: 'option:dismiss', payload: { sessionId } });
+  }
+
   // Suspend the live connection so the page becomes bfcache-eligible.
   // Called from a `pagehide` listener — the browser refuses to bfcache pages
   // with an open WebSocket, so leaving the socket open forces a fresh load

@@ -54,9 +54,11 @@ export function handleWsMessage(
     case 'session:elicitation:respond':
       handleElicitationRespond(msg, elicitManager);
       break;
-    case 'option:dismiss':
-      // handled at server level
+    case 'option:dismiss': {
+      const sid = msg.payload?.sessionId;
+      if (typeof sid === 'string' && sid) agentManager.clearDetectedOptions(sid);
       break;
+    }
     default:
       // Unknown message type — ignore
       break;

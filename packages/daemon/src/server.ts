@@ -23,6 +23,7 @@ import { createNotesRouter } from './api/notes.js';
 import { createIntegrationsRouter } from './api/integrations.js';
 import { createGitRouter } from './api/git.js';
 import { createProvidersRouter } from './api/providers.js';
+import { createPromptsRouter } from './api/prompts.js';
 import type { ProviderCatalog } from './providers/catalog.js';
 import type { TelegramBridge } from './notifications/telegramBridge.js';
 import type { GitWatcher } from './git/watcher.js';
@@ -105,6 +106,7 @@ export function createServer(
   app.use('/api/integrations', createIntegrationsRouter(tgBridge, permManager, agentManager));
   app.use('/api/projects/:projectId/git', createGitRouter());
   app.use('/api/providers', createProvidersRouter({ catalog }));
+  app.use('/api/pending-prompts', createPromptsRouter(permManager, elicitManager, agentManager));
 
   // ─── Internal agent-turn endpoint (Phase 2) ────────────────────────────────
   //
@@ -440,9 +442,12 @@ export function createServer(
     broadcast('session:state-updated', { sessionId, state: snapshot });
   });
 
-  agentManager.on('options-detected', ({ sessionId, options }: { sessionId: string; options: any }) => {
-    broadcast('session:options-detected', { sessionId, options });
-  });
+  agentManager.on(
+    'options-detected',
+    ({ sessionId, options, question }: { sessionId: string; options: any; question?: string }) => {
+      broadcast('session:options-detected', { sessionId, options, question });
+    },
+  );
 
   agentManager.on('notification', ({ sessionId, payload }: { sessionId: string; payload: any }) => {
     broadcast('session:notification', { sessionId, payload });

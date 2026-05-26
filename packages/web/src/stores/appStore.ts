@@ -157,9 +157,13 @@ interface AppState {
   addPermission: (prompt: PermissionPrompt) => void;
   removePermission: (id: string) => void;
 
-  // Options
-  currentOption: OptionPrompt | null;
-  setOption: (option: OptionPrompt | null) => void;
+  // Options — per-session numbered-list quick replies detected from the last
+  // completed turn. Keyed by sessionId so they survive session switches and so
+  // the GET /api/pending-prompts snapshot (which can carry several) restores
+  // each session's selector after a refresh.
+  optionsBySession: Record<string, OptionPrompt>;
+  setSessionOptions: (sessionId: string, option: OptionPrompt) => void;
+  clearSessionOptions: (sessionId: string) => void;
 
   // Session transcript messages (chat view)
   messagesBySession: Record<string, Message[]>;
@@ -798,8 +802,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ pendingPermissions: s.pendingPermissions.filter(p => p.id !== id) })),
 
   // Options
-  currentOption: null,
-  setOption: (option) => set({ currentOption: option }),
+  optionsBySession: {},
+  setSessionOptions: (sessionId, option) =>
+    set((s) => ({ optionsBySession: { ...s.optionsBySession, [sessionId]: option } })),
+  clearSessionOptions: (sessionId) =>
+    set((s) => {
+      if (!(sessionId in s.optionsBySession)) return s;
+      const next = { ...s.optionsBySession };
+      delete next[sessionId];
+      return { optionsBySession: next };
+    }),
 
   // Messages
   messagesBySession: __snapshot?.messagesBySession ?? {},

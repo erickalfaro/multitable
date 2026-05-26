@@ -319,7 +319,28 @@ function App() {
         });
     }
 
+    // Recover any popups the daemon is still holding (permission / question /
+    // elicitation prompts + detected options). They're broadcast over WS once
+    // at creation and never replayed, so without this a refresh leaves a
+    // blocked session with no card to respond to. The store dedups by id, so
+    // this is safe to run alongside live WS prompt events. Re-run on reconnect
+    // and bfcache-resume (handlers below).
+    function hydratePendingPrompts() {
+      api.prompts
+        .pending()
+        .then(({ permissions, elicitations, options }) => {
+          const st = useAppStore.getState();
+          for (const p of permissions) st.addPermission(p);
+          for (const e of elicitations) st.addElicitation(e);
+          for (const o of options) st.setSessionOptions(o.sessionId, o);
+        })
+        .catch(() => {
+          // daemon may be momentarily unavailable; reconnect/resume will retry
+        });
+    }
+
     loadData();
+    hydratePendingPrompts();
 
     // Seed the model catalog from the daemon's cached snapshot so model
     // pickers (AddAgentModal, ModeBadge, ThinkingEffortBadge) render
@@ -504,6 +525,7 @@ function App() {
       // Re-fetch all data when WS reconnects (e.g. after server restart)
       wsClient.on('ws:reconnected', () => {
         loadData();
+        hydratePendingPrompts();
         syncActiveSessions('ws-reconnected');
       }),
       // ws:resumed fires when the page comes back from bfcache (mobile
@@ -513,6 +535,7 @@ function App() {
       // session refetch; just pull authoritative state for any session that
       // might have advanced while we were away.
       wsClient.on('ws:resumed', () => {
+        hydratePendingPrompts();
         syncActiveSessions('ws-resumed');
       }),
       wsClient.on('process-state-changed', (msg: any) => {
@@ -565,8 +588,14 @@ function App() {
       wsClient.on('permission:expired', (msg: any) => {
         store.removePermission(msg.payload.id);
       }),
-      wsClient.on('option:prompt', (msg: any) => {
-        store.setOption(msg.payload);
+      wsClient.on('session:options-detected', (msg: any) => {
+        const { sessionId, options, question } = msg.payload || {};
+        if (typeof sessionId !== 'string' || !Array.isArray(options)) return;
+        store.setSessionOptions(sessionId, {
+          sessionId,
+          question: typeof question === 'string' ? question : 'Choose an option:',
+          options,
+        });
       }),
       wsClient.on('session:notification', (msg: any) => {
         const { sessionId, payload } = msg.payload || {};
@@ -701,6 +730,9 @@ function App() {
         const messages = msg.payload?.messages;
         if (pid && Array.isArray(messages) && messages.length > 0) {
           store.appendMessages(pid, messages);
+          // A new turn supersedes options detected from the previous one (the
+          // daemon clears its copy too); drop the stale selector immediately.
+          store.clearSessionOptions(pid);
         }
       }),
       wsClient.on('session:turn-error', (msg: any) => {
