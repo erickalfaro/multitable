@@ -23,7 +23,7 @@ interface ProvidersDeps {
   catalog: ProviderCatalog;
 }
 
-const VALID_PROVIDERS: Provider[] = ['claude', 'codex', 'hermes'];
+const VALID_PROVIDERS: Provider[] = ['claude', 'codex', 'hermes', 'grok'];
 
 function isProvider(s: unknown): s is Provider {
   return typeof s === 'string' && (VALID_PROVIDERS as string[]).includes(s);

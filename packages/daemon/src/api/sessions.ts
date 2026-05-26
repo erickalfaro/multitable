@@ -19,6 +19,7 @@ import {
 } from '../transcripts/parser.js';
 import { parseCodexThread } from '../transcripts/codexParser.js';
 import { parseHermesSession } from '../transcripts/hermesParser.js';
+import { parseGrokSession } from '../transcripts/grokParser.js';
 import { createAttachmentHandler, rawAttachmentBody, removeAttachmentDir } from './attachments.js';
 import type { AgentSessionManager } from '../agent/manager.js';
 import { loadGlobalConfig, saveGlobalConfigDebounced } from '../config/loader.js';
@@ -313,6 +314,29 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
           }
         } catch (err) {
           console.error('[sessions] hermes re-hydration failed for', session.id, err);
+        }
+      }
+      return res.json({ messages, endOffset: 0 });
+    }
+    if (session.agentProvider === 'grok') {
+      // Grok persists its session/update replay log under
+      // ~/.grok/sessions/<enc-cwd>/<id>/updates.jsonl. Re-hydrate from disk when
+      // the in-memory cache is empty (e.g. after a daemon restart). Mirrors the
+      // codex/hermes branches above.
+      const agent = agentManager.get(req.params.id);
+      let messages = agent?.messages ?? [];
+      if (messages.length === 0 && session.agentSessionId) {
+        try {
+          const hydrated = parseGrokSession(
+            session.agentSessionId,
+            session.workingDirectory ?? undefined,
+          );
+          if (hydrated.length > 0) {
+            if (agent) agent.messages = hydrated;
+            messages = hydrated;
+          }
+        } catch (err) {
+          console.error('[sessions] grok re-hydration failed for', session.id, err);
         }
       }
       return res.json({ messages, endOffset: 0 });

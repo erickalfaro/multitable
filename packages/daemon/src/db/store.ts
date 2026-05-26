@@ -312,7 +312,7 @@ export interface SessionRecord {
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex' | 'hermes';
+  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
@@ -359,12 +359,14 @@ function rowToSession(row: SessionRow): SessionRecord {
   // Provider hydration. `agent_provider` is free-text in the schema, so we
   // narrow to the known adapter set here. Unknown values fall back to Claude
   // (the original default) so a stale row can't take the daemon down.
-  const provider: 'claude' | 'codex' | 'hermes' =
+  const provider: 'claude' | 'codex' | 'hermes' | 'grok' =
     row.agent_provider === 'codex'
       ? 'codex'
       : row.agent_provider === 'hermes'
         ? 'hermes'
-        : 'claude';
+        : row.agent_provider === 'grok'
+          ? 'grok'
+          : 'claude';
   const agentSessionId = row.agent_session_id ?? row.claude_session_id;
   const agentSessionIdHistory =
     parseClaudeSessionIdHistory(row.agent_session_id_history).length > 0
@@ -404,10 +406,11 @@ function rowToSession(row: SessionRow): SessionRecord {
 
 function inferAgentProvider(
   command: string | null | undefined,
-): 'claude' | 'codex' | 'hermes' {
+): 'claude' | 'codex' | 'hermes' | 'grok' {
   const first = (command ?? '').trim().split(/\s+/, 1)[0]?.toLowerCase() ?? '';
   if (first === 'codex') return 'codex';
   if (first === 'hermes') return 'hermes';
+  if (first === 'grok') return 'grok';
   return 'claude';
 }
 
@@ -440,7 +443,7 @@ export function createSession(data: {
   autorespawn?: boolean;
   terminalAlerts?: boolean;
   fileWatchPatterns?: string[];
-  agentProvider?: 'claude' | 'codex' | 'hermes';
+  agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok';
   model?: string | null;
   /**
    * Optional explicit loader variant. Used by the transcript-resume flow to
@@ -519,7 +522,7 @@ export function updateSession(id: string, data: Partial<{
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex' | 'hermes';
+  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];

@@ -86,7 +86,24 @@ export const HERMES_BASELINE: BaselineModel[] = [
   },
 ];
 
-export function baselineFor(provider: 'claude' | 'codex' | 'hermes'): BaselineModel[] {
+// Grok Build (xAI) baseline. Grok's ACP `session/new` reports a single model
+// (`grok-build`, 512K context) and supports the full effort range
+// (low/medium/high/xhigh/max) natively via `--effort`. Live discovery returns
+// `[]` for now (no machine-readable `grok models --json`), so this seed shows
+// through in the AddAgent picker.
+export const GROK_BASELINE: BaselineModel[] = [
+  {
+    id: 'grok-build',
+    displayName: 'Grok Build',
+    description: 'xAI Grok Build — best for advanced coding tasks (512K context).',
+    isDefault: true,
+    supportsEffort: true,
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    defaultEffort: 'medium',
+  },
+];
+
+export function baselineFor(provider: 'claude' | 'codex' | 'hermes' | 'grok'): BaselineModel[] {
   switch (provider) {
     case 'claude':
       return CLAUDE_BASELINE;
@@ -94,5 +111,7 @@ export function baselineFor(provider: 'claude' | 'codex' | 'hermes'): BaselineMo
       return CODEX_BASELINE;
     case 'hermes':
       return HERMES_BASELINE;
+    case 'grok':
+      return GROK_BASELINE;
   }
 }

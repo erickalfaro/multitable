@@ -1,6 +1,6 @@
 import type { ProcessState } from '../types.js';
 
-export type AgentProvider = 'claude' | 'codex' | 'hermes';
+export type AgentProvider = 'claude' | 'codex' | 'hermes' | 'grok';
 
 // Cross-provider reasoning-effort level. Mirrors Claude SDK's full `EffortLevel`
 // enum (sdk.d.ts:465): low / medium / high / xhigh / max. The two highest tiers
