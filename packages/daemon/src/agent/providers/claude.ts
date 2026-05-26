@@ -20,6 +20,7 @@ import {
 import { StreamBuffer } from '../streamBuffer.js';
 import type {
   AdapterCallbacks,
+  ModeOption,
   ProviderAdapter,
   ProviderCapabilities,
 } from './types.js';
@@ -56,38 +57,44 @@ export function resolveClaudeCodeExecutable(): string | undefined {
 // from the SDK JSDoc (sdk.d.ts:1757). MultiTable does NOT translate or invent
 // modes — `session.mode` is one of these strings and goes straight to the
 // SDK as `permissionMode`.
-const CLAUDE_NATIVE_MODES = [
+const CLAUDE_NATIVE_MODES: readonly ModeOption[] = [
   {
     value: 'default' as PermissionMode,
-    label: 'Default',
-    description: 'Standard behavior, prompts for dangerous operations.',
+    label: 'Ask first',
+    description: 'Prompts you before any risky or destructive action.',
+    tone: 'standard',
   },
   {
     value: 'acceptEdits' as PermissionMode,
     label: 'Accept edits',
     description: 'Auto-accept file edit operations.',
+    tone: 'elevated',
   },
   {
     value: 'bypassPermissions' as PermissionMode,
     label: 'Bypass permissions',
     description: 'Bypass all permission checks (requires allowDangerouslySkipPermissions).',
+    tone: 'danger',
   },
   {
     value: 'plan' as PermissionMode,
     label: 'Plan',
     description: 'Planning mode, no actual tool execution.',
+    tone: 'safe',
   },
   {
     value: 'dontAsk' as PermissionMode,
     label: 'Don’t ask',
     description: "Don't prompt for permissions, deny if not pre-approved.",
+    tone: 'danger',
   },
   {
     value: 'auto' as PermissionMode,
     label: 'Auto (classifier)',
     description: 'Use a model classifier to approve/deny permission prompts.',
+    tone: 'elevated',
   },
-] as const;
+];
 
 export type { PermissionMode };
 

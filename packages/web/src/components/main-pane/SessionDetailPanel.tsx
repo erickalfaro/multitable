@@ -1,9 +1,20 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { X, ArrowLeft, Plus, MessageSquare, Check, Copy, Sparkles, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  X,
+  ArrowLeft,
+  Plus,
+  MessageSquare,
+  Check,
+  Copy,
+  Sparkles,
+  Trash2,
+  CornerUpLeft,
+} from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import type { DetailPanelTab } from '../../stores/appStore';
 import { api } from '../../lib/api';
 import { copyToClipboard } from '../../lib/clipboard';
+import { relativeTime } from '../../lib/relativeTime';
 import type { Session, Note } from '../../lib/types';
 import { IconButton, Spinner } from '../ui';
 import { ActivityTab } from './context/ActivityTab';
@@ -240,11 +251,13 @@ function NoteCard({
   onChange,
   onDelete,
   onRefine,
+  onLoadIntoComposer,
 }: {
   note: Note;
-  onChange: (patch: Partial<Pick<Note, 'title' | 'content' | 'scope'>>) => void;
+  onChange: (patch: Partial<Pick<Note, 'title' | 'content'>>) => void;
   onDelete: () => void;
   onRefine: () => Promise<{ refined: string; original: string } | null>;
+  onLoadIntoComposer: () => void;
 }) {
   const [title, setTitle] = useState(note.title);
   const [content, setContent] = useState(note.content);
@@ -254,7 +267,7 @@ function NoteCard({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep local state in sync when the note object identity changes (e.g.
-  // refresh after a scope toggle). Skip if user is mid-edit for the same id.
+  // refresh after a save elsewhere). Skip if user is mid-edit for the same id.
   useEffect(() => {
     setTitle(note.title);
     setContent(note.content);
@@ -280,11 +293,6 @@ function NoteCard({
   const handleContent = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setContent(e.target.value);
     scheduleSave({ content: e.target.value });
-  };
-
-  const toggleScope = () => {
-    const next: 'session' | 'project' = note.scope === 'session' ? 'project' : 'session';
-    onChange({ scope: next });
   };
 
   const handleRefine = async () => {
@@ -316,8 +324,6 @@ function NoteCard({
 
   const rejectSuggestion = () => setSuggestion(null);
 
-  const isSession = note.scope === 'session';
-
   return (
     <div
       style={{
@@ -328,7 +334,7 @@ function NoteCard({
         overflow: 'hidden',
       }}
     >
-      {/* Header: title + scope pill + actions */}
+      {/* Header: title + timestamp + actions */}
       <div
         style={{
           display: 'flex',
@@ -342,7 +348,7 @@ function NoteCard({
         <input
           value={title}
           onChange={handleTitle}
-          placeholder="Untitled note"
+          placeholder="Untitled prompt"
           style={{
             flex: 1,
             minWidth: 0,
@@ -354,29 +360,17 @@ function NoteCard({
             color: 'var(--text-primary)',
           }}
         />
-        <button
-          type="button"
-          onClick={toggleScope}
-          title={isSession ? 'Visible only in this session — click to share with project' : 'Visible in every session of this project — click to scope to this session'}
+        <span
+          title={new Date(note.updatedAt).toLocaleString()}
           style={{
-            fontSize: 10,
-            fontWeight: 600,
-            textTransform: 'uppercase',
-            letterSpacing: 0.5,
-            padding: '3px 8px',
-            borderRadius: 'var(--radius-snug)',
-            border: '1px solid',
-            borderColor: isSession ? 'var(--border)' : 'var(--accent-blue)',
-            color: isSession ? 'var(--text-muted)' : 'var(--accent-blue)',
-            backgroundColor: isSession
-              ? 'transparent'
-              : 'color-mix(in srgb, var(--accent-blue) 12%, transparent)',
-            cursor: 'pointer',
+            fontSize: 11,
+            color: 'var(--text-muted)',
+            whiteSpace: 'nowrap',
             flexShrink: 0,
           }}
         >
-          {isSession ? 'Session' : 'Project'}
-        </button>
+          {relativeTime(note.updatedAt)}
+        </span>
         <button
           type="button"
           onClick={handleRefine}
@@ -404,6 +398,29 @@ function NoteCard({
         </button>
         <button
           type="button"
+          onClick={onLoadIntoComposer}
+          disabled={!content.trim()}
+          title="Load this prompt into the composer to edit and send"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 11,
+            padding: '3px 8px',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid var(--border)',
+            color: !content.trim() ? 'var(--text-muted)' : 'var(--text-secondary)',
+            backgroundColor: 'transparent',
+            cursor: !content.trim() ? 'default' : 'pointer',
+            opacity: !content.trim() ? 0.6 : 1,
+            flexShrink: 0,
+          }}
+        >
+          <CornerUpLeft size={12} />
+          Load
+        </button>
+        <button
+          type="button"
           onClick={onDelete}
           title="Delete this note"
           style={{
@@ -425,7 +442,7 @@ function NoteCard({
       <textarea
         value={content}
         onChange={handleContent}
-        placeholder="Jot down an idea…"
+        placeholder="Write a prompt…"
         rows={Math.max(3, Math.min(14, content.split('\n').length + 1))}
         style={{
           width: '100%',
@@ -519,11 +536,14 @@ function NoteCard({
 function PromptBuilderTab({ session }: { session: Session }) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'session' | 'project'>('all');
+  // Bumped when a note is created outside this tab (e.g. the composer's Save
+  // button) so we refetch and surface it.
+  const notesVersion = useAppStore((s) => s.notesVersionByProject[session.projectId] ?? 0);
+  const requestComposerRecall = useAppStore((s) => s.requestComposerRecall);
 
   const load = () => {
     return api.notes
-      .listForSession(session.id, session.projectId)
+      .listForProject(session.projectId)
       .then((res) => setNotes(res.notes))
       .catch(() => {});
   };
@@ -532,27 +552,20 @@ function PromptBuilderTab({ session }: { session: Session }) {
     setLoading(true);
     load().finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.projectId]);
+  }, [session.projectId, notesVersion]);
 
-  const addNote = async (scope: 'session' | 'project') => {
+  const addNote = async () => {
     const note = await api.notes.create({
       projectId: session.projectId,
-      sessionId: scope === 'session' ? session.id : null,
-      scope,
+      scope: 'project',
       title: '',
       content: '',
     });
     setNotes((prev) => [note, ...prev]);
   };
 
-  const updateNote = async (id: string, patch: Partial<Pick<Note, 'title' | 'content' | 'scope'>>) => {
-    // When flipping scope to 'project', the API clears session_id; flipping
-    // back to 'session' needs the current session id.
-    const payload: any = { ...patch };
-    if (patch.scope === 'session') payload.sessionId = session.id;
-    if (patch.scope === 'project') payload.sessionId = null;
-
-    const updated = await api.notes.update(id, payload);
+  const updateNote = async (id: string, patch: Partial<Pick<Note, 'title' | 'content'>>) => {
+    const updated = await api.notes.update(id, patch);
     setNotes((prev) => prev.map((n) => (n.id === id ? updated : n)));
   };
 
@@ -569,15 +582,10 @@ function PromptBuilderTab({ session }: { session: Session }) {
     }
   };
 
-  const filtered = useMemo(() => {
-    if (filter === 'all') return notes;
-    return notes.filter((n) => n.scope === filter);
-  }, [notes, filter]);
-
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, color: 'var(--text-muted)', fontSize: 13, padding: 24 }}>
-        <Spinner size="sm" /> Loading notes…
+        <Spinner size="sm" /> Loading prompts…
       </div>
     );
   }
@@ -594,53 +602,15 @@ function PromptBuilderTab({ session }: { session: Session }) {
           borderBottom: '1px solid var(--border)',
           flexShrink: 0,
           backgroundColor: 'var(--bg-primary)',
-          flexWrap: 'wrap',
         }}
       >
-        <div style={{ display: 'flex', gap: 2, border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-          {(['all', 'session', 'project'] as const).map((id) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setFilter(id)}
-              style={{
-                fontSize: 11,
-                padding: '4px 10px',
-                textTransform: 'capitalize',
-                background: filter === id ? 'var(--accent-blue)' : 'transparent',
-                color: filter === id ? 'white' : 'var(--text-secondary)',
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: filter === id ? 600 : 500,
-              }}
-            >
-              {id}
-            </button>
-          ))}
-        </div>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>
+          Saved prompts
+        </span>
         <div style={{ flex: 1 }} />
         <button
           type="button"
-          onClick={() => addNote('session')}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            fontSize: 11,
-            padding: '4px 10px',
-            borderRadius: 'var(--radius-sm)',
-            border: '1px solid var(--border)',
-            backgroundColor: 'var(--bg-elevated)',
-            color: 'var(--text-primary)',
-            cursor: 'pointer',
-            fontWeight: 500,
-          }}
-        >
-          <Plus size={12} /> Session note
-        </button>
-        <button
-          type="button"
-          onClick={() => addNote('project')}
+          onClick={addNote}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -655,28 +625,29 @@ function PromptBuilderTab({ session }: { session: Session }) {
             fontWeight: 500,
           }}
         >
-          <Plus size={12} /> Project note
+          <Plus size={12} /> New prompt
         </button>
       </div>
 
-      {/* Notes list */}
+      {/* Prompt list */}
       <div className="mt-scroll" style={{ flex: 1, overflow: 'auto', padding: 10 }}>
-        {filtered.length === 0 ? (
+        {notes.length === 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 8, color: 'var(--text-muted)' }}>
             <MessageSquare size={32} style={{ opacity: 0.4 }} />
-            <span style={{ fontSize: 14, fontWeight: 500 }}>No notes yet</span>
+            <span style={{ fontSize: 14, fontWeight: 500 }}>No saved prompts yet</span>
             <span style={{ fontSize: 12, textAlign: 'center', maxWidth: 280 }}>
-              Capture ideas as you think of them. Click "AI refine" on any note to rewrite it as a clear prompt.
+              Save a draft from the composer, or click "New prompt". Load any prompt back into the composer to edit and send.
             </span>
           </div>
         ) : (
-          filtered.map((note) => (
+          notes.map((note) => (
             <NoteCard
               key={note.id}
               note={note}
               onChange={(patch) => updateNote(note.id, patch)}
               onDelete={() => deleteNote(note.id)}
               onRefine={() => refineNote(note.id)}
+              onLoadIntoComposer={() => requestComposerRecall(session.id, note.content, note.id)}
             />
           ))
         )}

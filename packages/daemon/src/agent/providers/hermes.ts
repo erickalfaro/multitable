@@ -162,18 +162,21 @@ export class HermesAdapter implements ProviderAdapter {
     modes: [
       {
         value: 'default',
-        label: 'Default',
-        description: 'Standard Hermes behavior; dangerous tool calls prompt the host for approval.',
+        label: 'Ask first',
+        description: 'Standard Hermes behavior; dangerous tool calls prompt you for approval.',
+        tone: 'standard',
       },
       {
         value: 'plan',
         label: 'Plan',
         description: 'Advisory plan mode — Hermes ACP has no native plan-mode RPC today.',
+        tone: 'safe',
       },
       {
         value: 'read-only',
         label: 'Read-only',
         description: 'Advisory read-only — relies on the user keeping Hermes from writing files.',
+        tone: 'safe',
       },
     ],
     // Hermes honors `/reasoning <level>` slash-commands on the live ACP session,

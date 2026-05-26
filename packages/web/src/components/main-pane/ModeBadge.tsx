@@ -8,6 +8,7 @@ import type {
   DiscoveredModel,
 } from '../../lib/types';
 import { api } from '../../lib/api';
+import { modeOptionTone, modeToneColor } from '../../lib/modeTone';
 import { useAppStore } from '../../stores/appStore';
 import { useIsMobile } from '../../lib/useIsMobile';
 
@@ -317,10 +318,24 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
                           top: 8,
                           bottom: 8,
                           width: 2,
-                          background: 'var(--accent-amber)',
+                          background: modeToneColor(modeOptionTone(opt)),
                         }}
                       />
                     )}
+                    {/* Risk-tier dot — marks every behavior by its tone so the
+                        list is self-explanatory (safe / ask-first / elevated /
+                        danger), not just labelled. */}
+                    <span
+                      aria-hidden
+                      style={{
+                        flexShrink: 0,
+                        width: 8,
+                        height: 8,
+                        marginTop: 4,
+                        borderRadius: '50%',
+                        background: modeToneColor(modeOptionTone(opt)),
+                      }}
+                    />
                     <span
                       style={{
                         display: 'flex',

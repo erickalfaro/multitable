@@ -46,6 +46,25 @@ export function clearDraft(processId: string): void {
   }
 }
 
+const TITLE_MAX = 60;
+
+/**
+ * Derive a note title from prompt text: the first non-empty line, stripped of
+ * leading markdown markers (#, -, *, >, "1.") and clamped to ~60 chars. Falls
+ * back to a timestamped label when the text has no usable line.
+ */
+export function firstLineTitle(text: string): string {
+  const line = text
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!line) {
+    return `Prompt ${new Date().toLocaleString()}`;
+  }
+  const cleaned = line.replace(/^(#{1,6}\s+|[-*>]\s+|\d+\.\s+)/, '').trim() || line;
+  return cleaned.length > TITLE_MAX ? cleaned.slice(0, TITLE_MAX - 1).trimEnd() + '…' : cleaned;
+}
+
 export function flushDraft(processId: string, text: string): void {
   const existing = pending.get(processId);
   if (existing) {

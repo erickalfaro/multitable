@@ -123,6 +123,12 @@ export interface ToolDeltaPayload {
 // between provider primitives: whatever the adapter declares here is what
 // goes straight back to the SDK on the next turn.
 
+/** Risk tier of a mode. Purely a UI presentation hint — drives the color of
+ * the behavior badge marker and the composer's send button so the active risk
+ * posture is obvious at a glance. Adapter-declared (like label/description) so
+ * the web side keeps zero hardcoded mode knowledge. */
+export type ModeTone = 'safe' | 'standard' | 'elevated' | 'danger';
+
 export interface ModeOption {
   /** Native SDK value passed through verbatim (e.g. 'acceptEdits' for Claude,
    * 'workspace-write' for Codex). */
@@ -132,6 +138,9 @@ export interface ModeOption {
   /** One-line description shown beneath the label in the dropdown.
    * For Claude these are lifted from the SDK JSDoc verbatim. */
   description: string;
+  /** Risk tier driving UI coloring. Optional; the UI falls back to 'standard'
+   * (amber) when absent. */
+  tone?: ModeTone;
 }
 
 // === ProviderCapabilities ==================================================

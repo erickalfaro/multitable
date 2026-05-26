@@ -265,6 +265,25 @@ interface AppState {
   toggleSelectedFile: (sessionId: string, path: string) => void;
   clearSelectedFiles: (sessionId: string) => void;
 
+  // Per-project nonce bumped whenever a note is mutated outside the Prompt
+  // Builder tab (e.g. the composer's Save button). The tab adds it to its load
+  // effect deps so a composer-side save refetches; a no-op when the tab is closed.
+  notesVersionByProject: Record<string, number>;
+  bumpNotesVersion: (projectId: string) => void;
+
+  // Cross-component bridge: the Prompt Builder tab pushes a saved note's content
+  // here so the composer (a separate component) can load it for editing. The
+  // nonce lets the same text be recalled repeatedly (a bare string wouldn't re-fire).
+  // `noteId` is the note the text came from so a later Save overwrites it.
+  composerRecallBySession: Record<string, { text: string; nonce: number; noteId: string | null }>;
+  // The note id the live composer text was loaded from (if any). While set, the
+  // composer's Save updates that note instead of creating a new one. Cleared when
+  // the composer empties, sends, or saves.
+  composerOriginNoteBySession: Record<string, string>;
+  requestComposerRecall: (sessionId: string, text: string, noteId?: string | null) => void;
+  consumeComposerRecall: (sessionId: string) => void;
+  clearComposerOriginNote: (sessionId: string) => void;
+
   // Per-provider model catalog. Lazily fetched the first time a ModelChip
   // mounts for a session whose model is non-default — the daemon endpoint
   // probes the provider CLI on each call so we cache aggressively. Status
@@ -1177,6 +1196,49 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       selectedFilesBySession: { ...s.selectedFilesBySession, [sessionId]: [] },
     })),
+
+  notesVersionByProject: {},
+  bumpNotesVersion: (projectId) =>
+    set((s) => ({
+      notesVersionByProject: {
+        ...s.notesVersionByProject,
+        [projectId]: (s.notesVersionByProject[projectId] ?? 0) + 1,
+      },
+    })),
+
+  composerRecallBySession: {},
+  composerOriginNoteBySession: {},
+  requestComposerRecall: (sessionId, text, noteId = null) =>
+    set((s) => {
+      const origin = { ...s.composerOriginNoteBySession };
+      if (noteId) origin[sessionId] = noteId;
+      else delete origin[sessionId];
+      return {
+        composerRecallBySession: {
+          ...s.composerRecallBySession,
+          [sessionId]: {
+            text,
+            nonce: (s.composerRecallBySession[sessionId]?.nonce ?? 0) + 1,
+            noteId,
+          },
+        },
+        composerOriginNoteBySession: origin,
+      };
+    }),
+  consumeComposerRecall: (sessionId) =>
+    set((s) => {
+      if (!s.composerRecallBySession[sessionId]) return {};
+      const next = { ...s.composerRecallBySession };
+      delete next[sessionId];
+      return { composerRecallBySession: next };
+    }),
+  clearComposerOriginNote: (sessionId) =>
+    set((s) => {
+      if (!s.composerOriginNoteBySession[sessionId]) return {};
+      const next = { ...s.composerOriginNoteBySession };
+      delete next[sessionId];
+      return { composerOriginNoteBySession: next };
+    }),
 
   // Model catalog cache. The daemon route serves `claude` / `codex` / `hermes`
   // today; copilot is `comingSoon` and short-circuits to a no-op so the chip

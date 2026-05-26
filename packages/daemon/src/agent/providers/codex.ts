@@ -35,16 +35,19 @@ const CODEX_NATIVE_MODES = [
     value: 'workspace-write' as SandboxMode,
     label: 'Workspace write',
     description: 'Agent can read and edit files inside the workspace.',
+    tone: 'elevated',
   },
   {
     value: 'read-only' as SandboxMode,
     label: 'Read-only',
     description: 'No file mutations; agent can read and reason only.',
+    tone: 'safe',
   },
   {
     value: 'danger-full-access' as SandboxMode,
     label: 'Full access',
     description: 'Full filesystem access outside the workspace — advanced.',
+    tone: 'danger',
   },
 ] as const;
 
