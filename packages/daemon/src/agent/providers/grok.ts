@@ -315,22 +315,39 @@ export class GrokAdapter implements ProviderAdapter {
         stopReason: result.stopReason,
       });
 
+      // Finalize the turn's messages. The reasoning + assistant text streamed
+      // live as previews (emitReasoningDelta / emitAssistantDelta); turn-complete
+      // clears those previews, so we MUST emit canonical messages to replace
+      // them or the thinking + answer vanish. Reasoning first so it renders
+      // above the answer (matches grokParser's on-disk ordering). Emitting both
+      // in one assistant-message broadcast keeps the swap atomic on the client.
+      const now = Date.now();
+      const finalMessages: Message[] = [];
+
+      if (buffers.reasoningText.trim().length > 0) {
+        finalMessages.push({
+          id: `grok:${grokSessionId}:reasoning:${now}`,
+          ts: now,
+          kind: 'reasoning',
+          text: buffers.reasoningText,
+        });
+        cb.emitReasoningDelta('');
+      }
+
       if (buffers.assistantText.trim().length > 0) {
-        const id = `grok:${grokSessionId}:assistant:${Date.now()}`;
-        const finalMsg: Message = {
-          id,
-          ts: Date.now(),
+        finalMessages.push({
+          id: `grok:${grokSessionId}:assistant:${now}`,
+          ts: now + 1,
           kind: 'assistant',
           text: buffers.assistantText,
           model: s.model ?? 'grok-build',
-        };
-        cb.pushMessages([finalMsg]);
-        cb.emitAssistantMessage([finalMsg]);
+        });
         cb.emitAssistantDelta('');
       }
 
-      if (buffers.reasoningText.trim().length > 0) {
-        cb.emitReasoningDelta('');
+      if (finalMessages.length > 0) {
+        cb.pushMessages(finalMessages);
+        cb.emitAssistantMessage(finalMessages);
       }
 
       // Usage comes back in the prompt response `_meta` (no USD).
