@@ -150,7 +150,16 @@ export const CodeBlock = memo(function CodeBlock({ code, lang }: Props) {
     >
       <div
         className="mt-scroll mt-shiki"
-        style={{ overflowX: 'auto' }}
+        style={{
+          overflowX: 'auto',
+          // iOS momentum scrolling so a code block scrolls naturally under
+          // a touch flick rather than feeling stuck. No-op on non-WebKit.
+          WebkitOverflowScrolling: 'touch',
+          // Prevent the browser from absorbing horizontal swipes inside
+          // the code block as a back-gesture / page scroll — the swipe
+          // belongs to this scroll container.
+          touchAction: 'pan-x pan-y',
+        }}
         dangerouslySetInnerHTML={{ __html: innerHtml }}
       />
       <CopyButton text={code} visible={hover} />

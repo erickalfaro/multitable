@@ -26,6 +26,11 @@ export const MD_COMPONENTS: Components = {
           borderRadius: 'var(--radius-snug)',
           backgroundColor: 'var(--bg-hover)',
           color: 'var(--text-primary)',
+          // Inline code is often a long path or identifier with no natural
+          // break points — let it break anywhere on mobile so it doesn't
+          // push the chat column wider than the viewport.
+          wordBreak: 'break-word',
+          overflowWrap: 'anywhere',
         }}
       >
         {code}
@@ -89,9 +94,26 @@ export const MD_COMPONENTS: Components = {
     </h6>
   ),
   table: ({ children }) => (
-    <table style={{ borderCollapse: 'collapse', margin: '8px 0', fontSize: '0.95em' }}>
-      {children}
-    </table>
+    // Tables don't respect their parent's width by default — wide tables
+    // will push the chat column past the viewport on mobile with no way
+    // for the user to see the right-hand columns. Wrapping in a block
+    // container with `overflow-x: auto` is the standard pattern (GitHub,
+    // Discord, ChatGPT all do this) — the table can be as wide as it
+    // needs and the user swipes horizontally to read the rest.
+    <div
+      className="mt-scroll"
+      style={{
+        maxWidth: '100%',
+        overflowX: 'auto',
+        margin: '8px 0',
+        // WebKit momentum scrolling for table swipes on iOS.
+        WebkitOverflowScrolling: 'touch',
+      }}
+    >
+      <table style={{ borderCollapse: 'collapse', fontSize: '0.95em' }}>
+        {children}
+      </table>
+    </div>
   ),
   thead: ({ children }) => (
     <thead style={{ backgroundColor: 'var(--bg-elevated)' }}>{children}</thead>

@@ -663,3 +663,79 @@ select:focus-visible,
   padding: 10px 16px;
   margin: 0;
 }
+
+/* ---------- Responsive wide content in chat ----------
+ * Defence-in-depth for wide markdown content on narrow viewports. The
+ * markdown component overrides in lib/markdown.tsx already wrap <table>
+ * in a scroll container, but Streamdown's pipeline (rehype-harden,
+ * remark plugins) can re-render or sanitize in ways that bypass the
+ * Components map for partial parses during streaming. These rules guarantee
+ * that every <table>, <pre>, <code>, and image inside an assistant message
+ * is bounded by the message column on mobile, with horizontal scroll where
+ * appropriate — matching the GitHub markdown pattern (which is the
+ * industry-standard solution for responsive markdown tables).
+ *
+ * The chain works because every ancestor up to the chat scroll root has
+ * `min-width: 0` set, so these rules can actually shrink the table/pre to
+ * the column width without being overruled by flex/grid intrinsic sizing.
+ */
+.mt-chat-assistant table {
+  /* GitHub's pattern: display: block + width: max-content + max-width: 100%
+   * makes the table behave like a block element that wants to be as wide
+   * as its content (so columns size correctly) but capped at the parent's
+   * width, with overflow scrolling within itself for the excess. */
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+/* Counter the parent's `overflow-wrap: anywhere` cascade (set on
+ * .mt-chat-assistant for long URLs in prose). Per CSS spec, `anywhere`
+ * affects intrinsic sizing — cells' max-content is computed as "broken
+ * at every character," so the table's `width: max-content` above
+ * collapses to a near-minimum value that already fits the viewport,
+ * defeating `overflow-x: auto`. Reverting to `normal` here makes
+ * max-content reflect cells' true natural widths. */
+.mt-chat-assistant th,
+.mt-chat-assistant td {
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: normal;
+  hyphens: none;
+}
+
+/* Cells with long unbreakable tokens (URLs, file paths) still need a
+ * break path so a single 200-char URL doesn't push the table to 3000px.
+ * `break-word` wraps without altering max-content sizing, so the table
+ * still picks a sensible natural width. Scoped to children so the cell
+ * itself keeps `word-break: normal` from the rule above. */
+.mt-chat-assistant th > *,
+.mt-chat-assistant td > * {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+/* Headers stay on one line so column labels read as labels — matching
+ * the GitHub markdown pattern where headers force the column to its
+ * full natural width and the table wrapper scrolls horizontally. */
+.mt-chat-assistant th {
+  white-space: nowrap;
+}
+
+/* Inline + block code: must be allowed to break so a long path / URL in
+ * inline code or a wide line in a fenced block doesn't blow out the
+ * message column. (The .mt-shiki pre wrapper has its own overflow-x;
+ * this is for any <pre>/<code> that escapes the wrapper.) */
+.mt-chat-assistant pre {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.mt-chat-assistant img {
+  max-width: 100%;
+  height: auto;
+}

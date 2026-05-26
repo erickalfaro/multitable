@@ -249,9 +249,33 @@ function App() {
           const allSessions = triples.flatMap(([s]) => s);
           const allCommands = triples.flatMap(([, c]) => c);
           const allTerminals = triples.flatMap(([, , t]) => t);
-          store.setSessions(allSessions);
-          store.setCommands(allCommands);
-          store.setTerminals(allTerminals);
+          // MERGE rather than REPLACE so the snapshot-hydrated cache stays
+          // populated for the brief window before REST resolves. Without
+          // this, every cold reload (and every ws:reconnected refetch) would
+          // momentarily wipe sessions/commands/terminals from the store,
+          // visibly clearing the sidebar/dashboard before the REST response
+          // lands. The merge variants are id-keyed; stale entries that no
+          // longer exist server-side are pruned below via the diff pass.
+          const liveSessionIds = new Set(allSessions.map((s) => s.id));
+          const liveCommandIds = new Set(allCommands.map((c) => c.id));
+          const liveTerminalIds = new Set(allTerminals.map((t) => t.id));
+          store.mergeSessions(allSessions);
+          store.mergeCommands(allCommands);
+          store.mergeTerminals(allTerminals);
+          // Prune cached entries that no longer exist server-side (session
+          // was deleted while the tab was away). Drop them via the existing
+          // remove reducers so messagesBySession + messagesMeta entries get
+          // cleaned up too — keeps the LRU snapshot honest.
+          const live = useAppStore.getState();
+          for (const id of Object.keys(live.sessions)) {
+            if (!liveSessionIds.has(id)) live.removeSession(id);
+          }
+          for (const id of Object.keys(live.commands)) {
+            if (!liveCommandIds.has(id)) live.removeCommand(id);
+          }
+          for (const id of Object.keys(live.terminals)) {
+            if (!liveTerminalIds.has(id)) live.removeTerminal(id);
+          }
 
           // Seed git status for every project so the sidebar's SOURCE CONTROL
           // section knows which projects are git repos and what their badge
@@ -480,6 +504,15 @@ function App() {
       wsClient.on('ws:reconnected', () => {
         loadData();
         syncActiveSessions('ws-reconnected');
+      }),
+      // ws:resumed fires when the page comes back from bfcache (mobile
+      // foreground after backgrounding the browser, desktop bfcache restore).
+      // The JS context, store, and React tree are all intact — only the WS
+      // dropped to make the page bfcache-eligible. Skip the full project /
+      // session refetch; just pull authoritative state for any session that
+      // might have advanced while we were away.
+      wsClient.on('ws:resumed', () => {
+        syncActiveSessions('ws-resumed');
       }),
       wsClient.on('process-state-changed', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
@@ -876,11 +909,98 @@ function App() {
     }, RUNNING_SAFETY_POLL_MS);
 
     const syncOnVisible = () => {
-      if (!document.hidden) syncActiveSessions('visible');
+      if (!document.hidden) {
+        // Coming back to the foreground. If we suspended the socket for
+        // bfcache, resume it (no-op if still connected). The resume's
+        // ws:resumed handler will sync active sessions, so skip the
+        // duplicate sync here when a resume is what brought us back.
+        if (wsClient.isSuspended()) {
+          wsClient.resume();
+        } else {
+          syncActiveSessions('visible');
+        }
+      }
     };
-    const syncOnFocus = () => syncActiveSessions('focus');
+    const syncOnFocus = () => {
+      if (wsClient.isSuspended()) {
+        wsClient.resume();
+      } else {
+        syncActiveSessions('focus');
+      }
+    };
     document.addEventListener('visibilitychange', syncOnVisible);
     window.addEventListener('focus', syncOnFocus);
+
+    // bfcache cooperation. Mobile Chrome / iOS Safari evict pages with open
+    // WebSockets within seconds of backgrounding, forcing a hard reload on
+    // return. Closing the socket on pagehide lets the browser bfcache the
+    // page — return-to-foreground is then a near-instant restore with all
+    // React state (selected session, scroll position, composer draft) intact.
+    //
+    // We listen to pagehide (not just visibilitychange) because pagehide is
+    // the specific signal that the page is leaving — it fires for tab close,
+    // navigate-away, and bfcache snapshot, but NOT for in-app tab switches.
+    // pageshow fires on both initial load (persisted=false) and bfcache
+    // restore (persisted=true); only the latter needs explicit handling
+    // since the React tree was destroyed in the former case.
+    const onPageHide = (e: PageTransitionEvent) => {
+      // Only suspend when the page is bfcache-eligible — i.e. persisted
+      // *could* be true on the next pageshow. The browser will only persist
+      // if we don't block it, so closing the socket here is what makes that
+      // possible. For real unloads (persisted=false), suspend is harmless
+      // since the page is gone anyway.
+      void e;
+      wsClient.suspend();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) {
+        // bfcache restore — JS state alive; resume the socket so we receive
+        // events again. ws:resumed will trigger a session sync to catch up.
+        devLog.add({ category: 'ws-conn', label: 'pageshow (bfcache restore)' });
+        wsClient.resume();
+      } else {
+        // Fresh load. If the previous navigation was supposed to bfcache and
+        // didn't, the browser tells us why via the experimental
+        // `notRestoredReasons` API. Surface it in the dev log so we can see
+        // what disqualified us next time the user reports a refresh — very
+        // hard to diagnose without it.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const nav = performance.getEntriesByType('navigation')[0] as any;
+        const reasons = nav?.notRestoredReasons;
+        if (reasons) {
+          devLog.add({
+            category: 'ws-conn',
+            level: 'warn',
+            label: 'bfcache restore failed',
+            detail: JSON.stringify(reasons),
+            data: reasons,
+          });
+          // Also surface as a transient toast so the user can read the
+          // browser's reason without needing the dev log open. The dev log
+          // is hard to access on mobile; this gives us a quick channel to
+          // diagnose any remaining bfcache blocker from a field report.
+          // Throttled to one per cold load so it can't spam — pageshow
+          // only fires once per navigation.
+          //
+          // notRestoredReasons.reasons is a tree of NotRestoredReasonDetails;
+          // the most useful field is the top-level `reasons` array of strings
+          // (Chromium) or a `reason` string (Firefox WIP). Pick whichever is
+          // present without crashing if the shape changes.
+          let label: string | null = null;
+          if (Array.isArray(reasons.reasons) && reasons.reasons.length > 0) {
+            const first = reasons.reasons[0];
+            label = typeof first === 'string' ? first : first?.reason ?? null;
+          } else if (typeof reasons.reason === 'string') {
+            label = reasons.reason;
+          }
+          if (label) {
+            toast(`Tab reloaded: ${label}`, { duration: 4000 });
+          }
+        }
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
 
     return () => {
       offs.forEach(off => off());
@@ -890,6 +1010,8 @@ function App() {
       window.clearInterval(syncTimer);
       document.removeEventListener('visibilitychange', syncOnVisible);
       window.removeEventListener('focus', syncOnFocus);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
       unsubPersist();
       unsubPersistSelection();
       unsubPersistSidebar();

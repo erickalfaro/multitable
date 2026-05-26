@@ -28,8 +28,19 @@ class WsClient {
   private subscribedDims: { cols: number; rows: number } | null = null;
   private retryCount = 0;
   private hasConnectedBefore = false;
+  // True while the page is being suspended (pagehide / mobile background).
+  // We intentionally close the socket so the browser can bfcache the page —
+  // an open WebSocket is a known bfcache disqualifier. When `suspended` is
+  // true, `onclose` skips the reconnect loop and `resume()` is the only path
+  // back to a live connection. The next `onopen` after a resume emits a
+  // `ws:resumed` event (not `ws:reconnected`) so listeners can do a
+  // lightweight sync instead of a full data refetch.
+  private suspended = false;
+  private resumePending = false;
 
   connect(): void {
+    // External callers (Retry button, resume) override suspend.
+    this.suspended = false;
     // Idempotent: if a socket is already open or connecting, do nothing.
     // Prevents StrictMode's double-mount from opening two sockets that both
     // deliver every broadcast to the shared handler list.
@@ -42,8 +53,9 @@ class WsClient {
 
     // Only flip the banner for *re*connects. The first attempt should be
     // invisible — flashing "Reconnecting..." during normal mount feels like
-    // a hang.
-    if (this.hasConnectedBefore) {
+    // a hang. A `resumePending` reconnect is also kept silent because the
+    // socket only dropped because we asked it to (bfcache).
+    if (this.hasConnectedBefore && !this.resumePending) {
       useAppStore.getState().setConnectionState('reconnecting');
     }
     devLog.add({ category: 'ws-conn', label: `connecting ${url}` });
@@ -51,17 +63,25 @@ class WsClient {
 
     this.ws.onopen = () => {
       const isReconnect = this.hasConnectedBefore;
+      const isResume = this.resumePending;
       this.hasConnectedBefore = true;
+      this.resumePending = false;
       this.reconnectDelay = 1000;
       this.retryCount = 0;
       useAppStore.getState().setConnectionState('connected');
       devLog.add({
         category: 'ws-conn',
-        label: isReconnect ? 'reconnected' : 'connected',
+        label: isResume ? 'resumed' : isReconnect ? 'reconnected' : 'connected',
       });
 
-      // Notify listeners so they can re-fetch data after server restart
-      if (isReconnect) {
+      // Resume (page bfcache restore / mobile foreground): lightweight signal
+      // for listeners — they should sync active sessions but skip the full
+      // projects/sessions/commands/terminals refetch since state is intact.
+      // Reconnect (server restart): full reload signal.
+      if (isResume) {
+        const handlers = this.handlers.get('ws:resumed') ?? [];
+        handlers.forEach(h => h({ type: 'ws:resumed', payload: {} } as WsMessage));
+      } else if (isReconnect) {
         const handlers = this.handlers.get('ws:reconnected') ?? [];
         handlers.forEach(h => h({ type: 'ws:reconnected', payload: {} } as WsMessage));
       }
@@ -97,6 +117,15 @@ class WsClient {
     };
 
     this.ws.onclose = (evt) => {
+      // Intentional close for bfcache: do not retry, do not flip the banner.
+      // resume() owns the next connection attempt.
+      if (this.suspended) {
+        devLog.add({
+          category: 'ws-conn',
+          label: `closed (suspended for bfcache, code=${evt.code})`,
+        });
+        return;
+      }
       this.retryCount++;
       devLog.add({
         category: 'ws-conn',
@@ -212,6 +241,44 @@ class WsClient {
 
   answerQuestion(id: string, answers: string[][]): void {
     this.send({ type: 'permission:answer-question', payload: { id, answers } });
+  }
+
+  // Suspend the live connection so the page becomes bfcache-eligible.
+  // Called from a `pagehide` listener — the browser refuses to bfcache pages
+  // with an open WebSocket, so leaving the socket open forces a fresh load
+  // when the user returns. Idempotent.
+  suspend(): void {
+    if (this.suspended) return;
+    this.suspended = true;
+    devLog.add({ category: 'ws-conn', label: 'suspending for bfcache' });
+    const sock = this.ws;
+    this.ws = null;
+    if (sock) {
+      try {
+        sock.close(1000, 'suspend');
+      } catch {
+        // ignore — socket may already be in a terminal state
+      }
+    }
+  }
+
+  // Re-establish the live connection after a suspend. Called from
+  // `pageshow` (or `visibilitychange` to visible on mobile). The next
+  // `onopen` fires a `ws:resumed` event rather than `ws:reconnected` so
+  // listeners can pick a lightweight sync path (no full refetch /
+  // connection-overlay flash). Safe to call when not suspended.
+  resume(): void {
+    if (!this.suspended && this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    devLog.add({ category: 'ws-conn', label: 'resuming' });
+    this.suspended = false;
+    this.resumePending = true;
+    this.connect();
+  }
+
+  isSuspended(): boolean {
+    return this.suspended;
   }
 
   respondElicitation(

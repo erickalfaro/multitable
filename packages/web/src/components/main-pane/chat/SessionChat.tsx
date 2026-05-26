@@ -78,7 +78,16 @@ export function SessionChat({ sessionId, session }: Props) {
       previousKey === `${sessionId}:` && agentSessionId !== '';
     if (isFirstTurnAgentIdAssignment) return;
 
-    setLoading(true);
+    // Skip the loading spinner if we already have cached messages — the
+    // persistedStore hydration (lib/persistedStore.ts) populates the store
+    // synchronously at module init, so on a cold reload (bfcache eviction)
+    // the user sees their conversation immediately. The REST fetch still
+    // runs in the background and `mergeMessages` reconciles any drift via
+    // id-based dedup, no visible flash. The spinner only shows when we
+    // genuinely have nothing to display (first time opening this session).
+    const hasCached =
+      (useAppStore.getState().messagesBySession[sessionId]?.length ?? 0) > 0;
+    if (!hasCached) setLoading(true);
     api.sessions
       .messages(sessionId)
       .then((res) => {
@@ -191,6 +200,13 @@ export function SessionChat({ sessionId, session }: Props) {
         }}
       >
         <ChatScroller
+          // Stable per-session key so scroll position is restored after a
+          // reload (bfcache eviction, hard refresh). Keying on sessionId
+          // alone is sufficient — each session has its own scroll history,
+          // and switching to a different session resets the key (which
+          // means the new session starts from its own saved position or
+          // the default bottom).
+          persistKey={sessionId}
           pinnedHeader={
             userMessages.length > 0 ? <PinnedUserPrompt userMessages={userMessages} /> : null
           }
