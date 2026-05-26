@@ -25,6 +25,7 @@ import {
   saveCustomThemesToStorage,
   saveActiveThemeIdToStorage,
 } from '../lib/themes';
+import { loadSnapshot, saveSnapshot } from '../lib/persistedStore';
 
 interface AppState {
   // Projects
@@ -162,6 +163,11 @@ interface AppState {
 
   // Session transcript messages (chat view)
   messagesBySession: Record<string, Message[]>;
+  /** Per-session "last touched" timestamps, used by the LRU snapshot persister
+      (lib/persistedStore.ts) to decide which sessions to keep when the
+      working set exceeds the localStorage budget. Maintained automatically by
+      the message reducers; not consumed by any UI. */
+  messagesMeta: Record<string, { lastTouchedAt: number }>;
   setMessages: (sessionId: string, messages: Message[]) => void;
   appendMessages: (sessionId: string, messages: Message[]) => void;
   /** Merge a fetched batch with already-stored messages; dedupes by id, sorts by ts. */
@@ -403,12 +409,20 @@ function dedupById(messages: Message[]): Message[] {
   return out;
 }
 
+// Synchronous snapshot read — runs at module init, before React mounts.
+// Returns null on first boot / corrupt JSON / schema mismatch, in which case
+// every slice falls back to its empty default below. When non-null, persisted
+// slices hydrate from the snapshot so the first React commit sees a populated
+// store and renders the user's chat/dashboard instantly on cold reload (the
+// fallback path when mobile Chrome evicts the bfcache snapshot).
+const __snapshot = loadSnapshot();
+
 export const useAppStore = create<AppState>((set, get) => ({
   // Projects
-  projects: [],
-  expandedProjectIds: [],
+  projects: __snapshot?.projects ?? [],
+  expandedProjectIds: __snapshot?.expandedProjectIds ?? [],
   focusedProjectId: null,
-  sidebarProjectId: null,
+  sidebarProjectId: __snapshot?.sidebarProjectId ?? null,
   setSidebarProject: (id) => set({ sidebarProjectId: id }),
   setProjects: (projects) => set({ projects }),
   addProject: (project) => set((s) => ({ projects: [...s.projects, project] })),
@@ -457,9 +471,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   setExpandedProjects: (ids) => set({ expandedProjectIds: ids }),
 
   // Processes
-  sessions: {},
-  commands: {},
-  terminals: {},
+  sessions: __snapshot?.sessions ?? {},
+  commands: __snapshot?.commands ?? {},
+  terminals: __snapshot?.terminals ?? {},
   setSessions: (sessions) =>
     set({ sessions: Object.fromEntries(sessions.map(s => [s.id, s])) }),
   setCommands: (commands) =>
@@ -504,7 +518,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const sessions = { ...s.sessions };
       delete sessions[id];
-      return { sessions };
+      // Drop cached messages + meta so the LRU snapshot doesn't waste budget
+      // on a session the user just deleted.
+      const messagesBySession = { ...s.messagesBySession };
+      delete messagesBySession[id];
+      const messagesMeta = { ...s.messagesMeta };
+      delete messagesMeta[id];
+      return { sessions, messagesBySession, messagesMeta };
     }),
   upsertCommand: (command) =>
     set((s) => ({ commands: { ...s.commands, [command.id]: command } })),
@@ -524,7 +544,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
 
   // UI
-  selectedProcessId: null,
+  // Hydrate the last selected process so a cold reload (bfcache eviction)
+  // re-opens the user's session immediately. App.tsx's deep-link / restore
+  // logic still runs after projects/sessions arrive; it will clear this if
+  // the id no longer exists.
+  selectedProcessId: __snapshot?.selectedProcessId ?? null,
   selectedGitProjectId: null,
   selectedFileViewerProjectId: null,
   fileViewerOpenPath: {},
@@ -759,20 +783,31 @@ export const useAppStore = create<AppState>((set, get) => ({
   setOption: (option) => set({ currentOption: option }),
 
   // Messages
-  messagesBySession: {},
+  messagesBySession: __snapshot?.messagesBySession ?? {},
+  messagesMeta: __snapshot?.messagesMeta ?? {},
   setMessages: (sessionId, messages) =>
-    set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: messages } })),
+    set((s) => ({
+      messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
+      messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now() } },
+    })),
   appendMessages: (sessionId, messages) =>
     set((s) => {
       if (messages.length === 0) return s;
       const existing = s.messagesBySession[sessionId] ?? [];
       const merged = appendDeduped(existing, messages);
-      if (merged.length === existing.length) return s;
+      if (merged.length === existing.length) {
+        // No new messages, but still mark the session as recently touched so
+        // it doesn't fall out of the LRU window while it's actively in view.
+        return {
+          messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now() } },
+        };
+      }
       return {
         messagesBySession: {
           ...s.messagesBySession,
           [sessionId]: merged,
         },
+        messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now() } },
       };
     }),
   mergeMessages: (sessionId, messages) =>
@@ -847,14 +882,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       const appended = appendDeduped(filteredExisting, messages).sort((a, b) => a.ts - b.ts);
       const finalList = dedupById(appended);
 
-      return { messagesBySession: { ...s.messagesBySession, [sessionId]: finalList } };
+      return {
+        messagesBySession: { ...s.messagesBySession, [sessionId]: finalList },
+        messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now() } },
+      };
     }),
   clearMessages: (sessionId) =>
     set((s) => {
-      if (!(sessionId in s.messagesBySession)) return s;
+      const hasMessages = sessionId in s.messagesBySession;
+      const hasMeta = sessionId in s.messagesMeta;
+      if (!hasMessages && !hasMeta) return s;
       const next = { ...s.messagesBySession };
       delete next[sessionId];
-      return { messagesBySession: next };
+      const nextMeta = { ...s.messagesMeta };
+      delete nextMeta[sessionId];
+      return { messagesBySession: next, messagesMeta: nextMeta };
     }),
   rekeyMessage: (sessionId, oldId, newId) =>
     set((s) => {
@@ -1175,6 +1217,60 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 }));
+
+// ----- Snapshot persistence -----------------------------------------------
+//
+// Debounced writer: any change to a persisted slice schedules a save 500 ms
+// later. The shallow reference compare on `persistKeys` means a streaming
+// delta (which mutates `streamingBySession`/`reasoningStreamingBySession`/
+// `toolStreamingBySession`) doesn't trigger writes — those references never
+// change for a no-op tick because the reducers short-circuit on equality.
+//
+// On `pagehide` we synchronously flush any pending debounce so the
+// most-recent state lands before the browser snapshots the page (or before
+// the tab is unloaded altogether). This is the critical path for the
+// "resume feels seamless" requirement.
+//
+// Saves never throw — `saveSnapshot` catches QuotaExceeded internally and
+// retries with a smaller window. See lib/persistedStore.ts.
+if (typeof window !== 'undefined') {
+  let saveTimer: number | null = null;
+  const persistKeys: Array<keyof AppState> = [
+    'projects',
+    'sessions',
+    'commands',
+    'terminals',
+    'messagesBySession',
+    'messagesMeta',
+    'selectedProcessId',
+    'expandedProjectIds',
+    'sidebarProjectId',
+  ];
+  const flush = () => {
+    if (saveTimer !== null) {
+      window.clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    saveSnapshot(useAppStore.getState());
+  };
+  useAppStore.subscribe((state, prev) => {
+    // Cheap reference equality across the persisted slices — Zustand
+    // reducers above return new references only for slices that actually
+    // changed, so this short-circuits ~every WS tick that doesn't touch
+    // anything we persist.
+    let changed = false;
+    for (const k of persistKeys) {
+      if (state[k] !== prev[k]) {
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return;
+    if (saveTimer !== null) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(flush, 500);
+  });
+  window.addEventListener('pagehide', flush);
+}
 
 function isTaskState(s: string | undefined): boolean {
   return s === 'pending' || s === 'running' || s === 'completed' || s === 'failed' || s === 'killed';

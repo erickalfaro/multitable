@@ -59,9 +59,20 @@ interface Props {
   className?: string;
   style?: React.CSSProperties;
   pinnedHeader?: React.ReactNode;
+  /** When provided, scroll position is persisted to sessionStorage under
+      this key on every scroll, and restored on next mount with the same key.
+      Used by SessionChat so a mobile tab reload (bfcache eviction after a
+      long background) lands back at the user's scroll position rather than
+      snapping to the bottom — picking up where they left off. */
+  persistKey?: string;
 }
 
-export function ChatScroller({ children, className, style, pinnedHeader }: Props) {
+// One-shot per-mount key tracker so we don't restore twice if React StrictMode
+// double-mounts in dev. Lives at module scope, intentionally — keyed by
+// persistKey so each session's first ChatScroller mount restores once.
+const restoredKeys = new Set<string>();
+
+export function ChatScroller({ children, className, style, pinnedHeader, persistKey }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [scrollRootEl, setScrollRootEl] = useState<HTMLDivElement | null>(null);
@@ -125,10 +136,31 @@ export function ChatScroller({ children, className, style, pinnedHeader }: Props
     }
   }, []);
 
-  // User-driven scroll listener.
+  // User-driven scroll listener. Also throttles a sessionStorage write of
+  // the current scroll offset so a tab reload (when bfcache fails — long
+  // background on memory-constrained mobile) can restore the user to the
+  // exact place they were reading rather than snapping to the bottom.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    let lastPersist = 0;
+    const persist = () => {
+      if (!persistKey) return;
+      const now = performance.now();
+      // Throttle to ~6 Hz — scroll events fire ~60 Hz; we don't need every
+      // one in sessionStorage. The final position lands via the pagehide
+      // flush below.
+      if (now - lastPersist < 150) return;
+      lastPersist = now;
+      try {
+        sessionStorage.setItem(
+          `mt:chatScroll:${persistKey}`,
+          JSON.stringify({ top: el.scrollTop, atBottom: atBottomRef.current }),
+        );
+      } catch {
+        // sessionStorage may be unavailable / quota exceeded — ignore.
+      }
+    };
     const onScroll = () => {
       // Ignore the brief tail of programmatic scrolls so an auto-track
       // adjustment doesn't get misread as a user gesture.
@@ -138,10 +170,70 @@ export function ChatScroller({ children, className, style, pinnedHeader }: Props
         atBottomRef.current = stuck;
         setAtBottom(stuck);
       }
+      persist();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [isStuck]);
+    // Belt-and-braces: flush on pagehide so the very last scroll position
+    // (which the throttle may have skipped) is persisted before bfcache /
+    // unload. Use the same key write so the restore path sees fresh data.
+    const onPageHide = () => {
+      if (!persistKey) return;
+      try {
+        sessionStorage.setItem(
+          `mt:chatScroll:${persistKey}`,
+          JSON.stringify({ top: el.scrollTop, atBottom: atBottomRef.current }),
+        );
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [isStuck, persistKey]);
+
+  // Restore scroll position on mount when persistKey + saved data exist.
+  // Runs in a layout effect so the position is applied BEFORE the browser
+  // paints — no visible flash of "snapped to bottom, then jumped back".
+  // The restore only fires for non-bottom positions; if the user was at
+  // the bottom when they left, we keep the existing snap-to-bottom default
+  // (which is also what they want for the next assistant turn).
+  React.useLayoutEffect(() => {
+    if (!persistKey) return;
+    if (restoredKeys.has(persistKey)) return;
+    restoredKeys.add(persistKey);
+    const el = scrollRef.current;
+    if (!el) return;
+    let saved: { top: number; atBottom: boolean } | null = null;
+    try {
+      const raw = sessionStorage.getItem(`mt:chatScroll:${persistKey}`);
+      if (raw) saved = JSON.parse(raw);
+    } catch {
+      // ignore
+    }
+    if (!saved || saved.atBottom) return; // bottom is the default — no-op
+    // Defer one frame so initial children have laid out (scrollHeight grew
+    // past the viewport). Without this, scrollHeight is too small and the
+    // assignment clamps to 0.
+    const apply = () => {
+      const root = scrollRef.current;
+      if (!root) return;
+      const maxScroll = Math.max(0, root.scrollHeight - root.clientHeight);
+      const target = Math.min(maxScroll, Math.max(0, saved!.top));
+      // Suppress the snap-to-bottom auto-track for this position — the user
+      // is intentionally NOT at the bottom.
+      atBottomRef.current = false;
+      setAtBottom(false);
+      programmaticUntilRef.current = performance.now() + 400;
+      root.scrollTop = target;
+    };
+    // requestAnimationFrame stacks well with the ChatScroller's existing
+    // ResizeObserver: the observer fires once messages are laid out; our
+    // rAF chain runs after that initial layout pass so target is valid.
+    requestAnimationFrame(() => requestAnimationFrame(apply));
+  }, [persistKey]);
 
   // Auto-track: when content height changes, snap to bottom if the user is
   // already there. ResizeObserver fires synchronously after layout and BEFORE
@@ -209,7 +301,14 @@ export function ChatScroller({ children, className, style, pinnedHeader }: Props
           style={{
             flex: 1,
             minHeight: 0,
+            minWidth: 0,
             overflowY: 'auto',
+            // Per-message scroll containers (code blocks, tables) handle
+            // their own horizontal scroll. The scroll root itself must
+            // clip — without this, a wide child that escapes its own
+            // scroll container would push the whole chat column past the
+            // viewport on mobile (no way to see the right-hand side).
+            overflowX: 'hidden',
             // overflow-anchor: none disables the browser's heuristic anchor
             // adjustment. We do all anchoring ourselves via ResizeObserver +
             // explicit scrollTop assignment.
@@ -217,7 +316,17 @@ export function ChatScroller({ children, className, style, pinnedHeader }: Props
             ...style,
           }}
         >
-          <div ref={contentRef} style={{ padding: '12px 14px 16px' }}>
+          <div
+            ref={contentRef}
+            style={{
+              padding: '12px 14px 16px',
+              // minWidth: 0 lets flex/grid children shrink below their
+              // intrinsic content width — required for the per-message
+              // `overflow-x: auto` containers below to actually clip and
+              // scroll instead of expanding their parent.
+              minWidth: 0,
+            }}
+          >
             {children}
           </div>
         </div>

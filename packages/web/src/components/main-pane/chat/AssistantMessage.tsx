@@ -17,13 +17,25 @@ interface Props {
 // Memoized so unrelated parent re-renders don't re-parse the markdown.
 export const AssistantMessage = memo(function AssistantMessage({ text, costLabel, streaming }: Props) {
   return (
-    <div style={{ margin: 0, color: 'var(--text-primary)' }}>
+    <div style={{ margin: 0, color: 'var(--text-primary)', minWidth: 0 }}>
       <div
         className="mt-chat-assistant"
         style={{
           fontSize: 12.5,
           lineHeight: 1.55,
           maxWidth: '100%',
+          // Flex shrink: without minWidth: 0 a flex/grid child won't shrink
+          // below its intrinsic content width, so a long URL or a wide code
+          // block would push the whole chat column wider than the viewport
+          // (no horizontal scroll, just clipped content on the right).
+          minWidth: 0,
+          // Long unbreakable strings (URLs, file paths, long inline code)
+          // need to break to keep the message column within viewport width
+          // on mobile. `anywhere` is the modern equivalent of `break-word`
+          // that also influences min-content sizing — critical inside flex
+          // containers — and is the industry standard for chat surfaces.
+          overflowWrap: 'anywhere',
+          wordBreak: 'break-word',
         }}
       >
         <StreamingContext.Provider value={!!streaming}>

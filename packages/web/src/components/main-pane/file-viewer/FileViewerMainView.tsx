@@ -132,8 +132,27 @@ export function FileViewerMainView({ projectId }: Props) {
   ]);
 
   // Warn on tab close / reload while there are unsaved edits.
+  //
+  // Skipped on mobile / touch devices for two reasons:
+  //   1. Chrome bfcache: a registered `beforeunload` listener — even one
+  //      that does nothing — disqualifies the page from bfcache. On mobile
+  //      that means every app-background triggers a hard reload on return,
+  //      which is a far worse UX than the warning would have been.
+  //   2. Mobile browsers (Chrome Android, iOS Safari) suppress the
+  //      confirmation dialog entirely — the listener fires but no prompt
+  //      is shown — so it has no functional value there anyway.
+  // The user-initiated close flow (`guardedClose` below) still gates
+  // destructive in-app navigation via `window.confirm`, which DOES work
+  // on mobile.
   useEffect(() => {
     if (!isDirty) return;
+    if (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(pointer: coarse)').matches
+    ) {
+      return;
+    }
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';

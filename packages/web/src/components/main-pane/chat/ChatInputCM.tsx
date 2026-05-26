@@ -4,6 +4,7 @@ import { ArrowUp, Paperclip, X, Clock, Square, Maximize2, File as FileIcon } fro
 import { ModeBadge } from '../ModeBadge';
 import { ExpandedComposer, type ImageAttachment } from './ExpandedComposer';
 import { ModelChip } from './ModelChip';
+import { useIsMobile } from '../../../lib/useIsMobile';
 
 // Stable empty array so the pending-sends selector doesn't churn on
 // unrelated store updates.
@@ -204,6 +205,10 @@ export const ChatInputCM = memo(function ChatInputCM({
   // Live session for the mode dropdown. ModeBadge self-hides when the
   // adapter only supports one mode, so it's safe to render unconditionally.
   const session = useAppStore((s) => s.sessions[processId]);
+
+  // On mobile, the model chip + mode/effort controls move up to the
+  // SessionHeaderBar (below the title) to free vertical space in the composer.
+  const isMobile = useIsMobile();
 
   // Keep project id reachable by the file-mention completion source — it
   // reads it lazily so we don't have to re-create extensions when the user
@@ -944,7 +949,7 @@ export const ChatInputCM = memo(function ChatInputCM({
               <Maximize2 size={12} />
             </button>
 
-            {session && <ModelChip session={session} />}
+            {session && !isMobile && <ModelChip session={session} />}
 
             <button
               onClick={onAttachClick}
@@ -970,7 +975,7 @@ export const ChatInputCM = memo(function ChatInputCM({
               <Paperclip size={13} />
             </button>
 
-            {session && <ModeBadge session={session} />}
+            {session && !isMobile && <ModeBadge session={session} />}
           </div>
 
           {active ? (
