@@ -18,4 +18,9 @@ export type {
   AcpPermissionRequest,
   AcpPermissionOutcome,
   AcpPermissionHandler,
+  AcpAskOption,
+  AcpAskQuestion,
+  AcpAskQuestionRequest,
+  AcpAskQuestionOutcome,
+  AcpAskQuestionHandler,
 } from './client.js';

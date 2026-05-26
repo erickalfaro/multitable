@@ -48,8 +48,15 @@ The original VERIFY checklist, now answered against 0.2.2:
 
 Re-baseline (re-run the handshake spike) after each `grok` upgrade and update this table.
 
-## `ask_user_question` is non-interactive over agent-stdio (read-only render)
+## `ask_user_question` IS interactive — via the `_x.ai/ask_user_question` server-request
 
-Grok has an `ask_user_question` tool (Claude `AskUserQuestion` shape: `tool_call` with `rawInput.questions[].options[{label, description, preview}]`). Over `grok agent stdio` it is **not interactive** — verified in session `019e6655`: the tool's permission auto-resolves (`wait_ms:0`) and it `tool_completed` in `0ms` without waiting for an answer (interactive answering is TUI-only; there's no ACP channel to deliver a choice back). So `capabilities.userQuestion` stays `'unsupported'`.
+Grok's `ask_user_question` tool delegates to the client over ACP: it sends a JSON-RPC **server-request `_x.ai/ask_user_question`** and waits for the answer. If the client has no handler, the transport returns `-32601` and the tool fails with *"Failed to reach the client for user question: multitable has no handler registered for _x.ai/ask_user_question"* (the original bug — it looked non-interactive because the request was unhandled, not because Grok auto-completes).
 
-MultiTable therefore renders it **read-only**: `ToolCallCard` (web) special-cases `ask_user_question` / `AskUserQuestion`, showing the question + options legibly (not raw JSON) with a "Reply in chat with your choice" hint — the user answers by sending the next message. Do **not** wire clickable options that pretend to send an answer back to Grok; it already moved on.
+**Verified wire shape (grok v0.2.2, spike):**
+- Request params: `{ sessionId, toolCallId, questions: [{ question, options: [{ label, description?, preview? }], multiSelect: bool|null }], mode }`.
+- Response (the `outcome` is a **string** tag, NOT the nested object `session/request_permission` uses):
+  - `{ outcome: "accepted", answers: { "<questionIndex>": ["<selected label>", …] } }` — answers keyed by stringified question index → selected option labels.
+  - `{ outcome: "cancelled" }` — also valid: `skip_interview`, `chat_about_this` (unused).
+- A wrong shape fails the tool; serde errors are descriptive (e.g. *"unknown variant `selected`, expected one of `accepted`, `chat_about_this`, `skip_interview`, `cancelled`"*).
+
+**Wiring:** `GrokAcpClient` registers a `_x.ai/ask_user_question` handler; `GrokAdapter.handleAskQuestion` routes it through `PermissionManager.requestFromSdk(…, 'AskUserQuestion', { questions })` — the **same interactive picker Claude's AskUserQuestion uses** (`PermissionBar`). The user's selections come back as the Claude-convention `{ behavior:'deny', message: '{"questions":[{…,"answer":[…]}]}' }`; we remap to `answers` keyed by index. All-empty selections (the picker's cancel) → `{ outcome: "cancelled" }`. `capabilities.userQuestion = 'tool'`. `ToolCallCard` also renders the question/options legibly in the transcript.

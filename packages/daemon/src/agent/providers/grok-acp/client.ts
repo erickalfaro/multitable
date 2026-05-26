@@ -111,6 +111,43 @@ export type AcpPermissionOutcome =
 
 export type AcpPermissionHandler = (req: AcpPermissionRequest) => Promise<AcpPermissionOutcome>;
 
+// === ask_user_question (the `_x.ai/ask_user_question` server-request) ========
+//
+// Grok's `ask_user_question` tool sends this server-request to the client to
+// present a structured question with options and get the user's answer back.
+// Wire shape verified against grok v0.2.2:
+//   request:  { sessionId, toolCallId?, questions: [{ question, options:
+//              [{ label, description?, preview? }], multiSelect: bool|null }],
+//              mode? }
+//   response: { outcome: 'accepted', answers: { "<questionIndex>": [label…] } }
+//          |  { outcome: 'cancelled' }    (variants also: skip_interview,
+//                                          chat_about_this — unused by us)
+// The `outcome` is a STRING tag (not the nested object permission uses); the
+// answers map is keyed by question index (stringified) → selected labels.
+export interface AcpAskOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+export interface AcpAskQuestion {
+  question: string;
+  header?: string;
+  options: AcpAskOption[];
+  multiSelect?: boolean | null;
+}
+export interface AcpAskQuestionRequest {
+  sessionId: string;
+  toolCallId?: string;
+  questions: AcpAskQuestion[];
+}
+export type AcpAskQuestionOutcome =
+  | { outcome: 'accepted'; answers: Record<string, string[]> }
+  | { outcome: 'cancelled' };
+
+export type AcpAskQuestionHandler = (
+  req: AcpAskQuestionRequest,
+) => Promise<AcpAskQuestionOutcome>;
+
 export interface GrokClientOptions extends GrokTransportOptions {
   // Fallback policy used only when no permissionHandler is supplied. Kept for
   // standalone-client / test usage; the normal MultiTable wiring always
@@ -118,6 +155,8 @@ export interface GrokClientOptions extends GrokTransportOptions {
   permissionPolicy?: 'allow_session' | 'allow_once' | 'deny';
   // When set, every ACP `session/request_permission` is routed here.
   permissionHandler?: AcpPermissionHandler;
+  // When set, every `_x.ai/ask_user_question` server-request is routed here.
+  askQuestionHandler?: AcpAskQuestionHandler;
 }
 
 // Grok's interactive (browser) auth method. Its presence alone doesn't mean
@@ -131,10 +170,12 @@ export class GrokAcpClient {
   private authState: GrokAuthState | null = null;
   private permissionPolicy: 'allow_session' | 'allow_once' | 'deny';
   private permissionHandler: AcpPermissionHandler | null;
+  private askQuestionHandler: AcpAskQuestionHandler | null;
 
   constructor(private readonly options: GrokClientOptions = {}) {
     this.permissionPolicy = options.permissionPolicy ?? 'allow_session';
     this.permissionHandler = options.permissionHandler ?? null;
+    this.askQuestionHandler = options.askQuestionHandler ?? null;
   }
 
   /**
@@ -267,6 +308,28 @@ export class GrokAcpClient {
         return { outcome: { outcome: 'cancelled' } };
       }
       return { outcome: { outcome: 'selected', optionId: candidate } };
+    });
+
+    // Grok's `ask_user_question` tool delegates to the client via this
+    // server-request. Route it to the handler (the adapter presents the
+    // question through PermissionManager, same UI as Claude's AskUserQuestion)
+    // and return the selected answer. Without a handler, cancel so the tool
+    // resolves cleanly instead of hanging.
+    transport.onRequest('_x.ai/ask_user_question', async (params) => {
+      const req = (params ?? null) as Partial<AcpAskQuestionRequest> | null;
+      if (this.askQuestionHandler && req && typeof req.sessionId === 'string') {
+        try {
+          return await this.askQuestionHandler({
+            sessionId: req.sessionId,
+            toolCallId: req.toolCallId,
+            questions: Array.isArray(req.questions) ? req.questions : [],
+          });
+        } catch (err) {
+          console.warn('[grok] ask-question handler threw, cancelling', err);
+          return { outcome: 'cancelled' };
+        }
+      }
+      return { outcome: 'cancelled' };
     });
 
     // We do NOT advertise fs/terminal capabilities. Reject if the agent ever

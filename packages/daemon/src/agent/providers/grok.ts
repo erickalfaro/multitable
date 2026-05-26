@@ -10,6 +10,8 @@ import type {
   NewSessionOptions,
   AcpPermissionRequest,
   AcpPermissionOutcome,
+  AcpAskQuestionRequest,
+  AcpAskQuestionOutcome,
 } from './grok-acp/index.js';
 
 // GrokAdapter — driven by `grok agent stdio`, xAI's Grok Build CLI run as an
@@ -115,7 +117,10 @@ export class GrokAdapter implements ProviderAdapter {
     planMode: 'native',
     // ACP session/request_permission → PermissionManager (same flow as Claude).
     perCallApproval: 'callback',
-    userQuestion: 'unsupported',
+    // Grok's `ask_user_question` tool delegates to the client via the
+    // `_x.ai/ask_user_question` server-request; we route it through the same
+    // interactive question UI Claude's AskUserQuestion uses.
+    userQuestion: 'tool',
     elicitation: false,
     // Grok runs up to 8 parallel subagents, but we don't surface subagent
     // lifecycle events yet — keep 'none' until the session/update kinds are
@@ -207,6 +212,7 @@ export class GrokAdapter implements ProviderAdapter {
     if (existing) return existing;
     const created = new GrokAcpClient({
       permissionHandler: (req) => this.handleAcpPermission(req),
+      askQuestionHandler: (req) => this.handleAskQuestion(req),
       cwd,
     });
     this.clients.set(cwd, created);
@@ -520,6 +526,55 @@ export class GrokAdapter implements ProviderAdapter {
       req.options.find((o) => o.kind !== 'reject_once' && o.kind !== 'reject_always');
     if (!allowOption?.optionId) return { outcome: { outcome: 'cancelled' } };
     return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
+  }
+
+  // Grok's `ask_user_question` tool → MultiTable's interactive question UI.
+  // Bridges the ACP `_x.ai/ask_user_question` request to
+  // PermissionManager.requestFromSdk with toolName 'AskUserQuestion' (the exact
+  // path Claude's AskUserQuestion uses, rendered by PermissionBar), then maps
+  // the user's selections back into Grok's answers-by-index response shape.
+  private async handleAskQuestion(req: AcpAskQuestionRequest): Promise<AcpAskQuestionOutcome> {
+    const mtSessionId = this.acpToMt.get(req.sessionId);
+    if (!mtSessionId) {
+      console.warn('[grok] ask_user_question for unknown acp session', req.sessionId);
+      return { outcome: 'cancelled' };
+    }
+
+    const controller = new AbortController();
+    const result = await this.permManager.requestFromSdk(
+      mtSessionId,
+      '',
+      'AskUserQuestion',
+      { questions: req.questions },
+      controller.signal,
+    );
+
+    // AskUserQuestion answers come back as a 'deny' whose message is JSON:
+    // { questions: [{ question, header, answer: string[] }] } (the Claude
+    // convention PermissionManager reuses). A 'Cancelled' / 'Session cleared'
+    // message (or any non-answer) maps to cancelled.
+    if (result.behavior !== 'deny' || !result.message) {
+      return { outcome: 'cancelled' };
+    }
+    let parsed: { questions?: Array<{ answer?: unknown }> };
+    try {
+      parsed = JSON.parse(result.message);
+    } catch {
+      return { outcome: 'cancelled' };
+    }
+    const qs = Array.isArray(parsed.questions) ? parsed.questions : [];
+    const answers: Record<string, string[]> = {};
+    let anyPicked = false;
+    qs.forEach((q, i) => {
+      const picked = Array.isArray(q.answer)
+        ? q.answer.filter((a): a is string => typeof a === 'string')
+        : [];
+      answers[String(i)] = picked;
+      if (picked.length > 0) anyPicked = true;
+    });
+    // Empty selection across all questions = the user cancelled the picker.
+    if (!anyPicked) return { outcome: 'cancelled' };
+    return { outcome: 'accepted', answers };
   }
 
   private handleNotification(
