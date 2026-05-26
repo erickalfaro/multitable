@@ -81,6 +81,11 @@ export interface AgentSession {
   currentToolStartedAt: number | null;
   activeSubagents: number;
   lastActivity: number;
+  // Numbered-list options detected from the last completed turn's assistant
+  // message (Claude only). Held in memory so a browser refresh can re-fetch
+  // them via GET /api/pending-prompts; cleared when a new turn starts or the
+  // user dismisses the selector.
+  lastDetectedOptions: { question: string; options: string[] } | null;
   userMessages: string[]; // accumulated user prompts (used by AI rename)
   messages: import('../transcripts/parser.js').Message[]; // in-memory history for providers without JSONL parser support
   // === streaming (in-flight assistant text) ===

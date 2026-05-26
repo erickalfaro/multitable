@@ -84,8 +84,28 @@ function hasQuestionSignal(text: string): boolean {
   return QUESTION_SIGNALS.some((re) => re.test(text));
 }
 
+const QUESTION_MAX_LEN = 200;
+
+// The prompt text shown above the option buttons: everything before the first
+// numbered-list item, collapsed to a single line and capped. Falls back to a
+// generic prompt when the list has no lead-in (e.g. the message is bare items).
+function extractQuestion(text: string): string {
+  const lines = text.split('\n');
+  const lead: string[] = [];
+  for (const line of lines) {
+    if (NUMBERED_LIST_RE.test(line)) break;
+    lead.push(line);
+  }
+  const question = lead.join(' ').replace(/\s+/g, ' ').trim();
+  if (!question) return 'Choose an option:';
+  return question.length <= QUESTION_MAX_LEN
+    ? question
+    : question.slice(0, QUESTION_MAX_LEN - 1) + '…';
+}
+
 export interface DetectedOptions {
   options: string[];
+  question: string;
   rawText: string;
 }
 
@@ -136,5 +156,5 @@ export async function detectOptions(
 
   if (!hasQuestionSignal(lastAssistantText)) return null;
 
-  return { options, rawText: lastAssistantText };
+  return { options, question: extractQuestion(lastAssistantText), rawText: lastAssistantText };
 }

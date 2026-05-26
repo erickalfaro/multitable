@@ -11,6 +11,9 @@ import type {
   GitStatusSummary,
   GitLogEntry,
   GitBranchList,
+  PermissionPrompt,
+  ElicitationPrompt,
+  OptionPrompt,
 } from './types';
 import { devLog } from './devLog';
 
@@ -266,6 +269,18 @@ export const api = {
         '/api/providers/refresh',
         provider ? { provider } : {},
       ),
+  },
+
+  // In-flight popups the daemon is still holding, re-fetched on load /
+  // reconnect / bfcache-resume so a browser refresh doesn't strand a session
+  // that's blocked waiting on a permission / question / elicitation prompt.
+  prompts: {
+    pending: () =>
+      get<{
+        permissions: PermissionPrompt[];
+        elicitations: ElicitationPrompt[];
+        options: OptionPrompt[];
+      }>('/api/pending-prompts'),
   },
   config: {
     get: () => get<GlobalConfig>('/api/config'),

@@ -79,6 +79,7 @@ type RegisterInput = Omit<
   | 'currentToolStartedAt'
   | 'activeSubagents'
   | 'lastActivity'
+  | 'lastDetectedOptions'
   | 'userMessages'
   | 'messages'
   | 'streamingText'
@@ -190,6 +191,7 @@ export class AgentSessionManager extends EventEmitter {
       currentToolStartedAt: null,
       activeSubagents: 0,
       lastActivity: 0,
+      lastDetectedOptions: null,
       userMessages: [],
       messages: [],
       streamingText: '',
@@ -438,6 +440,8 @@ export class AgentSessionManager extends EventEmitter {
     s.state = 'running';
     s.lastActivity = Date.now();
     s.userMessages.push(text);
+    // A new turn supersedes any options detected from the previous one.
+    s.lastDetectedOptions = null;
     if (!s.startedAt) s.startedAt = new Date();
 
     try {
@@ -900,10 +904,42 @@ export class AgentSessionManager extends EventEmitter {
     if (!s || !s.claudeSessionId) return;
     try {
       const result = await detectOptions(s.workingDir, s.claudeSessionId);
-      if (result) this.emit('options-detected', { sessionId, options: result.options });
+      if (result) {
+        s.lastDetectedOptions = { question: result.question, options: result.options };
+        this.emit('options-detected', {
+          sessionId,
+          options: result.options,
+          question: result.question,
+        });
+      }
     } catch {
       // best-effort — JSONL may not have flushed yet
     }
+  }
+
+  /**
+   * Snapshot of every session's currently-held detected options. Served by
+   * GET /api/pending-prompts so a browser refresh can recover the option
+   * selector for sessions whose last turn ended on a numbered-list question.
+   */
+  getDetectedOptions(): Array<{ sessionId: string; question: string; options: string[] }> {
+    const out: Array<{ sessionId: string; question: string; options: string[] }> = [];
+    for (const s of this.sessions.values()) {
+      if (s.lastDetectedOptions) {
+        out.push({
+          sessionId: s.id,
+          question: s.lastDetectedOptions.question,
+          options: s.lastDetectedOptions.options,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Drop detected options for a session (user dismissed the selector). */
+  clearDetectedOptions(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (s) s.lastDetectedOptions = null;
   }
 }
 

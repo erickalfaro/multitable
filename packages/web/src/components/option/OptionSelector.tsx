@@ -3,36 +3,63 @@ import { useAppStore } from '../../stores/appStore';
 import { wsClient } from '../../lib/ws';
 import { Button } from '../ui';
 
-export function OptionSelector() {
-  const { currentOption, setOption } = useAppStore();
+// True when a keystroke is being typed into an editable surface (composer,
+// inputs). The numeric/Escape shortcuts below must not hijack those.
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  return (
+    el.isContentEditable ||
+    el.tagName === 'INPUT' ||
+    el.tagName === 'TEXTAREA' ||
+    !!el.closest?.('.cm-editor')
+  );
+}
 
+export function OptionSelector() {
+  const selectedProcessId = useAppStore((s) => s.selectedProcessId);
+  const option = useAppStore((s) =>
+    selectedProcessId ? s.optionsBySession[selectedProcessId] ?? null : null,
+  );
+  const clearSessionOptions = useAppStore((s) => s.clearSessionOptions);
+
+  const sessionId = option?.sessionId ?? null;
+
+  function choose(text: string) {
+    if (!sessionId) return;
+    // SDK sessions have no PTY — reply by sending the chosen option as a new
+    // turn (the old wsClient.sendInput PTY write went nowhere).
+    wsClient.sendTurn(sessionId, text);
+    clearSessionOptions(sessionId);
+  }
+
+  function dismiss() {
+    if (!sessionId) return;
+    clearSessionOptions(sessionId);
+    wsClient.dismissOption(sessionId); // also drop it server-side so it doesn't re-hydrate
+  }
+
+  // Keyboard shortcuts: 1–N to pick, Escape to dismiss. Skipped while typing so
+  // they don't steal keystrokes from the composer.
   useEffect(() => {
-    if (!currentOption) return;
+    if (!option) return;
     const handler = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
       if (e.key === 'Escape') {
-        setOption(null);
+        dismiss();
         return;
       }
-      const n = parseInt(e.key);
-      if (n >= 1 && n <= currentOption.options.length) {
-        wsClient.sendInput(currentOption.sessionId, `${n}\r`);
-        setOption(null);
+      const n = parseInt(e.key, 10);
+      if (n >= 1 && n <= option.options.length) {
+        choose(option.options[n - 1]);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [currentOption, setOption]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [option, sessionId]);
 
-  // Auto-clear on new PTY output
-  useEffect(() => {
-    if (!currentOption) return;
-    const off = wsClient.on('pty-output', (msg) => {
-      if (msg.processId === currentOption.sessionId) setOption(null);
-    });
-    return off;
-  }, [currentOption, setOption]);
-
-  if (!currentOption) return null;
+  if (!option) return null;
 
   return (
     <div
@@ -44,18 +71,15 @@ export function OptionSelector() {
       }}
     >
       <div style={{ fontSize: 13, color: 'var(--text-primary)', marginBottom: 8, fontWeight: 500, userSelect: 'none', WebkitUserSelect: 'none' }}>
-        {currentOption.question}
+        {option.question}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {currentOption.options.map((opt, i) => (
+        {option.options.map((opt, i) => (
           <Button
             key={i}
             size="sm"
             variant={i === 0 ? 'primary' : 'secondary'}
-            onClick={() => {
-              wsClient.sendInput(currentOption.sessionId, `${i + 1}\r`);
-              setOption(null);
-            }}
+            onClick={() => choose(opt)}
             // Let long options wrap instead of overflowing the viewport on
             // small screens — the container already wraps rows (flexWrap), this
             // wraps text within a single oversized option. Short options keep
