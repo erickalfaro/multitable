@@ -86,13 +86,16 @@ function Preview({ text }: { text: string }) {
         style={{
           fontSize: 10,
           color: 'var(--text-muted)',
-          margin: '6px 0 0',
-          padding: '6px 8px',
+          margin: '4px 0 0',
+          padding: '4px 6px',
           backgroundColor: 'var(--bg-sidebar)',
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          whiteSpace: 'pre',
-          overflow: 'auto',
-          maxHeight: 80,
+          // pre-wrap (not pre) so long preview lines wrap instead of forcing
+          // the option wider than the screen and clipping it.
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+          overflowY: 'auto',
+          maxHeight: 72,
         }}
       >
         {text}
@@ -176,66 +179,41 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
   return (
     <div
       style={{
-        position: 'relative',
         backgroundColor: 'var(--bg-elevated)',
-        padding: '14px 14px 12px',
+        padding: '8px 10px',
         marginBottom: 8,
       }}
     >
-      <span
+      <div
         style={{
-          position: 'absolute',
-          top: 8,
-          left: 12,
           fontSize: 9.5,
           color: 'var(--accent-amber)',
           textTransform: 'uppercase',
           letterSpacing: '0.18em',
           fontWeight: 500,
+          marginBottom: 8,
         }}
       >
         question
-      </span>
-      <span
-        style={{
-          position: 'absolute',
-          top: 8,
-          right: 12,
-          fontSize: 9.5,
-          color: 'var(--text-faint)',
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        {prompt.sessionId.slice(0, 12)}
-      </span>
-      <div style={{ height: 22 }} />
+      </div>
 
       {questions.map((q, qIdx) => {
         const multi = !!q.multiSelect;
         const picked = selections[qIdx] ?? [];
         return (
-          <div key={qIdx} style={{ marginBottom: qIdx < questions.length - 1 ? 16 : 8 }}>
+          <div key={qIdx} style={{ marginBottom: qIdx < questions.length - 1 ? 12 : 6 }}>
             {q.header && (
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>
                 {q.header}
               </div>
             )}
-            <div style={{ fontSize: 13, color: 'var(--text-primary)', marginBottom: 10, fontWeight: 500 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-primary)', marginBottom: 6, fontWeight: 500, overflowWrap: 'anywhere' }}>
               {q.question}
               {multi && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>(select multiple)</span>}
             </div>
-            <div
-              style={{
-                display: 'grid',
-                // `min(280px, 100%)` lets columns collapse to full width on
-                // narrow screens — a bare `minmax(280px, 1fr)` forces every
-                // column ≥280px and overflows (gets cut off) on phones.
-                gridTemplateColumns: 'repeat(auto-fill, minmax(min(280px, 100%), 1fr))',
-                gap: 6,
-              }}
-            >
+            {/* Single-column list: can't overflow at any width — minimal and
+                fully responsive without column-width math. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {q.options.map((opt, oIdx) => {
                 const selected = picked.includes(opt.label);
                 return (
@@ -245,7 +223,8 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
                       display: 'flex',
                       alignItems: 'flex-start',
                       gap: 8,
-                      padding: 8,
+                      padding: '6px 8px',
+                      minWidth: 0,
                       border: `1px solid ${selected ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
                       borderRadius: 'var(--radius-snug)',
                       backgroundColor: selected ? 'color-mix(in srgb, var(--accent-amber) 10%, transparent)' : 'transparent',
@@ -294,9 +273,9 @@ function AskQuestionCard({ prompt }: { prompt: PermissionPrompt }) {
         );
       })}
 
-      <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
+      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
         <Button size="sm" variant="primary" onClick={submit} disabled={!allAnswered}>
-          Submit answer
+          Submit
         </Button>
         <div style={{ flex: 1 }} />
         <Button size="sm" variant="secondary" onClick={skip}>
@@ -322,16 +301,16 @@ export function PermissionBar({ sessionId }: PermissionBarProps = {}) {
       className="mt-scroll"
       style={{
         position: 'absolute',
-        left: 12,
-        right: 12,
-        bottom: 12,
-        padding: 12,
+        left: 8,
+        right: 8,
+        bottom: 8,
+        padding: 8,
         borderRadius: 'var(--radius-soft)',
         border: '1px solid var(--border-strong)',
         backgroundColor: 'var(--bg-sidebar)',
         boxShadow: 'none',
         zIndex: 10,
-        maxHeight: '60%',
+        maxHeight: '70%',
         overflowY: 'auto',
         animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
       }}
