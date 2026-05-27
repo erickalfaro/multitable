@@ -39,7 +39,7 @@ import { NotificationCenter } from './components/notifications/NotificationCente
 import { ElicitationModalHost } from './components/elicitation/ElicitationModal';
 import { DevLogPanel } from './components/dev-log/DevLogPanel';
 import { deriveAttentionEvents, attentionPatchForToolResult } from './lib/attention';
-import type { Session, AgentProvider } from './lib/types';
+import type { Session, AgentProvider, UsageLimitSnapshot } from './lib/types';
 
 // Slow safety-net poll for sessions that are mid-turn. The primary path is
 // event-driven (turn-complete, ws-reconnected, session:reconciled, focus,
@@ -890,6 +890,14 @@ function App() {
           ...session,
           thinkingEffort: thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max',
         } as Session);
+      }),
+      // session:usage-limits-changed — broadcast when a provider reports a new
+      // usage-limit snapshot. Update the per-session map so the always-present
+      // UsageLimitBadge re-renders without polling.
+      wsClient.on('session:usage-limits-changed', (msg: any) => {
+        const { sessionId, snapshot } = msg.payload || {};
+        if (typeof sessionId !== 'string' || !snapshot || typeof snapshot !== 'object') return;
+        useAppStore.getState().setUsageLimits(sessionId, snapshot as UsageLimitSnapshot);
       }),
       // providers:catalog-updated — daemon ran live discovery (or refreshed
       // on user request). Replace the in-memory model catalog so model

@@ -35,7 +35,7 @@ Non-JSON stdout lines are dropped with a warning. Grok logs to stderr by design 
 | `session/new` | `newSession` | `{ cwd, mcpServers: [] }` | `{ sessionId }` |
 | `session/load` | `loadSession` | `{ sessionId, cwd, mcpServers: [] }` | (ignored; we return the input id) — **VERIFY** Grok supports `session/load` vs only `session/new` |
 | `session/prompt` | `prompt` | `{ sessionId, prompt: [{ type:'text', text }] }` | `{ stopReason, usage? }` |
-| `session/set_mode` | (if native modes) | `{ sessionId, modeId }` | **VERIFY** — only if Grok exposes set-mode over ACP; see [`modes.md`](modes.md) |
+| ~~`session/set_mode`~~ | — | — | **NOT AVAILABLE (verified 0.2.2):** `session/new` returns no `modes`/`availableModes`, so there's no set-mode. Mode is a spawn-time `grok agent` flag instead; see [`modes.md`](modes.md). |
 | `x.ai/billing` | (one-shot probe, optional) | none | billing object — **but `-32601` over agent-stdio in 0.1.x**, see [`xai-auth.md`](xai-auth.md) |
 
 And one **notification** we send (fire-and-forget, no response):

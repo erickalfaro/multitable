@@ -13,6 +13,7 @@ import type { TurnInterruptParams } from '../codex-protocol/v2/TurnInterruptPara
 import type { SandboxMode } from '../codex-protocol/v2/SandboxMode.js';
 import type { AskForApproval } from '../codex-protocol/v2/AskForApproval.js';
 import type { ReasoningEffort } from '../codex-protocol/ReasoningEffort.js';
+import type { GetAccountRateLimitsResponse } from '../codex-protocol/v2/GetAccountRateLimitsResponse.js';
 
 // CodexAppServerClient — singleton wrapper over a long-lived `codex app-server`
 // child. One per daemon. Lazy-spawned on first use so daemons that never use
@@ -75,6 +76,10 @@ export class CodexAppServerClient {
   private transport: CodexAppServerTransport | null = null;
   private starting: Promise<void> | null = null;
   private listeners = new Map<string, ThreadListener>();
+  // Account-scoped notification listeners (account/*). These notifications
+  // carry NO threadId, so the per-thread `listeners` map can never deliver
+  // them — they get their own fan-out. Used for `account/rateLimits/updated`.
+  private accountListeners = new Set<ThreadListener>();
   private knownThreads = new Map<string, KnownThread>();
   private crashTimes: number[] = [];
   private permanentlyDead = false;
@@ -161,8 +166,20 @@ export class CodexAppServerClient {
     const params = n.params as { threadId?: string } | null | undefined;
     const threadId = params && typeof params.threadId === 'string' ? params.threadId : null;
     if (!threadId) {
-      // Non-thread-scoped notification (account/*, configWarning, app/list/*,
-      // etc.). Useful for debugging but not load-bearing.
+      // Account-scoped notifications (account/rateLimits/updated, account/updated,
+      // …) carry no threadId. Fan them out to account listeners instead of
+      // dropping — this is the only delivery path for usage limits.
+      if (typeof n.method === 'string' && n.method.startsWith('account/')) {
+        for (const listener of this.accountListeners) {
+          try {
+            listener(n);
+          } catch (err) {
+            console.error('[codex] account listener threw for', n.method, err);
+          }
+        }
+      }
+      // Other non-thread-scoped notifications (configWarning, app/list/*, etc.)
+      // are not load-bearing; drop them.
       return;
     }
     const listener = this.listeners.get(threadId);
@@ -277,6 +294,30 @@ export class CodexAppServerClient {
     };
   }
 
+  /**
+   * Register a listener for account-scoped notifications (account/*). These
+   * have no threadId, so they're delivered here rather than via `subscribe`.
+   * Used by the adapter for `account/rateLimits/updated`. Returns an
+   * unsubscribe function.
+   */
+  subscribeAccount(listener: ThreadListener): () => void {
+    this.accountListeners.add(listener);
+    return () => {
+      this.accountListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Pull the current account rate-limit snapshot on demand (vs. waiting for the
+   * next `account/rateLimits/updated` push). Used on session provision so the
+   * usage-limits indicator has data before the first turn.
+   */
+  async getAccountRateLimits(): Promise<GetAccountRateLimitsResponse> {
+    await this.ensureReady();
+    const transport = this.requireTransport();
+    return transport.request<GetAccountRateLimitsResponse>('account/rateLimits/read', undefined);
+  }
+
   close(): void {
     if (!this.transport) return;
     try {
@@ -286,6 +327,7 @@ export class CodexAppServerClient {
     }
     this.transport = null;
     this.listeners.clear();
+    this.accountListeners.clear();
     this.knownThreads.clear();
   }
 

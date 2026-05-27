@@ -52,10 +52,15 @@ export type ServerRequestHandler = (params: unknown) => Promise<unknown> | unkno
 export interface GrokTransportOptions {
   // Path to the grok binary. Defaults to 'grok' on PATH.
   grokPath?: string;
-  // Extra CLI args injected after `agent stdio`. Mostly for testing / version
-  // pinning. Per-session config (model / permissionMode / effort) is NOT passed
-  // here — it goes through `session/new` (verified: grok honors it there), so
-  // one child per cwd can multiplex sessions with different settings.
+  // CLI args injected on the `grok agent` parent command, BEFORE `stdio`. This
+  // is where Grok's spawn-time config lives: `--always-approve` (auto mode),
+  // `--agent-profile <md>` (plan / read-only mode), `--reasoning-effort`, `-m`.
+  // Grok 0.2.2 ignores model/permissionMode/effort on `session/new` (verified),
+  // so these MUST be spawn flags — which is why the child pool is keyed by the
+  // full config, not just cwd (see GrokAdapter.clientFor / buildAgentArgs).
+  agentArgs?: string[];
+  // Extra CLI args injected after `agent … stdio`. Mostly for testing / version
+  // pinning.
   extraArgs?: string[];
   // Working directory for the child. Defaults to process.cwd(). ACP sessions
   // also carry their own per-session cwd via `session/new`.
@@ -82,7 +87,14 @@ export class GrokAcpTransport extends EventEmitter {
   start(): void {
     if (this.child) return;
     const grok = this.options.grokPath ?? 'grok';
-    const args = ['agent', 'stdio', ...(this.options.extraArgs ?? [])];
+    // `grok agent <agentArgs…> stdio <extraArgs…>` — spawn-time mode/effort/model
+    // flags belong on the `agent` parent, before the `stdio` subcommand.
+    const args = [
+      'agent',
+      ...(this.options.agentArgs ?? []),
+      'stdio',
+      ...(this.options.extraArgs ?? []),
+    ];
     const env = { ...process.env, ...(this.options.envOverlay ?? {}) };
     const projectDir = this.options.cwd ?? process.cwd();
 

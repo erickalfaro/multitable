@@ -48,14 +48,12 @@ interface InitializeResult {
   authMethods?: AuthMethod[];
 }
 
-// Per-session config Grok accepts on `session/new` (and we re-send on
-// `session/load` so a mode/effort/model change re-applies). Verified: grok
-// honors `model`, `permissionMode`, `effort` here.
+// Per-session config sent on `session/new` / `session/load`. Grok 0.2.2 IGNORES
+// `model` / `permissionMode` / `effort` here (verified by probe) — those are
+// spawn-time flags on the `grok agent` child (see GrokAdapter.buildAgentArgs),
+// so the only thing that matters per session is the cwd.
 export interface NewSessionOptions {
   cwd: string;
-  model?: string | null;
-  permissionMode?: string;
-  effort?: string | null;
 }
 
 export interface PromptOptions {
@@ -148,6 +146,26 @@ export type AcpAskQuestionHandler = (
   req: AcpAskQuestionRequest,
 ) => Promise<AcpAskQuestionOutcome>;
 
+// === exit_plan_mode (the `_x.ai/exit_plan_mode` server-request) ==============
+//
+// When a plan-mode session finishes planning, Grok calls its `exit_plan_mode`
+// tool, which delegates to the client via this server-request and BLOCKS until
+// we respond. Verified wire shape (grok v0.2.2):
+//   request:  { sessionId, toolCallId, planContent }   (planContent = the plan text)
+//   response: { outcome: 'approved' | 'rejected' }
+// NOTE (verified): the `outcome` VALUE does not itself stop Grok — on any reply
+// it flips the session to `default` and proceeds to execute. The real gate is
+// the response TIMING (Grok waits for our reply) plus turn cancellation: the
+// adapter holds the request until the user decides, and on reject aborts the
+// turn so execution never starts. See multitable/permission-wiring.md.
+export interface AcpExitPlanRequest {
+  sessionId: string;
+  toolCallId?: string;
+  planContent?: string;
+}
+export type AcpExitPlanOutcome = { outcome: 'approved' | 'rejected' };
+export type AcpExitPlanHandler = (req: AcpExitPlanRequest) => Promise<AcpExitPlanOutcome>;
+
 export interface GrokClientOptions extends GrokTransportOptions {
   // Fallback policy used only when no permissionHandler is supplied. Kept for
   // standalone-client / test usage; the normal MultiTable wiring always
@@ -157,6 +175,8 @@ export interface GrokClientOptions extends GrokTransportOptions {
   permissionHandler?: AcpPermissionHandler;
   // When set, every `_x.ai/ask_user_question` server-request is routed here.
   askQuestionHandler?: AcpAskQuestionHandler;
+  // When set, every `_x.ai/exit_plan_mode` server-request is routed here.
+  exitPlanHandler?: AcpExitPlanHandler;
 }
 
 // Grok's interactive (browser) auth method. Its presence alone doesn't mean
@@ -171,11 +191,13 @@ export class GrokAcpClient {
   private permissionPolicy: 'allow_session' | 'allow_once' | 'deny';
   private permissionHandler: AcpPermissionHandler | null;
   private askQuestionHandler: AcpAskQuestionHandler | null;
+  private exitPlanHandler: AcpExitPlanHandler | null;
 
   constructor(private readonly options: GrokClientOptions = {}) {
     this.permissionPolicy = options.permissionPolicy ?? 'allow_session';
     this.permissionHandler = options.permissionHandler ?? null;
     this.askQuestionHandler = options.askQuestionHandler ?? null;
+    this.exitPlanHandler = options.exitPlanHandler ?? null;
   }
 
   /**
@@ -332,6 +354,27 @@ export class GrokAcpClient {
       return { outcome: 'cancelled' };
     });
 
+    // Grok's `exit_plan_mode` tool delegates here (and BLOCKS until we reply).
+    // The adapter presents the plan for approval; on approve Grok proceeds to
+    // execute in the SAME session, on reject the adapter aborts the turn.
+    // Without a handler, approve so the plan-mode session doesn't hang.
+    transport.onRequest('_x.ai/exit_plan_mode', async (params) => {
+      const req = (params ?? null) as Partial<AcpExitPlanRequest> | null;
+      if (this.exitPlanHandler && req && typeof req.sessionId === 'string') {
+        try {
+          return await this.exitPlanHandler({
+            sessionId: req.sessionId,
+            toolCallId: req.toolCallId,
+            planContent: typeof req.planContent === 'string' ? req.planContent : undefined,
+          });
+        } catch (err) {
+          console.warn('[grok] exit-plan handler threw, approving', err);
+          return { outcome: 'approved' };
+        }
+      }
+      return { outcome: 'approved' };
+    });
+
     // We do NOT advertise fs/terminal capabilities. Reject if the agent ever
     // sends one anyway — keeps the surface honest (Grok runs its own tools).
     transport.onRequest('fs/read_text_file', () => {
@@ -346,10 +389,11 @@ export class GrokAcpClient {
   }
 
   /**
-   * Create a new ACP session. Returns the new sessionId. Grok honors
-   * `model` / `permissionMode` / `effort` here (verified v0.2.2). MCP wiring
-   * lives on the Grok side via project `.grok/settings.json`, so we always send
-   * an empty mcpServers list.
+   * Create a new ACP session. Returns the new sessionId. Mode/effort/model are
+   * NOT sent here — Grok 0.2.2 ignores them on session/new; they're spawn-time
+   * flags baked into this client's child (see GrokAdapter.buildAgentArgs). MCP
+   * wiring lives on the Grok side via project `.grok/settings.json`, so we
+   * always send an empty mcpServers list.
    */
   async newSession(opts: NewSessionOptions): Promise<string> {
     await this.ensureReady();
@@ -366,8 +410,9 @@ export class GrokAcpClient {
 
   /**
    * Re-attach to an existing Grok ACP session (agentCapabilities.loadSession is
-   * true on v0.2.2). We re-send the per-session config so a mode/effort/model
-   * change re-applies on resume; Grok ignores params it doesn't honor on load.
+   * true on v0.2.2). Mode/effort/model come from this client's spawn flags, not
+   * from load params, so a mode flip re-attaches under a different child (see
+   * GrokAdapter — the pool is keyed by the full config).
    */
   async loadSession(sessionId: string, opts: NewSessionOptions): Promise<string> {
     await this.ensureReady();
@@ -377,11 +422,7 @@ export class GrokAcpClient {
   }
 
   private sessionParams(opts: NewSessionOptions): Record<string, unknown> {
-    const params: Record<string, unknown> = { cwd: opts.cwd, mcpServers: [] };
-    if (opts.model) params.model = opts.model;
-    if (opts.permissionMode) params.permissionMode = opts.permissionMode;
-    if (opts.effort) params.effort = opts.effort;
-    return params;
+    return { cwd: opts.cwd, mcpServers: [] };
   }
 
   /**

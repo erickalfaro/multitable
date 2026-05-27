@@ -87,10 +87,12 @@ export const HERMES_BASELINE: BaselineModel[] = [
 ];
 
 // Grok Build (xAI) baseline. Grok's ACP `session/new` reports a single model
-// (`grok-build`, 512K context) and supports the full effort range
-// (low/medium/high/xhigh/max) natively via `--effort`. Live discovery returns
-// `[]` for now (no machine-readable `grok models --json`), so this seed shows
-// through in the AddAgent picker.
+// (`grok-build`, 512K context). Effort is wired via the spawn-time
+// `grok agent --reasoning-effort` flag, whose tiers are
+// none|minimal|low|medium|high|xhigh — there is NO `max`, so we cap at `xhigh`
+// (the GrokAdapter also maps a stray `max` → `xhigh` defensively). Live
+// discovery returns `[]` for now (no machine-readable `grok models --json`), so
+// this seed shows through in the AddAgent picker.
 export const GROK_BASELINE: BaselineModel[] = [
   {
     id: 'grok-build',
@@ -98,7 +100,7 @@ export const GROK_BASELINE: BaselineModel[] = [
     description: 'xAI Grok Build — best for advanced coding tasks (512K context).',
     isDefault: true,
     supportsEffort: true,
-    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    effortLevels: ['low', 'medium', 'high', 'xhigh'],
     defaultEffort: 'medium',
   },
 ];

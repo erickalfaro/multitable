@@ -1,4 +1,4 @@
-import type { AgentSession } from '../types.js';
+import type { AgentSession, UsageLimitSnapshot, UsageLimitWindow } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
 import type { ProviderAdapter, ProviderCapabilities, AdapterCallbacks } from './types.js';
 import { CodexAppServerClient } from './codex-app-server/index.js';
@@ -14,6 +14,8 @@ import type { AgentMessageDeltaNotification } from './codex-protocol/v2/AgentMes
 import type { ReasoningTextDeltaNotification } from './codex-protocol/v2/ReasoningTextDeltaNotification.js';
 import type { CommandExecutionOutputDeltaNotification } from './codex-protocol/v2/CommandExecutionOutputDeltaNotification.js';
 import type { ThreadTokenUsageUpdatedNotification } from './codex-protocol/v2/ThreadTokenUsageUpdatedNotification.js';
+import type { AccountRateLimitsUpdatedNotification } from './codex-protocol/v2/AccountRateLimitsUpdatedNotification.js';
+import type { RateLimitSnapshot } from './codex-protocol/v2/RateLimitSnapshot.js';
 import type { ErrorNotification } from './codex-protocol/v2/ErrorNotification.js';
 import type { TokenUsageBreakdown } from './codex-protocol/v2/TokenUsageBreakdown.js';
 import type { SandboxMode } from './codex-protocol/v2/SandboxMode.js';
@@ -141,6 +143,9 @@ export class CodexAdapter implements ProviderAdapter {
     // Codex does not surface per-turn cost in USD — by design, codex pricing
     // is contract-specific. The UI hides the dollar row.
     costUsd: false,
+    // Codex pushes account/rateLimits/updated (and we pull account/rateLimits/read
+    // on provision) — normalized into the usage-limits indicator.
+    usageLimits: true,
     // Codex has no native plan mode — the sandbox enum is the only knob.
     // The previous "simulated plan via read-only swap" UX was a MultiTable
     // invention and got dropped along with the SessionMode translation layer.
@@ -175,9 +180,54 @@ export class CodexAdapter implements ProviderAdapter {
   // so each turn's plan is a distinct row set (prior turns persist as
   // completed history). Cleared in reset().
   private planState = new Map<string, { turnId: string | null; steps: string[] }>();
+  // Usage limits are ACCOUNT-scoped (one snapshot for all Codex sessions), but
+  // applyUsageLimits is a per-session callback. So we keep the latest snapshot
+  // and the latest per-session callbacks, and fan a new snapshot to all of them.
+  // A late-joining session gets the cached snapshot the moment it registers.
+  private latestAccountLimits: UsageLimitSnapshot | null = null;
+  private usageCbs = new Map<string, AdapterCallbacks>();
+  private accountOff: (() => void) | null = null;
 
   constructor(client?: CodexAppServerClient) {
     this.client = client ?? new CodexAppServerClient();
+  }
+
+  /**
+   * Register the single account-scoped listener that turns
+   * `account/rateLimits/updated` into a normalized usage-limit snapshot and
+   * fans it to every Codex session. Idempotent.
+   */
+  private ensureAccountListener(): void {
+    if (this.accountOff) return;
+    this.accountOff = this.client.subscribeAccount((n) => {
+      if (n.method !== 'account/rateLimits/updated') return;
+      const params = n.params as AccountRateLimitsUpdatedNotification | undefined;
+      if (!params?.rateLimits) return;
+      const snapshot = normalizeCodexLimits(params.rateLimits);
+      this.latestAccountLimits = snapshot;
+      for (const cb of this.usageCbs.values()) cb.applyUsageLimits(snapshot);
+    });
+  }
+
+  /** Track a session's callback and immediately seed it with any cached snapshot. */
+  private trackUsageCb(s: AgentSession, cb: AdapterCallbacks): void {
+    this.usageCbs.set(s.id, cb);
+    if (this.latestAccountLimits) cb.applyUsageLimits(this.latestAccountLimits);
+  }
+
+  /** Best-effort on-demand pull so the badge has data before the first turn. */
+  private async pullAccountLimits(cb: AdapterCallbacks): Promise<void> {
+    try {
+      const res = await this.client.getAccountRateLimits();
+      if (!res?.rateLimits) return;
+      const snapshot = normalizeCodexLimits(res.rateLimits);
+      this.latestAccountLimits = snapshot;
+      cb.applyUsageLimits(snapshot);
+    } catch (err) {
+      // Not authed yet / server doesn't support it — non-fatal; the push path
+      // (account/rateLimits/updated) will populate the badge on the next turn.
+      console.warn('[codex] account/rateLimits/read failed (non-fatal)', err);
+    }
   }
 
   reset(s: AgentSession): void {
@@ -186,6 +236,7 @@ export class CodexAdapter implements ProviderAdapter {
     if (state?.reconcileTimer) clearTimeout(state.reconcileTimer);
     this.turnStates.delete(s.id);
     this.planState.delete(s.id);
+    this.usageCbs.delete(s.id);
   }
 
   /**
@@ -210,6 +261,10 @@ export class CodexAdapter implements ProviderAdapter {
       model: s.model ?? null,
     });
     cb.onSessionIdAssigned(threadId, s.agentSessionIdHistory);
+    // Seed the usage-limits indicator before the first turn (best-effort pull).
+    this.ensureAccountListener();
+    this.trackUsageCb(s, cb);
+    await this.pullAccountLimits(cb);
   }
 
   /**
@@ -221,8 +276,30 @@ export class CodexAdapter implements ProviderAdapter {
   async warmup(): Promise<void> {
     try {
       await this.client.ensureReady();
+      // Start listening for account/rateLimits/updated as early as possible so
+      // the usage-limits indicator is live from the first turn.
+      this.ensureAccountListener();
     } catch (err) {
       console.error('[codex] warmup failed', err);
+    }
+  }
+
+  /**
+   * Out-of-band usage-limits fetch (called by the manager's poll loop on a
+   * cadence). Pulls the account rate-limit snapshot via the app-server and
+   * normalizes it. Account-wide, so the manager fans the result to all Codex
+   * sessions. Returns null silently on failure (not authed / unsupported) so
+   * the poll doesn't spam logs.
+   */
+  async fetchUsageLimits(_s: AgentSession): Promise<UsageLimitSnapshot | null> {
+    try {
+      const res = await this.client.getAccountRateLimits();
+      if (!res?.rateLimits) return null;
+      const snapshot = normalizeCodexLimits(res.rateLimits);
+      this.latestAccountLimits = snapshot;
+      return snapshot;
+    } catch {
+      return null;
     }
   }
 
@@ -240,6 +317,11 @@ export class CodexAdapter implements ProviderAdapter {
     cb: AdapterCallbacks,
   ): Promise<void> {
     if (s.userMessages.length === 1) cb.maybeRenameFromFirstPrompt(text);
+
+    // Keep this session wired for account-scoped usage-limit fan-out, and seed
+    // it with the latest cached snapshot.
+    this.ensureAccountListener();
+    this.trackUsageCb(s, cb);
 
     // Surface a single "Codex restarted" alert if we just respawned. This
     // applies once per crash event regardless of how many threads were
@@ -983,6 +1065,38 @@ export class CodexAdapter implements ProviderAdapter {
         return [];
     }
   }
+}
+
+// Codex RateLimitSnapshot → normalized UsageLimitSnapshot. primary/secondary
+// become windows; credits.balance (a STRING) → creditsRemaining; planType is
+// carried for the popover header. See .claude/skills/openai-codex-sdk/reference/usage-limits.md.
+function normalizeCodexLimits(rl: RateLimitSnapshot): UsageLimitSnapshot {
+  const windows: UsageLimitWindow[] = [];
+  if (rl.primary) {
+    windows.push({
+      label: rl.limitName ?? 'Primary',
+      usedPercent: rl.primary.usedPercent,
+      resetsAt: rl.primary.resetsAt,
+      windowDurationMins: rl.primary.windowDurationMins,
+    });
+  }
+  if (rl.secondary) {
+    windows.push({
+      label: 'Secondary',
+      usedPercent: rl.secondary.usedPercent,
+      resetsAt: rl.secondary.resetsAt,
+      windowDurationMins: rl.secondary.windowDurationMins,
+    });
+  }
+  const balance = rl.credits?.balance != null ? Number(rl.credits.balance) : null;
+  return {
+    status: 'live',
+    source: 'codex',
+    windows,
+    planType: rl.planType ?? null,
+    creditsRemaining: balance != null && Number.isFinite(balance) ? balance : null,
+    capturedAt: Date.now(),
+  };
 }
 
 // Codex plan-step status → frontend TaskState. The generated protocol type

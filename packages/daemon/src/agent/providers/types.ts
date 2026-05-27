@@ -1,4 +1,4 @@
-import type { AgentSession } from '../types.js';
+import type { AgentSession, UsageLimitSnapshot } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
 
 // What a provider adapter calls back into when it produces output. The
@@ -27,6 +27,13 @@ export interface AdapterCallbacks {
     cacheReadTokens: number;
     costUsd: number;
   }): void;
+  // Wholesale-replace the session's normalized usage-limit snapshot. Adapters
+  // call this whenever the provider reports current limits — INCLUDING the
+  // healthy case — so the always-present indicator has data even when nowhere
+  // near a limit. Distinct from applyUsage (which is cumulative + writes
+  // cost_records); a limit snapshot can arrive outside a turn. Pass
+  // status:'unavailable' to advertise no live feed. See docs/reference/USAGE_LIMITS.md.
+  applyUsageLimits(snapshot: UsageLimitSnapshot): void;
   // Surface a successful turn-result for toast / cost / `/cost`.
   emitTurnResult(input: {
     subtype: string;
@@ -152,6 +159,10 @@ export interface ModeOption {
 export interface ProviderCapabilities {
   // Cost surface: true = USD column shown; false = hidden (Codex).
   costUsd: boolean;
+  // Usage-limits indicator: true = adapter feeds applyUsageLimits with a live
+  // snapshot (Claude, Codex); false = no live feed today (Hermes, Grok) and the
+  // UI hides the badge. See docs/reference/USAGE_LIMITS.md.
+  usageLimits: boolean;
   // Plan-mode flavor: 'native' = first-class (Claude permissionMode='plan');
   // 'simulated' = host-side workaround; 'none' = no plan-mode toggle in UI.
   planMode: 'native' | 'simulated' | 'none';
@@ -217,6 +228,14 @@ export interface ProviderAdapter {
   // no emitTurnResult. Errors should propagate so the manager can log them
   // without breaking session creation.
   provisionSession?(s: AgentSession, ctrl: AbortController, cb: AdapterCallbacks): Promise<void>;
+
+  // Optional: out-of-band fetch of the current usage-limit snapshot, for
+  // providers whose limits live behind a billing/account API rather than the
+  // turn event stream (Hermes/Grok → xAI billing via ~/.hermes/ ~/.grok/ creds).
+  // The manager would poll this on an interval and feed the result through
+  // cb.applyUsageLimits. UNIMPLEMENTED today — the contract is declared so the
+  // out-of-band path is stable; see docs/reference/USAGE_LIMITS.md.
+  fetchUsageLimits?(s: AgentSession): Promise<UsageLimitSnapshot | null>;
 
   // Optional: warm any daemon-wide adapter resources (long-lived child
   // processes, transport handshakes) so the first session that uses this

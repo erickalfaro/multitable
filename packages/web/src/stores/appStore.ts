@@ -14,6 +14,7 @@ import type {
   GitStatusSummary,
   AgentProvider,
   DiscoveredModel,
+  UsageLimitSnapshot,
 } from '../lib/types';
 import { api } from '../lib/api';
 import type { Theme, ThemeColors } from '../lib/themes';
@@ -253,6 +254,11 @@ interface AppState {
   setToolProgress: (sessionId: string, progress: ToolProgress | null) => void;
   statusBySession: Record<string, SessionStatus>;
   setSessionStatus: (sessionId: string, status: SessionStatus) => void;
+
+  // Per-session usage-limit snapshot (always-present indicator). Driven by
+  // session:usage-limits-changed; hydrated on demand via api.sessions.usageLimits.
+  usageLimitsBySession: Record<string, UsageLimitSnapshot | null>;
+  setUsageLimits: (sessionId: string, snapshot: UsageLimitSnapshot | null) => void;
 
   // Per-session client-side send queue. While a turn is running, the user
   // can keep typing and queue more messages; SessionChat drains the queue
@@ -1148,6 +1154,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSessionStatus: (sessionId, status) =>
     set((s) => ({
       statusBySession: { ...s.statusBySession, [sessionId]: status },
+    })),
+
+  // Usage-limit snapshots (per session)
+  usageLimitsBySession: {},
+  setUsageLimits: (sessionId, snapshot) =>
+    set((s) => ({
+      usageLimitsBySession: { ...s.usageLimitsBySession, [sessionId]: snapshot },
     })),
 
   // Pending send queue (client-side; the daemon serializes turns)

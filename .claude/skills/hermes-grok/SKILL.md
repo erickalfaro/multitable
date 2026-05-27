@@ -1,6 +1,6 @@
 ---
 name: hermes-grok
-description: Authoritative reference for working on MultiTable's Hermes (xAI Grok) provider, driven by `hermes acp` over line-delimited JSON-RPC (Agent Client Protocol). Trigger when the user mentions Hermes, the Hermes adapter, ACP, `hermes acp`, Grok / grok-4.3, xAI OAuth, `session/prompt`, `session/update`, `session/request_permission`, `~/.hermes/`, the `/reasoning` slash command, or modifying anything under `packages/daemon/src/agent/providers/hermes.ts`, `packages/daemon/src/agent/providers/hermes-acp/`, or `packages/daemon/src/transcripts/hermesParser.ts`.
+description: Authoritative reference for working on MultiTable's Hermes (xAI Grok) provider, driven by `hermes acp` over line-delimited JSON-RPC (Agent Client Protocol). Trigger when the user mentions Hermes, the Hermes adapter, ACP, `hermes acp`, Grok / grok-4.3, xAI OAuth, `session/prompt`, `session/update`, `session/request_permission`, `~/.hermes/`, the `/reasoning` slash command, usage limits / rate limits (why they're off for Hermes; the xAI billing out-of-band path), or modifying anything under `packages/daemon/src/agent/providers/hermes.ts`, `packages/daemon/src/agent/providers/hermes-acp/`, or `packages/daemon/src/transcripts/hermesParser.ts`.
 allowed-tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 
@@ -26,6 +26,7 @@ This single fact is why there's a `Map<string, HermesAcpClient>` (not a singleto
 | Wire or debug xAI Grok OAuth, model ids, auth-state alerts | [`reference/xai-grok-oauth.md`](reference/xai-grok-oauth.md) |
 | Touch reasoning-effort plumbing or the `/reasoning` prefix | [`reference/reasoning-effort.md`](reference/reasoning-effort.md) |
 | Know which Hermes slash-commands matter to us (and which are out of scope) | [`reference/slash-commands.md`](reference/slash-commands.md) |
+| Understand why the usage-limits indicator is off for Hermes (and the out-of-band path) | [`reference/usage-limits.md`](reference/usage-limits.md) |
 | Get oriented in `agent/providers/hermes.ts` + the adapter contract | [`multitable/adapter-architecture.md`](multitable/adapter-architecture.md) |
 | Fix a permission-prompt bug (approvals silently denied, etc.) | [`multitable/permission-wiring.md`](multitable/permission-wiring.md) |
 | Diagnose `hermes went silent for 90s mid-turn — aborted` (long terminal command killed) | [`pitfalls.md`](pitfalls.md) §21 |

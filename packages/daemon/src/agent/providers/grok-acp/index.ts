@@ -23,4 +23,7 @@ export type {
   AcpAskQuestionRequest,
   AcpAskQuestionOutcome,
   AcpAskQuestionHandler,
+  AcpExitPlanRequest,
+  AcpExitPlanOutcome,
+  AcpExitPlanHandler,
 } from './client.js';

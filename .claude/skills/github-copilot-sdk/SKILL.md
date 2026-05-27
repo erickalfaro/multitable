@@ -29,6 +29,7 @@ This skill is **strictly Copilot-only**. Do **not** import Claude Agent SDK name
 | Find where sessions live on disk; wire MCP servers | [`reference/persistence-and-mcp.md`](reference/persistence-and-mcp.md) |
 | Add lifecycle hooks (PreToolUse, PostToolUse, etc.) | [`reference/hooks.md`](reference/hooks.md) |
 | Display cost / token usage | [`reference/cost-and-usage.md`](reference/cost-and-usage.md) |
+| Surface usage / rate limits (premium-request quota) in the per-session indicator | [`reference/usage-limits.md`](reference/usage-limits.md) |
 | Plan the MultiTable adapter (not yet built) | [`multitable/integration-plan.md`](multitable/integration-plan.md) |
 | Map Copilot concepts to existing Claude/Codex adapters | [`multitable/adapter-architecture.md`](multitable/adapter-architecture.md) |
 | Translate a Claude or Codex idea into Copilot terms | [`multitable/claude-codex-comparison.md`](multitable/claude-codex-comparison.md) |

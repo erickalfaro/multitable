@@ -69,6 +69,18 @@ If ACP doesn't surface an abort signal on `session/request_permission`, `handleA
 
 Because we advertise `clientCapabilities: { fs:{readTextFile:false,writeTextFile:false}, terminal:false }`, Grok shouldn't send `fs/*`/`terminal/*`. If it does, the handlers **throw** → `-32000`. Don't implement them "to be helpful" — Grok runs file/terminal work under its own workspace-trust/sandbox; brokering them punches a hole in `hardSandbox`. **VERIFY** Grok respects the advertised `false`; if it *requires* host fs, that's a deliberate capability decision to revisit, not a silent implementation.
 
+## `exit_plan_mode` — the plan→execute gate (reuses the permission UI)
+
+A `plan`-mode session (spawned with the full-capability MT plan profile, `permission_mode: plan`) plans first, then calls `exit_plan_mode`, which Grok delegates to the client as the **`_x.ai/exit_plan_mode`** server-request `{ sessionId, toolCallId, planContent }` and **blocks on**. `GrokAdapter.handleExitPlanMode` routes it through `PermissionManager.requestFromSdk(…, 'ExitPlanMode', { plan })` — the same approval UI — so the user reviews the plan:
+
+```
+allow → return { outcome: 'approved' } → Grok flips to default and EXECUTES the plan (same session)
+deny  → abort the in-flight turn (activeTurnCtrls.get(grokSessionId).abort()), return { outcome: 'rejected' }
+auto-mode session → return 'approved' immediately (no prompt)
+```
+
+⚠️ **Verified (0.2.2): the `outcome` value does not itself stop Grok** — on *any* reply it proceeds to execute. So the real gate is (a) holding the request until the user decides and (b) **cancelling the turn on deny**. Don't rely on `{outcome:'rejected'}` alone to prevent execution. An unhandled `_x.ai/exit_plan_mode` returns `-32601` and breaks the transition, so the client must register the handler.
+
 ## Workspace-trust (VERIFY)
 
 If Grok sends a trust request over ACP for an untrusted directory, route it like a permission/elicitation prompt (surface to the user, return their choice). If instead it silently refuses tools until trust is set, the adapter may need to pre-seed `~/.grok/workspace-trust.json` or pass a trust flag at spawn. Confirm the behavior before wiring — see [`../pitfalls.md`](../pitfalls.md) §9.

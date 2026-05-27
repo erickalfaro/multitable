@@ -137,6 +137,10 @@ export class HermesAdapter implements ProviderAdapter {
   readonly capabilities: ProviderCapabilities = {
     // Hermes doesn't surface a per-turn USD cost — the UI hides the dollar row.
     costUsd: false,
+    // No live limit feed over ACP — real limits live behind xAI billing
+    // (SuperGrok), reachable only out-of-band. The UI hides the usage badge.
+    // See .claude/skills/hermes-grok/reference/usage-limits.md.
+    usageLimits: false,
     // No native plan-mode in ACP today; Hermes' /steer + /queue are out of
     // scope for v1. Mark as simulated so the UI's plan-mode toggle is hidden
     // (or stubbed) for Hermes sessions.

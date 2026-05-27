@@ -14,6 +14,7 @@ import type {
   PermissionPrompt,
   ElicitationPrompt,
   OptionPrompt,
+  UsageLimitSnapshot,
 } from './types';
 import { devLog } from './devLog';
 
@@ -196,6 +197,8 @@ export const api = {
       model: string;
       messageCount: number;
     }>(`/api/sessions/${id}/cost`),
+    usageLimits: (id: string) =>
+      get<UsageLimitSnapshot | null>(`/api/sessions/${id}/usage-limits`),
     prompts: (id: string) => get<{
       prompts: Array<{ text: string; timestamp: number | null }>;
       source: 'jsonl' | 'jsonl-project' | 'memory';

@@ -56,6 +56,7 @@ this.copilot = new mod.CopilotClient({...});
    { name: 'GitHub Copilot', command: 'copilot' /* drop comingSoon */ }
    ```
 4. Schema: no migration needed — `provider` is a TEXT column. Just verify the existing CHECK constraint (if any) accepts the new value.
+5. Usage-limits indicator (required for every provider — see `docs/reference/USAGE_LIMITS.md`): advertise `capabilities.usageLimits = true` and feed `cb.applyUsageLimits(...)` from `assistant.usage.quotaSnapshots` + an `account.getQuota` pull. Capture path in [`reference/usage-limits.md`](../reference/usage-limits.md). Don't ship the adapter without it.
 
 ## Phase 2: the adapter (`providers/copilot.ts`)
 
@@ -384,6 +385,7 @@ Manual checklist for the first PR:
 - [ ] Trigger an MCP server with `onElicitationRequest`. Confirm `ElicitationManager` UI shows up.
 - [ ] Ask the agent something easy in plan mode. Confirm no tools execute, only a plan appears.
 - [ ] Confirm cost row is populated (or hidden if cost units are still uncertain).
+- [ ] Confirm the usage-limits badge in the session header shows premium-request quota (% used) from `assistant.usage.quotaSnapshots` / `account.getQuota`.
 
 ## What NOT to do
 

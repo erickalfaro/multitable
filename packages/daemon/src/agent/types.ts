@@ -17,6 +17,44 @@ export type AgentProvider = 'claude' | 'codex' | 'hermes' | 'grok';
 // Codex — declare 'native').
 export type ThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+// ─── Usage limits ──────────────────────────────────────────────────────────
+//
+// Normalized, provider-agnostic snapshot of the active provider/model's current
+// usage limits, feeding the always-present per-session indicator. Each provider
+// reports limits in a different shape (Claude: a single rate_limit_info; Codex:
+// primary/secondary windows + credits; Hermes/Grok: nothing live today); the
+// adapter collapses its native shape into this. Cross-provider feature spec:
+// docs/reference/USAGE_LIMITS.md.
+
+export interface UsageLimitWindow {
+  // Display label for the window, e.g. 'Session', 'Weekly', 'Primary', or a
+  // provider-specific rate-limit type.
+  label: string;
+  // 0..100 — fraction of this window consumed.
+  usedPercent: number;
+  // ms-epoch when this window resets, or null if unknown.
+  resetsAt: number | null;
+  // Rolling-window length in minutes (Codex windowDurationMins), or null.
+  windowDurationMins?: number | null;
+}
+
+export interface UsageLimitSnapshot {
+  // 'live' = real data from the provider; 'unavailable' = provider has no live
+  // limit feed (Hermes/Grok today); 'stale' = last-known but possibly old.
+  status: 'live' | 'unavailable' | 'stale';
+  // Which provider produced it (audit/debug; the UI stays provider-agnostic).
+  source: AgentProvider;
+  // Ordered windows. The collapsed badge shows the most-constraining (max
+  // usedPercent); the popover lists all.
+  windows: UsageLimitWindow[];
+  // Optional plan label (Codex planType) for the popover header.
+  planType?: string | null;
+  // Optional remaining credits, when the provider reports them (Codex credits).
+  creditsRemaining?: number | null;
+  // ms-epoch when this snapshot was captured (drives "stale" UI + countdowns).
+  capturedAt: number;
+}
+
 // What we emit on the WS for the session view.
 export type AgentMessageOut =
   | { kind: 'assistant'; text: string; model?: string; ts: number }
@@ -81,6 +119,11 @@ export interface AgentSession {
   currentToolStartedAt: number | null;
   activeSubagents: number;
   lastActivity: number;
+  // Latest normalized usage-limit snapshot for the active provider/model. null
+  // until the provider reports one (or for providers with no live feed).
+  // In-memory only — not persisted to SQLite (limits are live/ephemeral); a
+  // refreshed client re-hydrates via GET /api/sessions/:id/usage-limits.
+  usageLimits: UsageLimitSnapshot | null;
   // Numbered-list options detected from the last completed turn's assistant
   // message (Claude only). Held in memory so a browser refresh can re-fetch
   // them via GET /api/pending-prompts; cleared when a new turn starts or the

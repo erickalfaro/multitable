@@ -1,4 +1,7 @@
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   HookCallback,
@@ -7,7 +10,7 @@ import type {
   OnElicitation,
   PermissionMode,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { AgentSession } from '../types.js';
+import type { AgentSession, UsageLimitWindow, UsageLimitSnapshot } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
 import type { PermissionManager } from '../../hooks/permissionManager.js';
 import type { ElicitationManager } from '../../hooks/elicitationManager.js';
@@ -115,11 +118,85 @@ export type { PermissionMode };
 // Adding a Claude SDK feature now lives in ONE place — this file — instead of
 // spread between manager.ts and the SDK option assembly.
 
+// Window key → the label `/usage` shows, a display rank (popover order), and the
+// window length. Same keys are used by BOTH the in-band rate_limit_event
+// (sdk.d.ts SDKRateLimitInfo.rateLimitType) and the out-of-band
+// GET /api/oauth/usage response (snake_case top-level keys). `/usage` itself
+// shows session + weekly (+ per-model weekly), so we surface those.
+const CLAUDE_LIMIT_META: Record<string, { label: string; rank: number; windowMins?: number }> = {
+  five_hour: { label: 'Current session', rank: 0, windowMins: 300 },
+  seven_day: { label: 'Current week (all models)', rank: 1, windowMins: 10080 },
+  seven_day_opus: { label: 'Current week (Opus)', rank: 2, windowMins: 10080 },
+  seven_day_sonnet: { label: 'Current week (Sonnet)', rank: 3, windowMins: 10080 },
+  overage: { label: 'Overage', rank: 4 },
+};
+
+// The Claude Code OAuth client User-Agent expected by /api/oauth/usage. We don't
+// have the CLI version, so use codexbar's documented fallback.
+const CLAUDE_USAGE_UA = 'claude-code/2.1.0';
+
+// Read the Claude Code subscription OAuth access token the same way the CLI /
+// codexbar do: env override first, then ~/.claude/.credentials.json
+// (`claudeAiOauth.accessToken`). Returns null if the user authenticates with an
+// API key only (no subscription usage to report) or the file is absent.
+function readClaudeOAuthToken(): string | null {
+  const envTok = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (typeof envTok === 'string' && envTok.length > 0) return envTok;
+  try {
+    const raw = readFileSync(join(homedir(), '.claude', '.credentials.json'), 'utf8');
+    const tok = (JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } })?.claudeAiOauth
+      ?.accessToken;
+    return typeof tok === 'string' && tok.length > 0 ? tok : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseIsoMs(v: unknown): number | null {
+  if (typeof v !== 'string') return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : null;
+}
+
+// GET /api/oauth/usage response → normalized snapshot. Windows carry only a
+// `utilization` percent + `resets_at` (no used/limit counts), exactly like
+// `/usage`. `extra_usage` (overage spend) carries money in cents.
+function normalizeClaudeUsage(body: unknown): UsageLimitSnapshot | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, unknown>;
+  const windows: UsageLimitWindow[] = [];
+  for (const [key, meta] of Object.entries(CLAUDE_LIMIT_META)) {
+    const w = b[key] as { utilization?: unknown; resets_at?: unknown } | undefined;
+    if (!w || typeof w !== 'object' || typeof w.utilization !== 'number') continue;
+    windows.push({
+      label: meta.label,
+      usedPercent: Math.round(w.utilization),
+      resetsAt: parseIsoMs(w.resets_at),
+      windowDurationMins: meta.windowMins ?? null,
+    });
+  }
+  let creditsRemaining: number | null = null;
+  const extra = b.extra_usage as
+    | { is_enabled?: unknown; utilization?: unknown; monthly_limit?: unknown; used_credits?: unknown }
+    | undefined;
+  if (extra && typeof extra === 'object' && extra.is_enabled === true) {
+    if (typeof extra.utilization === 'number') {
+      windows.push({ label: 'Extra usage', usedPercent: Math.round(extra.utilization), resetsAt: null });
+    }
+    if (typeof extra.monthly_limit === 'number' && typeof extra.used_credits === 'number') {
+      creditsRemaining = (extra.monthly_limit - extra.used_credits) / 100; // cents → dollars
+    }
+  }
+  if (windows.length === 0 && creditsRemaining == null) return null;
+  return { status: 'live', source: 'claude', windows, creditsRemaining, capturedAt: Date.now() };
+}
+
 export class ClaudeAdapter implements ProviderAdapter {
   readonly name = 'claude' as const;
 
   readonly capabilities: ProviderCapabilities = {
     costUsd: true,
+    usageLimits: true, // rate_limit_info rides the SDK message stream
     planMode: 'native',
     perCallApproval: 'callback',
     userQuestion: 'tool', // AskUserQuestion built-in tool
@@ -139,6 +216,11 @@ export class ClaudeAdapter implements ProviderAdapter {
   // Cleared at turn end via the reset() helper.
   private streamBuffers = new Map<string, StreamBuffer>();
   private streamingBlockIndex = new Map<string, number | null>();
+  // Per-session accumulator of the latest usage-limit window keyed by
+  // rateLimitType. Each rate_limit_event reports ONE window; `/usage` shows all
+  // of them, so we merge (latest-wins per type) and emit the union rather than
+  // replacing the snapshot with a single window.
+  private limitWindows = new Map<string, Map<string, UsageLimitWindow>>();
 
   constructor(
     private permManager: PermissionManager,
@@ -148,6 +230,39 @@ export class ClaudeAdapter implements ProviderAdapter {
   reset(s: AgentSession): void {
     this.streamBuffers.delete(s.id);
     this.streamingBlockIndex.delete(s.id);
+    // NOTE: limitWindows is deliberately NOT cleared — usage limits are
+    // account-wide, not conversation-scoped, so /clear must not blank the badge.
+  }
+
+  /**
+   * Out-of-band usage-limits fetch (called by the manager's poll loop on a
+   * cadence). Replicates exactly what `/usage` shows for Claude Code
+   * subscription users: GET https://api.anthropic.com/api/oauth/usage with the
+   * OAuth token from ~/.claude/.credentials.json → the 5-hour session window +
+   * weekly window(s). Account-wide, so the manager fans the result to all Claude
+   * sessions. Returns null silently (API-key-only auth, expired/again-refreshed
+   * token, network, 401/403) so the poll never spams logs. See
+   * .claude/skills/claude-agent-sdk/reference/usage-limits.md.
+   */
+  async fetchUsageLimits(_s: AgentSession): Promise<UsageLimitSnapshot | null> {
+    const token = readClaudeOAuthToken();
+    if (!token) return null;
+    try {
+      const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'anthropic-beta': 'oauth-2025-04-20', // required by the OAuth usage endpoint
+          'User-Agent': CLAUDE_USAGE_UA,
+        },
+      });
+      if (!res.ok) return null; // 401 (re-auth) / 403 (scope) / 5xx — handled by next poll
+      return normalizeClaudeUsage(await res.json());
+    } catch {
+      return null;
+    }
   }
 
   // Intentionally NO provisionSession for Claude. The SDK's `system:init` event
@@ -270,7 +385,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         }
       }
       case 'rate_limit_event':
-        this.handleRateLimitEvent(msg, cb);
+        this.handleRateLimitEvent(s, msg, cb);
         return;
       case 'auth_status':
         this.handleAuthStatus(msg, cb);
@@ -870,22 +985,54 @@ export class ClaudeAdapter implements ProviderAdapter {
     }
   }
 
-  private handleRateLimitEvent(msg: unknown, cb: AdapterCallbacks): void {
+  private handleRateLimitEvent(s: AgentSession, msg: unknown, cb: AdapterCallbacks): void {
     const m = (msg ?? {}) as { rate_limit_info?: unknown };
     const info = (m.rate_limit_info ?? {}) as Record<string, unknown>;
     const status =
       info.status === 'allowed' || info.status === 'allowed_warning' || info.status === 'rejected'
         ? (info.status as 'allowed' | 'allowed_warning' | 'rejected')
         : 'allowed';
-    if (status === 'allowed') return;
     const utilization = typeof info.utilization === 'number' ? info.utilization : null;
     const resetsAt = typeof info.resetsAt === 'number' ? info.resetsAt : null;
+    // rateLimitType is the WINDOW this event describes (five_hour / seven_day /
+    // …). Each event reports ONE window; `/usage` shows all of them, so we
+    // accumulate latest-per-type and emit the union (not a single window).
     const limitType = typeof info.rateLimitType === 'string' ? info.rateLimitType : 'limit';
+    const meta = CLAUDE_LIMIT_META[limitType];
+
+    // Merge this window into the per-session accumulator (only when we have a
+    // utilization to show — a window with no number isn't worth a row).
+    if (utilization !== null) {
+      let windows = this.limitWindows.get(s.id);
+      if (!windows) {
+        windows = new Map();
+        this.limitWindows.set(s.id, windows);
+      }
+      windows.set(limitType, {
+        label: meta?.label ?? limitType,
+        usedPercent: Math.round(utilization * 100),
+        resetsAt,
+      });
+      // Emit the union of all known windows, ordered like the TUI's /usage.
+      const snapshotWindows = [...windows.entries()]
+        .sort(([a], [b]) => (CLAUDE_LIMIT_META[a]?.rank ?? 99) - (CLAUDE_LIMIT_META[b]?.rank ?? 99))
+        .map(([, w]) => w);
+      cb.applyUsageLimits({
+        status: 'live',
+        source: 'claude',
+        windows: snapshotWindows,
+        capturedAt: Date.now(),
+      });
+    }
+
+    // Alert only when near/over the limit — never on the healthy 'allowed' path.
+    if (status === 'allowed') return;
+    const label = meta?.label ?? limitType;
     const severity = status === 'rejected' ? 'error' : 'warning';
     const title =
       status === 'rejected'
-        ? `Rate limit hit (${limitType})`
-        : `Approaching rate limit (${limitType})`;
+        ? `Rate limit hit (${label})`
+        : `Approaching rate limit (${label})`;
     const parts: string[] = [];
     if (utilization !== null) parts.push(`${Math.round(utilization * 100)}% used`);
     if (resetsAt !== null) parts.push(`resets ${new Date(resetsAt).toLocaleString()}`);
