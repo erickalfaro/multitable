@@ -3,6 +3,7 @@ import { Gauge } from 'lucide-react';
 import type { Session, UsageLimitWindow } from '../../lib/types';
 import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
+import { useIsMobile } from '../../lib/useIsMobile';
 
 interface Props {
   session: Session;
@@ -56,6 +57,15 @@ export function UsageLimitBadge({ session, placement = 'bottom' }: Props) {
   const [triggerHover, setTriggerHover] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const ref = useRef<HTMLDivElement | null>(null);
+  const isMobile = useIsMobile();
+
+  // On mobile the badge sits in the header chip row near the left edge, so an
+  // absolutely-positioned popover anchored with `right: 0` would extend past
+  // the left of the viewport. Mirror ModeBadge: pin the popover with
+  // `position: fixed`, measured from the trigger and clamped on-screen.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(
+    null,
+  );
 
   const snapshot = useAppStore((s) => s.usageLimitsBySession[session.id]);
   const setUsageLimits = useAppStore((s) => s.setUsageLimits);
@@ -119,11 +129,31 @@ export function UsageLimitBadge({ session, placement = 'bottom' }: Props) {
   const shortReset = top ? fmtShort(top.resetsAt, now) : null;
   const collapsedLabel = unavailable ? '—' : `${Math.round(top!.usedPercent)}%`;
 
+  // Mobile menus pin to the viewport (fixed) and clamp on-screen; desktop keeps
+  // the trigger-anchored absolute popover.
+  const useFixedMenu = isMobile && !!menuPos;
+
+  const toggleOpen = () => {
+    // Measure before opening so the fixed-position mobile popover knows where
+    // to land. Right-align it to the trigger (matching the desktop `right: 0`
+    // intent), then clamp into the viewport.
+    if (!open && isMobile && ref.current) {
+      const r = ref.current.getBoundingClientRect();
+      const margin = 8;
+      const width = Math.min(280, window.innerWidth - margin * 2);
+      let left = r.right - width;
+      if (left + width > window.innerWidth - margin) left = window.innerWidth - margin - width;
+      if (left < margin) left = margin;
+      setMenuPos({ top: r.bottom + 6, left, width });
+    }
+    setOpen((o) => !o);
+  };
+
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggleOpen}
         onMouseEnter={() => setTriggerHover(true)}
         onMouseLeave={() => setTriggerHover(false)}
         title={
@@ -136,11 +166,13 @@ export function UsageLimitBadge({ session, placement = 'bottom' }: Props) {
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 5,
-          height: 22,
-          padding: '0 8px',
+          // Match the sibling ModelChip/ModeBadge in the mobile header chip row;
+          // keep the roomier sizing in the desktop header's right cluster.
+          gap: isMobile ? 3 : 5,
+          height: isMobile ? 14 : 22,
+          padding: isMobile ? '0 5px' : '0 8px',
           fontFamily: 'inherit',
-          fontSize: 11.5,
+          fontSize: isMobile ? 8.5 : 11.5,
           fontWeight: 500,
           letterSpacing: '0.01em',
           color: 'var(--text-primary)',
@@ -150,11 +182,12 @@ export function UsageLimitBadge({ session, placement = 'bottom' }: Props) {
           cursor: 'pointer',
           outline: 'none',
           lineHeight: 1,
+          flexShrink: 0,
           transition:
             'background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
         }}
       >
-        <Gauge size={13} style={{ color: accent }} aria-hidden />
+        <Gauge size={isMobile ? 9 : 13} style={{ color: accent, flexShrink: 0 }} aria-hidden />
         <span style={{ lineHeight: 1, color: accent, fontVariantNumeric: 'tabular-nums' }}>
           {collapsedLabel}
         </span>
@@ -166,14 +199,9 @@ export function UsageLimitBadge({ session, placement = 'bottom' }: Props) {
         <div
           role="dialog"
           aria-label="Usage limits"
+          className={useFixedMenu ? 'mt-scroll' : undefined}
           style={{
-            position: 'absolute',
-            ...(placement === 'top'
-              ? { bottom: 'calc(100% + 6px)' }
-              : { top: 'calc(100% + 6px)' }),
-            right: 0,
-            zIndex: 50,
-            minWidth: 248,
+            zIndex: useFixedMenu ? 200 : 50,
             padding: 4,
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-strong)',
@@ -181,7 +209,26 @@ export function UsageLimitBadge({ session, placement = 'bottom' }: Props) {
             display: 'flex',
             flexDirection: 'column',
             animation: 'mt-slide-up var(--dur-fast) var(--ease-out)',
-            transformOrigin: placement === 'top' ? 'bottom right' : 'top right',
+            ...(useFixedMenu
+              ? {
+                  position: 'fixed',
+                  top: menuPos!.top,
+                  left: menuPos!.left,
+                  width: menuPos!.width,
+                  maxHeight: `calc(100vh - ${menuPos!.top + 16}px)`,
+                  overflowY: 'auto',
+                  transformOrigin: 'top left',
+                  boxShadow: 'var(--shadow-xl)',
+                }
+              : {
+                  position: 'absolute',
+                  ...(placement === 'top'
+                    ? { bottom: 'calc(100% + 6px)' }
+                    : { top: 'calc(100% + 6px)' }),
+                  right: 0,
+                  minWidth: 248,
+                  transformOrigin: placement === 'top' ? 'bottom right' : 'top right',
+                }),
           }}
         >
           <div
