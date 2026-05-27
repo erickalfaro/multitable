@@ -38,30 +38,30 @@ From [`agent/providers/types.ts`](../../../../packages/daemon/src/agent/provider
 | `costUsd` | `false` | `x.ai/billing` is TUI-only over agent-stdio (`-32601`); no per-turn USD. Revisit if billing reaches stdio. |
 | `planMode` | `'simulated'` → flip to `'native'` if VERIFY passes | Grok *has* a real plan mode; unknown if reachable over ACP set-mode. Default safe. See [`../reference/modes.md`](../reference/modes.md). |
 | `perCallApproval` | `'callback'` | `session/request_permission` → `PermissionManager`. |
-| `userQuestion` | `'unsupported'` (VERIFY) | No confirmed free-form agent→user channel over agent-stdio. |
-| `elicitation` | `false` (VERIFY) | No confirmed MCP elicitation surface over agent-stdio. |
-| `subagents` | `'auto'` (VERIFY events) | Grok runs up to 8 parallel subagents; wire their notifications → `emitTaskEvent`. Confirm the `session/update` kinds. |
-| `midTurnInput` | `false` (VERIFY) | No confirmed steering channel. |
+| `userQuestion` | `'tool'` | `_x.ai/ask_user_question` server-request → PermissionManager (same picker as Claude's AskUserQuestion). |
+| `elicitation` | `false` | No MCP elicitation surface over agent-stdio. |
+| `subagents` | `'none'` | Grok runs parallel subagents internally, but we don't surface their lifecycle yet. |
+| `midTurnInput` | `false` | No steering channel. |
 | `byok` | `false` | Machine-wide `~/.grok/auth.json` or process-env API key; no per-session keys. |
-| `hardSandbox` | `true` (VERIFY) | Grok runs tools under its own workspace-trust/protected-dir model; we advertise `fs:false,terminal:false`. |
+| `hardSandbox` | `false` | We leave `--sandbox` at Grok's default and gate via the mode flags; no OS sandbox we enforce. |
 | `hooks` | `'none'` | Grok's `~/.grok/hooks/*.json` run **inside Grok**, not host-brokered to us over ACP. |
 | `streamingDeltaSemantics` | `'additive'` | ACP chunks are pieces — accumulate, emit total. |
-| `modelSwitchScope` | `'per-session'` (VERIFY) | Model likely fixed at `session/new`. |
-| `thinkingEffort` | `'unsupported'` (VERIFY) | No confirmed effort knob for grok-build-0.1 over agent-stdio. See [`../reference/models-and-effort.md`](../reference/models-and-effort.md). |
-| `modes` | `code` / `plan` / `ask` | Native Grok modes, passthrough. See [`../reference/modes.md`](../reference/modes.md). |
+| `modelSwitchScope` | `'per-session'` | Model is a spawn-time `-m` flag (pool key); switching re-spawns the child. |
+| `thinkingEffort` | `'native'` | Spawn-time `--reasoning-effort` (no `max` → `xhigh`). See [`../reference/models-and-effort.md`](../reference/models-and-effort.md). |
+| `modes` | `default` / `auto` / `plan` | Spawn-time flags only (no per-session set-mode). See [`../reference/modes.md`](../reference/modes.md). |
 
 The UI renders entirely off this struct — **never add a `provider === 'grok'` branch in React;** flip/extend a capability instead.
 
-## The client pool — default per-cwd, VERIFY if a singleton is safe
+## The client pool — keyed by FULL spawn config (cwd + mode + effort + model)
 
 ```ts
-private clients = new Map<string, GrokAcpClient>();   // key: resolved project cwd
-private injectedClient: GrokAcpClient | null = null;  // test seam (used for every cwd)
+private clients = new Map<string, GrokAcpClient>();   // key: JSON.stringify([cwd, agentArgs])
+private injectedClient: GrokAcpClient | null = null;  // test seam (used for every config)
 ```
 
-`clientFor(cwd)` returns the injected client if present, else gets-or-creates a `GrokAcpClient` for that cwd, constructed with the resolved `cwd` and `permissionHandler: req => this.handleAcpPermission(req)`.
+`clientFor(cwd, mode, effort, model)` returns the injected client if present, else builds the spawn `agentArgs` via `buildAgentArgs(mode, effort, model)` and gets-or-creates a `GrokAcpClient` for that `[cwd, agentArgs]` key, constructed with `cwd`, `agentArgs`, and `permissionHandler: req => this.handleAcpPermission(req)`.
 
-**Why per-cwd is the safe default:** the ACP sibling agent ignores per-session cwd and reads its own `os.getcwd()` for self-perception/context-file discovery, so a shared child loads the wrong project's `AGENTS.md`. **VERIFY** whether Grok has the same flaw. Grok takes `cwd` on `session/new` and *may* honor it correctly — in which case a single daemon-wide child (the Codex app-server model) is cheaper and fine. Don't collapse to a singleton until you've confirmed Grok's self-perception follows the session cwd, not the process cwd. Note: Grok's **workspace-trust** is per-directory regardless ([`../pitfalls.md`](../pitfalls.md) §9), so even a singleton must establish trust per project.
+**Why keyed by the full config (not just cwd):** Grok's mode/effort/model are **spawn-time flags** on the `grok agent` child (verified 0.2.2 — `session/new` ignores them), so a child is bound to one config for life. A singleton is therefore impossible; we spawn one child per distinct config and re-key on a mode/effort flip (the same immutable-options pattern Codex uses — `manager.setMode` → `adapter.reset` clears the session cache, the next turn resolves the child for the new config and `session/load`s the persisted `agentSessionId` under it). cwd is still part of the key, so each child also has a correct process cwd for `AGENTS.md`/workspace-trust ([`../pitfalls.md`](../pitfalls.md) §9).
 
 `resolveCwd(s)` must never return empty — fall back to `homedir()` with a loud log if `s.workingDir` is empty.
 

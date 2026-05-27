@@ -175,6 +175,7 @@ const SLASH_TTL_MS = 5 * 60 * 1000;
 const BUILTIN_SLASH_COMMANDS: SlashCmdSpec[] = [
   { name: '/clear',    description: 'clear conversation',  scope: 'builtin' },
   { name: '/cost',     description: 'show session cost',   scope: 'builtin' },
+  { name: '/joke',     description: 'tell the perfect joke', scope: 'builtin' },
 ];
 
 async function getSlashCommands(projectId: string): Promise<SlashCmdSpec[]> {

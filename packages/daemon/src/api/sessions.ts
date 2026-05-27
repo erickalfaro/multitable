@@ -222,6 +222,19 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
     res.json({ ...cost, cacheCreationTokens: 0, cacheReadTokens: 0, model: '', messageCount: 0 });
   });
 
+  // GET /api/sessions/:id/usage-limits
+  //
+  // The latest in-memory usage-limit snapshot (null until the provider reports
+  // one, or for providers with no live feed). Lets a refreshed / late-joining
+  // client hydrate the always-present indicator before the next WS push.
+  // Not persisted — limits are live/ephemeral. See docs/reference/USAGE_LIMITS.md.
+  router.get('/:id/usage-limits', (req: Request, res: Response) => {
+    const session = getSessionById(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    const agent = agentManager.get(req.params.id);
+    res.json(agent?.usageLimits ?? null);
+  });
+
   // GET /api/sessions/:id/prompts — all user prompts in the session.
   // Three-tier lookup:
   //   1. The session's own JSONL by claudeSessionId (exact match).

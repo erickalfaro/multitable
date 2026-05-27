@@ -4,6 +4,7 @@ import { PanelBottom, Pencil, Sparkles, Menu } from 'lucide-react';
 import { AttachButton } from './AttachButton';
 import { ModeBadge } from './ModeBadge';
 import { ModelChip } from './chat/ModelChip';
+import { UsageLimitBadge } from './UsageLimitBadge';
 import type { Session } from '../../lib/types';
 import { IconButton, Spinner } from '../ui';
 import { api } from '../../lib/api';
@@ -220,6 +221,7 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
         >
           <ModelChip session={session} />
           <ModeBadge session={session} placement="bottom" />
+          <UsageLimitBadge session={session} placement="bottom" />
         </div>
       </div>
     );
@@ -295,6 +297,10 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, userSelect: 'none', WebkitUserSelect: 'none' }}>
+          {/* Always-present usage-limits indicator (hidden when the provider
+              has no live feed). Sits ahead of the action buttons so it's the
+              first thing in the header's right cluster. */}
+          <UsageLimitBadge session={session} placement="bottom" />
           <IconButton
             size="sm"
             // mousedown + preventDefault so a click while editing doesn't blur

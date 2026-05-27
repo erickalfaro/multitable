@@ -1,43 +1,71 @@
-# Modes: Grok's `--permission-mode` (identical to Claude's enum)
+# Modes: SPAWN-TIME only (no per-session mode RPC)
 
-> **VERIFIED on grok v0.2.2.** Earlier drafts of this doc guessed `code`/`plan`/`ask` — that was wrong. Grok Build's `--permission-mode` enum is **exactly Claude's `PermissionMode`**, and `session/new` accepts a `permissionMode` param (the adapter forwards `s.mode` verbatim).
+> **RE-VERIFIED on grok v0.2.2 (handshake + behavior probe).** Earlier drafts of this doc were **wrong twice**: first they guessed `code`/`plan`/`ask`; then they claimed Grok's `--permission-mode` enum is reachable and that `session/new` accepts a `permissionMode` param. **Both are false over `grok agent stdio`.** Ground truth below.
 
-`grok --help` lists:
+## The one fact
 
-```
---permission-mode <MODE>   [possible values: default, acceptEdits, auto, dontAsk, bypassPermissions, plan]
---sandbox <PROFILE>        Sandbox profile for filesystem and network access  [env: GROK_SANDBOX=]
-```
+**There is no per-session mode mechanism over `grok agent stdio`.** Mode is a **spawn-time** property of the `grok agent` child. Specifically, on grok 0.2.2:
 
-So Grok has **two** orthogonal axes: a Claude-style **permission mode** (soft gating, what we wire as `modes`) and an OS-enforced **sandbox profile** (deferred to v2 — see below).
+- `session/new` returns a `models` object but **NO `modes` / `availableModes` / `currentModeId`** → ACP `session/set_mode` is **not** available (the spec mechanism doesn't apply).
+- `permissionMode` (and `effort`, `model`) on `session/new` are **silently ignored**. Probe: sending `permissionMode:'plan'` still made Grok run `echo "hi" > hello.txt` and fire a normal approval prompt — i.e. default behavior.
+- `grok agent --permission-mode … stdio` → clap **rejects** it ("unexpected argument"). `--permission-mode` exists only on the top-level TUI / headless `grok`, not the agent subcommand.
 
-MultiTable does **not** invent or translate modes. The adapter declares the native set in `capabilities.modes` (see [`grok.ts`](../../../../packages/daemon/src/agent/providers/grok.ts)) and passes `s.mode` straight into `session/new`'s `permissionMode`.
+So MultiTable sets mode by **spawning the child with the right flags** and pooling one child per `(cwd, mode, effort, model)`.
 
-## The six modes (as declared in the adapter)
+## The real levers (verified working)
 
-| `permissionMode` | Label | Tone | Behavior |
+| `grok agent` spawn flag (before `stdio`) | Effect |
+|---|---|
+| *(none)* | Default — prompts on sensitive tools via `session/request_permission`. |
+| `--always-approve` | Runs every tool with **no** prompt. (Verified: file written, zero prompts.) |
+| `--agent-profile <md>` (frontmatter `permission_mode: plan`) | **Read-only** — Grok explores + proposes, never edits. (Verified with bundled `~/.grok/bundled/agents/plan.md`: no file written.) |
+| `--reasoning-effort <none\|minimal\|low\|medium\|high\|xhigh>` | Effort (see [`models-and-effort.md`](models-and-effort.md)). |
+| `-m, --model <MODEL>` | Model. |
+
+Plan mode otherwise can't be client-forced: per Grok's `19-plan-mode.md`, *"there is no slash command to force plan mode"* — it's normally model-initiated (`enter_plan_mode`, user-approved). The read-only agent-profile is the only forced-plan path.
+
+## The 3 modes MultiTable exposes
+
+`capabilities.modes` (in [`grok.ts`](../../../../packages/daemon/src/agent/providers/grok.ts)) lists exactly the modes that map to a **distinct, real** lever:
+
+| `value` | Label | Tone | Spawn flags (`buildAgentArgs`) |
 |---|---|---|---|
-| `default` | Ask first | standard | Prompts before sensitive tools. |
-| `acceptEdits` | Accept edits | elevated | Auto-accepts file edits; still prompts for other sensitive actions. |
-| `auto` | Auto | elevated | Proceeds autonomously, prompting only when necessary. |
-| `plan` | Plan | safe | Proposes a plan / shows diffs before applying; requires approval. |
-| `dontAsk` | Don't ask | danger | Suppresses permission prompts for the session. |
-| `bypassPermissions` | Bypass | danger | Runs every tool without asking. |
+| `default` | Ask first | standard | *(none)* — prompts |
+| `auto` | Auto-approve | danger | `--always-approve` |
+| `plan` | Plan | safe | `--agent-profile <MT plan profile>` (full-capability, `permission_mode: plan`) |
 
-These reuse Claude's exact values, so `packages/web/src/lib/modeTone.ts`'s `MODE_TONE_FALLBACK` already maps all six — the web side needed **zero** new mode knowledge.
+The other Claude permission-modes (`acceptEdits`/`dontAsk`/`bypassPermissions`) have **no separate stdio behavior**, so we do not advertise them for Grok — listing them would be a lie.
 
-## `planMode` capability = `'native'`
+## Plan mode = native plan→execute in ONE session (the key design)
 
-Grok has a real `plan` permission-mode (proposes a plan, shows diffs, requires approval). `capabilities.planMode = 'native'`.
+`plan` spawns a **MultiTable-owned, full-capability** agent profile (`permission_mode: plan`) written to the daemon data dir (`ensurePlanProfilePath` in `grok.ts`) — **not** Grok's bundled `~/.grok/bundled/agents/plan.md`. The bundled one is a *read-only architect with no edit tools* — it can plan but can **never execute** (a dead end; that's why "switch plan→auto to execute" failed). The full-capability profile instead does the real Grok plan flow in a single session:
+
+```
+enter_plan_mode            → current_mode_update: plan   (auto; reads/plans only)
+  … explores, writes its plan.md …
+exit_plan_mode             → _x.ai/exit_plan_mode  (SERVER-REQUEST, payload { sessionId, toolCallId, planContent })
+                             Grok BLOCKS here until we reply.
+  GrokAdapter.handleExitPlanMode → PermissionManager.requestFromSdk('ExitPlanMode', { plan })
+   ├─ allow  → return { outcome:'approved' } → current_mode_update: default → EXECUTES the plan (same session)
+   └─ deny   → abort the turn (activeTurnCtrls), return { outcome:'rejected' } → nothing executed
+```
+
+**Verified (grok 0.2.2):** the `outcome` VALUE doesn't itself gate Grok — on any reply it flips to `default` and proceeds — so the real gate is (a) holding the request until the user decides and (b) **turn-cancel on reject**. `auto` mode skips this prompt (`handleExitPlanMode` returns `approved` immediately). The unhandled-`_x.ai/exit_plan_mode`-→`-32601` case would break the transition, so the handler is mandatory.
 
 ## How a mode change applies
 
-`PUT /api/sessions/:id/mode` validates against `capabilities.modes` and emits `session:mode-changed` (provider-agnostic). The adapter keys its session cache by `{grokSessionId, mode, effort, model}`; when `s.mode` changes the cache misses and `ensureSessionId` re-issues `session/new`/`session/load` with the new `permissionMode`. (Whether Grok re-applies `permissionMode` on `session/load` of an existing session vs. only on a fresh `session/new` is the one residual uncertainty — new sessions definitely get the right mode; verify continuity behavior if a mode flip mid-session ever looks ignored.)
+`POST /api/sessions/:id/mode` → `manager.setMode` validates against `capabilities.modes`, sets `s.mode`, and calls `adapter.reset(s)` (drops the cached session entry). The next turn re-runs `GrokAdapter.clientFor(cwd, mode, effort, model)`, which resolves a **different pooled child** for the new config (pool key = `JSON.stringify([cwd, agentArgs])`) and `session/load`s the persisted `agentSessionId` under it. This mirrors Codex's "immutable options → discard cached thread" pattern.
 
-## `--sandbox` (deferred to v2)
+`current_mode_update` notifications (Grok switching mode autonomously, e.g. a model-initiated `enter_plan_mode`) are **informational only** — logged, not acted on, because our mode is spawn-fixed per child.
 
-The separate `--sandbox <PROFILE>` axis (OS-enforced FS/network confinement, env `GROK_SANDBOX`) is **not wired in v1**: the adapter leaves it at Grok's default and gates via `permissionMode`, so `capabilities.hardSandbox = false`. To wire it later: enumerate the valid profile names (`grok --help` doesn't list them inline), decide whether to expose them as a second UI control or fold into the mode set, and flip `hardSandbox`.
+### ⚠️ Don't rely on switching the mode SELECTOR mid-session (it's creation-bound) — use plan→execute instead
 
-## What modes are NOT
+Switching the MultiTable mode selector takes effect on the **next turn** and re-keys to a different pooled child (`session/load` re-attaches history). But because each child's `permission_mode`/profile is fixed at spawn and `session/load` rehydrates the agent the session was **created** with, switching the selector does **not** reliably change a live session's edit capability — historically `auto`→`plan` still edited and a (read-only-architect) `plan`→`auto` stayed read-only.
 
-Not a substitute for `session/request_permission`: even in `default` mode Grok only prompts for calls it deems sensitive, and even in `bypassPermissions` the enforcement is Grok's. Don't conflate the mode with the per-call approval channel ([`../multitable/permission-wiring.md`](../multitable/permission-wiring.md)).
+This is now mostly **moot**: with the full-capability plan profile, you don't switch modes to execute a plan — the **same plan session executes itself** after you approve `exit_plan_mode` (above). So: pick the mode at agent creation; use plan mode's native `exit_plan_mode` to go from plan to execute, not the mode selector. (`default`↔`auto` still meaningfully toggles prompting within an editable session.)
+
+This mirrors Codex's sandbox immutability: capability is set when the conversation starts. **There is no host-side fix without discarding history** (a fresh `session/new` under the new child would apply the new capability but lose the conversation — the Codex "discard thread on flip" tradeoff; `x.ai/session/fork` is unexplored). Surface to users as a known limitation: **choose plan-vs-editable at agent creation.**
+
+## `--sandbox` (still deferred)
+
+The separate OS-enforced `--sandbox <PROFILE>` axis (env `GROK_SANDBOX`) is still not wired; `capabilities.hardSandbox = false`. Permission gating is via the flags above only.

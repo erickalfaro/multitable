@@ -402,6 +402,17 @@ export function createServer(
     },
   );
 
+  // Usage-limits snapshot change — broadcast so the always-present per-session
+  // indicator updates without polling. Dedicated event (not folded into the hot
+  // state-snapshot path): snapshots arrive on a different cadence, including
+  // outside turns. See docs/reference/USAGE_LIMITS.md.
+  agentManager.on(
+    'usage-limits-changed',
+    ({ sessionId, snapshot }: { sessionId: string; snapshot: unknown }) => {
+      broadcast('session:usage-limits-changed', { sessionId, snapshot });
+    },
+  );
+
   // Provider catalog updates — broadcast on every refresh (success or error)
   // so any open UI rerenders its model dropdowns without polling.
   catalog.on(

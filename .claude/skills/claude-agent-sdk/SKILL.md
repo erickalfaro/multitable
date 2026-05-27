@@ -1,6 +1,6 @@
 ---
 name: claude-agent-sdk
-description: Authoritative reference for working on MultiTable's Claude Agent SDK integration (`@anthropic-ai/claude-agent-sdk`). Trigger when the user mentions the agent SDK, `query()`, streaming, permission modes, `canUseTool`, `AskUserQuestion`, elicitation, hooks, abort/stop, plan mode, sessions, subagents, MCP, or modifying anything under `packages/daemon/src/agent/` or `packages/daemon/src/hooks/`.
+description: Authoritative reference for working on MultiTable's Claude Agent SDK integration (`@anthropic-ai/claude-agent-sdk`). Trigger when the user mentions the agent SDK, `query()`, streaming, permission modes, `canUseTool`, `AskUserQuestion`, elicitation, hooks, abort/stop, plan mode, sessions, subagents, MCP, usage limits / rate limits (`rate_limit_event`, `rate_limit_info`), or modifying anything under `packages/daemon/src/agent/` or `packages/daemon/src/hooks/`.
 allowed-tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 
@@ -24,6 +24,7 @@ This skill exists because MultiTable's daemon-side SDK integration has bitten us
 | Add a custom MCP tool | [`reference/custom-tools-mcp.md`](reference/custom-tools-mcp.md) |
 | Use subagents | [`reference/subagents.md`](reference/subagents.md) |
 | Display or accumulate cost | [`reference/cost-tracking.md`](reference/cost-tracking.md) |
+| Surface usage / rate limits in the per-session indicator | [`reference/usage-limits.md`](reference/usage-limits.md) |
 | Customize the system prompt or list slash commands | [`reference/system-prompts-slash-commands.md`](reference/system-prompts-slash-commands.md) |
 | Find where event X is emitted / forwarded | [`multitable/event-map.md`](multitable/event-map.md) |
 | Get oriented in the daemon's agent code | [`multitable/architecture.md`](multitable/architecture.md) |

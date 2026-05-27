@@ -227,6 +227,11 @@ async function main() {
     // (codex app-server) so the first session that uses them doesn't eat the
     // ~2-5s cold-start. Errors per adapter are isolated inside warmupAll.
     void agentManager.warmupAll();
+    // One-shot usage-limits refresh so re-opening the app shows current limits
+    // without waiting for the first turn. After this it's EVENT-DRIVEN — the
+    // manager refreshes on every turn-complete, not on a timer. See
+    // docs/reference/USAGE_LIMITS.md.
+    agentManager.refreshAllUsageLimits();
   });
 
   // 10. Graceful shutdown — idempotent, force exits within 2s

@@ -43,6 +43,9 @@ export type ThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 // React layer to gate UI without provider-name branching.
 export interface ProviderCapabilities {
   costUsd: boolean;
+  // true = adapter feeds a live usage-limit snapshot; false = no live feed and
+  // the UsageLimitBadge is hidden. See docs/reference/USAGE_LIMITS.md.
+  usageLimits: boolean;
   planMode: 'native' | 'simulated' | 'none';
   perCallApproval: 'callback' | 'sandbox' | 'callback+kind';
   userQuestion: 'tool' | 'callback' | 'unsupported';
@@ -58,6 +61,24 @@ export interface ProviderCapabilities {
   // Cross-provider reasoning-effort toggle. 'native' = adapter passes the
   // value through to the SDK; 'unsupported' = UI renders the badge disabled.
   thinkingEffort: 'native' | 'unsupported';
+}
+
+// Mirrors daemon's UsageLimitWindow / UsageLimitSnapshot (agent/types.ts).
+// Drives the always-present per-session usage-limits indicator.
+export interface UsageLimitWindow {
+  label: string;
+  usedPercent: number; // 0..100
+  resetsAt: number | null; // ms-epoch
+  windowDurationMins?: number | null;
+}
+
+export interface UsageLimitSnapshot {
+  status: 'live' | 'unavailable' | 'stale';
+  source: AgentProvider;
+  windows: UsageLimitWindow[];
+  planType?: string | null;
+  creditsRemaining?: number | null;
+  capturedAt: number;
 }
 
 export interface ProcessConfig {

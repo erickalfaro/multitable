@@ -1,12 +1,12 @@
 ---
 name: grok-build
-description: Authoritative reference for working on MultiTable's Grok Build (xAI) provider, driven by `grok agent stdio` over line-delimited JSON-RPC (Agent Client Protocol). Trigger when the user mentions Grok Build, the Grok adapter, `grok agent stdio`, GrokAdapter, grok-build-0.1, ACP for Grok, `~/.grok/`, the `code`/`plan`/`ask` modes, `--mode plan`, `x.ai/billing`, the SuperGrok/SuperHeavy subscription, `GROK_CODE_XAI_API_KEY`, or modifying anything under `packages/daemon/src/agent/providers/grok.ts`, `packages/daemon/src/agent/providers/grok-acp/`, or `packages/daemon/src/transcripts/grokParser.ts`.
+description: Authoritative reference for working on MultiTable's Grok Build (xAI) provider, driven by `grok agent stdio` over line-delimited JSON-RPC (Agent Client Protocol). Trigger when the user mentions Grok Build, the Grok adapter, `grok agent stdio`, GrokAdapter, grok-build-0.1, ACP for Grok, `~/.grok/`, the default/auto/plan modes, `--always-approve`, `--agent-profile`, `--reasoning-effort`, `x.ai/billing`, the SuperGrok/SuperHeavy subscription, `GROK_CODE_XAI_API_KEY`, usage limits / rate limits (why they're off for Grok; the xAI billing out-of-band path), or modifying anything under `packages/daemon/src/agent/providers/grok.ts`, `packages/daemon/src/agent/providers/grok-acp/`, or `packages/daemon/src/transcripts/grokParser.ts`.
 allowed-tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 
 # Grok Build (xAI) provider reference for MultiTable
 
-> **Status: SHIPPED.** The adapter is live: [`grok.ts`](../../../packages/daemon/src/agent/providers/grok.ts) + [`grok-acp/`](../../../packages/daemon/src/agent/providers/grok-acp/) + [`grokParser.ts`](../../../packages/daemon/src/transcripts/grokParser.ts), registered in `agent/manager.ts`. The wire contract was **verified against grok v0.2.2** via a handshake spike — see the resolution table in [`multitable/known-bugs.md`](multitable/known-bugs.md). Some early-draft guesses in this skill were wrong and have been corrected (modes are Claude's `PermissionMode` enum, not `code`/`plan`/`ask`; effort is native). A few `VERIFY` markers remain only for paths the spike didn't exercise (e.g. the real `session/request_permission` payload on a tool-using turn). Re-baseline after each `grok` upgrade — it's early beta. Design rationale: [`../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md`](../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md).
+> **Status: SHIPPED.** The adapter is live: [`grok.ts`](../../../packages/daemon/src/agent/providers/grok.ts) + [`grok-acp/`](../../../packages/daemon/src/agent/providers/grok-acp/) + [`grokParser.ts`](../../../packages/daemon/src/transcripts/grokParser.ts), registered in `agent/manager.ts`. The wire contract was **verified against grok v0.2.2** via handshake + behavior probes — see the resolution tables in [`multitable/known-bugs.md`](multitable/known-bugs.md). **Two corrections matter most (2026-05-27):** (1) mode and effort are **NOT** `session/new` params — those are silently ignored. There is no ACP `session/set_mode`. Mode/effort/model are **spawn-time flags** on the `grok agent` child, so the adapter pools one child per `(cwd, mode, effort, model)`. (2) MultiTable exposes only the **3 modes** that map to a real lever — `default` (prompts), `auto` (`--always-approve`), `plan` (`--agent-profile <MT full-capability plan profile>`). `plan` does the native plan→execute flow in ONE session: the agent plans, then `exit_plan_mode` arrives as the `_x.ai/exit_plan_mode` server-request which we gate via the approval UI (approve → executes in the same session; deny → abort the turn). See [`reference/modes.md`](reference/modes.md). Re-baseline after each `grok` upgrade — it's early beta. Design rationale: [`../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md`](../../../docs/reference/GROK_BUILD_INTEGRATION_PLAN.md).
 
 There is **no pinned SDK**. Grok Build is not an npm package — it's xAI's official agent **binary** (`grok`) that MultiTable drives as a long-lived child over **line-delimited JSON-RPC 2.0 on stdio**, speaking the **Agent Client Protocol (ACP)** via the `grok agent stdio` subcommand. The version is whatever `grok` is on the operator's `PATH` (`grok --version`). Re-verify against a running `grok agent stdio` after any upstream Grok release — the CLI is in early beta and moves fast.
 
@@ -24,9 +24,10 @@ The second fact that shapes the adapter: **Grok's ACP parser does not unescape `
 |---|---|
 | Understand the ACP wire protocol (initialize / authenticate / session lifecycle / `session/update` kinds) as Grok speaks it | [`reference/acp-protocol.md`](reference/acp-protocol.md) |
 | Wire or debug Grok auth (`~/.grok/auth.json`, OAuth login, `GROK_CODE_XAI_API_KEY` fallback, auth-state alerts) | [`reference/xai-auth.md`](reference/xai-auth.md) |
-| Map Grok's `code`/`plan`/`ask` modes onto `ProviderCapabilities.modes` and ACP set-mode | [`reference/modes.md`](reference/modes.md) |
+| Understand the 3 modes (default/auto/plan), spawn-flag mapping, and the native plan→execute (`exit_plan_mode`) flow | [`reference/modes.md`](reference/modes.md) |
 | Know the model (`grok-build-0.1`), `/model` switching, and whether a reasoning-effort knob exists | [`reference/models-and-effort.md`](reference/models-and-effort.md) |
 | Know which Grok slash-commands matter to us (and which are TUI-only / out of scope) | [`reference/slash-commands.md`](reference/slash-commands.md) |
+| Understand why the usage-limits indicator is off for Grok (and the out-of-band path) | [`reference/usage-limits.md`](reference/usage-limits.md) |
 | Get oriented in the planned `agent/providers/grok.ts` + the adapter contract | [`multitable/adapter-architecture.md`](multitable/adapter-architecture.md) |
 | Wire / debug the permission prompt (approvals silently denied, etc.) | [`multitable/permission-wiring.md`](multitable/permission-wiring.md) |
 | Parse `~/.grok/` session history into `Message[]` and dedupe replay | [`multitable/persistence-and-parser.md`](multitable/persistence-and-parser.md) |
@@ -41,15 +42,18 @@ Need to BLOCK / approve a tool call?
     Return a SELECTED optionId or CANCELLED, in ACP's NESTED outcome shape
     { outcome: { outcome: 'selected', optionId } }. See permission-wiring.md.
     NOTE: like every ACP agent, Grok decides for itself WHICH calls need
-    approval — `code` mode runs many tools with no prompt. The host cannot
-    force-prompt every call. See pitfalls.md §6.
+    approval — and `auto` mode (--always-approve) runs every tool with NO
+    prompt. The host cannot force-prompt every call. See pitfalls.md §6.
 
-Need PLAN mode?
-└── Grok has a REAL plan mode (`--mode plan` / `/plan`: shows diffs, requires
-    approval) — unlike Hermes' advisory one. Whether it is reachable over the
-    agent-stdio surface (an ACP set-mode RPC / session/new param) is VERIFY.
-    If yes → capabilities.planMode = 'native'; if TUI-only → 'simulated'.
-    See reference/modes.md.
+Need PLAN mode (plan → execute in ONE session)?
+└── Spawn the child with `--agent-profile <MT full-capability plan profile>`
+    (permission_mode: plan; ensurePlanProfilePath writes it to the data dir).
+    The agent plans (read-only), then calls exit_plan_mode → arrives as the
+    `_x.ai/exit_plan_mode` SERVER-REQUEST {sessionId,toolCallId,planContent},
+    which Grok BLOCKS on. handleExitPlanMode gates it via PermissionManager:
+    approve → EXECUTES in the same session; deny → abort the turn. NOT the
+    bundled read-only plan.md (no edit tools → can't execute). capabilities.
+    planMode='native'. See reference/modes.md + multitable/permission-wiring.md.
 
 Need to STOP a turn mid-stream?
 └── client.cancel(grokSessionId) sends the `session/cancel` NOTIFICATION
@@ -57,10 +61,11 @@ Need to STOP a turn mid-stream?
     Wire off ctrl.signal 'abort' in runTurn. (Same ACP primitive as any agent.)
 
 Need to RESUME a prior conversation?
-└── client.loadSession(agentSessionId, opts) → ACP `session/load`
-    (agentCapabilities.loadSession=true on 0.2.2). The adapter re-sends
-    model/permissionMode/effort on load. 500ms drain kept defensively in case
-    Grok replays history as session/update.
+└── client.loadSession(agentSessionId, {cwd}) → ACP `session/load`
+    (agentCapabilities.loadSession=true on 0.2.2). Mode/effort/model are NOT
+    load params — they're baked into the child's spawn flags, so a flip
+    re-attaches under a different pooled child. 500ms drain kept defensively in
+    case Grok replays history as session/update.
 
 Need cost in USD?
 └── NOT WIRED. `x.ai/billing` is TUI-only / account-level, not per-turn USD.
@@ -73,14 +78,17 @@ Need the agent to ASK the user a free-form question / MCP elicitation?
     elicitation=false. Don't invent a channel.
 
 Need to change reasoning depth?
-└── NATIVE. capabilities.thinkingEffort='native'. Grok takes --effort
-    low|medium|high|xhigh|max; the adapter passes `effort` on session/new
-    (NO /reasoning prefix — that's Hermes). See reference/models-and-effort.md.
+└── NATIVE but SPAWN-TIME. capabilities.thinkingEffort='native'. The child is
+    spawned with `grok agent --reasoning-effort <none|minimal|low|medium|high|
+    xhigh>` (NO 'max' → map to xhigh; NO session/new `effort`; NO /reasoning
+    prefix — that's Hermes). See reference/models-and-effort.md.
 
-Need PLAN mode / a behavior mode?
-└── NATIVE. --permission-mode = Claude's enum (default/acceptEdits/auto/
-    dontAsk/bypassPermissions/plan). Forwarded as `permissionMode` on
-    session/new. capabilities.planMode='native'. See reference/modes.md.
+Need a behavior MODE (default / auto / plan)?
+└── SPAWN-TIME ONLY. session/new IGNORES permissionMode; there's no set-mode.
+    buildAgentArgs maps: default→(none, prompts), auto→`--always-approve`,
+    plan→`--agent-profile <bundled plan.md>`. One pooled child per
+    (cwd,mode,effort,model). capabilities.modes = [default, auto, plan] only.
+    See reference/modes.md.
 ```
 
 ## Four rules that get violated most (carried over from ACP; re-verify for Grok)

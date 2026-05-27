@@ -142,6 +142,21 @@ The proper fix if 5 minutes is too short is to let users configure it per-sessio
 
 ---
 
+## 9. Usage-limit indicator goes blank when not near a limit
+
+**Symptom:** the per-session usage-limits badge shows data only right before you hit a rate limit, then disappears; for a healthy session it's always empty.
+
+**Root cause:** `handleRateLimitEvent` ([`claude.ts:873-899`](../../../packages/daemon/src/agent/providers/claude.ts)) has `if (status === 'allowed') return;` (line ~880) *ahead* of where the snapshot would be emitted. That guard was correct when the handler only fired an alert (you don't want an alert when you're fine). But the always-present indicator needs the **healthy** snapshot too.
+
+**Fix pattern:**
+- Build and emit the `UsageLimitSnapshot` via `cb.applyUsageLimits(...)` **before** the `status === 'allowed'` early-return.
+- Keep the early-return only to gate the *alert* (`emitAlert`), not the snapshot.
+- `rate_limit_info` is one window → one `UsageLimitWindow`. Don't fabricate `primary`/`secondary` (that's Codex's shape).
+
+If you're touching usage limits, read [`reference/usage-limits.md`](reference/usage-limits.md) and the cross-provider spec [`docs/reference/USAGE_LIMITS.md`](../../../docs/reference/USAGE_LIMITS.md).
+
+---
+
 ## When in doubt
 
 - Read [`multitable/architecture.md`](multitable/architecture.md) to find the right file.

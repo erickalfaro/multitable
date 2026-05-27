@@ -56,7 +56,7 @@ Missing credentials fail the first turn, surfaced via `session:turn-error`.
 
 `agent/manager.ts` is a thin, provider-agnostic orchestrator: session state machine, DB persistence, WS dispatch, a 5-min no-progress watchdog, capability advertisement. `sendTurn()` looks up the adapter and delegates.
 
-**To add a provider:** drop a `<provider>.ts` adapter, register it in the manager's adapter map, (if it persists to disk) add a `transcripts/<provider>Parser.ts`, **and create the provider's `.claude/skills/<provider>-sdk/` skill folder** (mandatory — see "Provider skill folders" below; a provider integration is not complete without it). No surgery on the manager's turn logic. Deep per-provider semantics live in the `claude-agent-sdk` / `openai-codex-sdk` / `hermes-grok` skills and `docs/reference/THREE_PROVIDER_INTEGRATION_PLAN.md` — consult those before changing an adapter.
+**To add a provider:** drop a `<provider>.ts` adapter, register it in the manager's adapter map, (if it persists to disk) add a `transcripts/<provider>Parser.ts`, advertise `capabilities.usageLimits` and either wire `applyUsageLimits(...)` or document why the provider has no live feed (see `docs/reference/USAGE_LIMITS.md`), **and create the provider's `.claude/skills/<provider>-sdk/` skill folder** (mandatory — see "Provider skill folders" below; a provider integration is not complete without it). No surgery on the manager's turn logic. Deep per-provider semantics live in the `claude-agent-sdk` / `openai-codex-sdk` / `hermes-grok` skills and `docs/reference/THREE_PROVIDER_INTEGRATION_PLAN.md` — consult those before changing an adapter.
 
 ### Provider skill folders (required)
 
@@ -66,7 +66,7 @@ Mirror the existing folders (`claude-agent-sdk/`, `openai-codex-sdk/`, `hermes-g
 
 - `SKILL.md` — YAML frontmatter (`name`, `description` with concrete trigger terms, `allowed-tools`), then the authoritative reference: a "strictly `<provider>`-only" isolation note (do **not** import other providers' SDK/protocol concepts — see [[feedback_separate_sdks]]), the one fact that shapes everything, and a quick task→file map.
 - `pitfalls.md` — the provider-specific traps (wire-shape gotchas, auth edge cases, abort/replay quirks).
-- `reference/` — protocol / auth / feature deep-dives (one file per axis).
+- `reference/` — protocol / auth / feature deep-dives (one file per axis). **A `reference/usage-limits.md` is mandatory** — document how this provider's usage/rate-limit data is obtained (in-band event vs out-of-band credential read), its exact wire shape, and the adapter capture path (see `docs/reference/USAGE_LIMITS.md` for the cross-provider feature spec). If the provider has no live feed today, say so and describe the out-of-band path that would surface limits later.
 - `multitable/` — how the adapter integrates here (adapter architecture, permission wiring, persistence/parser).
 
 Keep each skill **strictly single-provider** — never blend two providers' SDK or protocol content in one skill or doc. Register the new skill's trigger terms so it auto-loads when its adapter files (`packages/daemon/src/agent/providers/<provider>.ts`, its parser) are touched.
@@ -109,6 +109,7 @@ Claude reuses one thread across mode flips; Codex options are immutable post-thr
 - **Streaming buffers** (`agent/streamBuffer.ts`) — canonical additive-delta reducer. All adapters normalize to additive; the daemon accumulates per-item buffers and forwards cumulative snapshots over `session:assistant-delta` / `:reasoning-delta` / `:tool-delta` / `:tool-progress`. The final assistant message / `item/completed` carries the canonical payload that supersedes the buffer; `session:message-rekeyed` swaps a synthetic id for the persisted one.
 - **Alerts** (`agent/alerts.ts`) — `createAlert()` → `SessionAlert` with category + severity (info/success 3s, warning 5s, error 8s, attention persistent). WS `session:alert`; UI `NotificationCenter.tsx` + `lib/notify.ts` / `browserNotifications.ts` / `sound.ts` / `tabBadge.ts` / `notificationPrefs.ts`.
 - **Dev log** (`devLog.ts`) — EventEmitter for in-app debugging; `trackedTimeout(label, ms)` logs timer start/fire/cancel. Broadcast as `daemon-log`; UI `DevLogPanel.tsx` (ring buffer, persisted toggle).
+- **Usage limits** (`docs/reference/USAGE_LIMITS.md`) — always-present per-session indicator of the active provider/model's usage limits. Adapters normalize to a `UsageLimitSnapshot` via `applyUsageLimits(...)`, gated by `capabilities.usageLimits`; WS `session:usage-limits-changed`; UI `UsageLimitBadge.tsx` in `SessionHeaderBar`. Per-provider data sources live in each `<provider>-sdk/reference/usage-limits.md`.
 - **Loaders + secrets** (`loaders.ts`, `config/secrets.ts`) — 60-variant dot-matrix loader registry; `pickLoaderVariant` assigns server-side so a project keeps its avatar across reloads. Secrets: atomic YAML store at `~/.multitable/secrets.yml`.
 
 ## Build gotcha: schema.sql

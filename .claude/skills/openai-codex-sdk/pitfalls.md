@@ -81,3 +81,17 @@ MCP server config goes through `CodexOptions.config.mcp_servers.*` (which the SD
 ## 20. Frontend should ignore unknown session ids gracefully
 
 After a session removal, the daemon may still emit a few in-flight WS events for that id (reconcile timer, late event). The store should drop them silently — don't crash.
+
+## 21. `account/rateLimits/updated` is silently dropped (usage-limits indicator stays empty)
+
+**Symptom:** Codex sessions never populate the usage-limits badge, even after turns. No error.
+
+**Root cause:** `account/rateLimits/updated` is **account-scoped** — its params have **no `threadId`**. `CodexAppServerClient.dispatchNotification` ([`codex-app-server/client.ts:160-176`](../../../packages/daemon/src/agent/providers/codex-app-server/client.ts)) reads `params.threadId` and **drops every notification without one** (account/\*, configWarning, app/list/\*). The per-thread `subscribe(threadId, …)` fan-out can never see it.
+
+**Fix pattern:**
+- Add an account-listener channel (`subscribeAccount(listener)`) and route `n.method.startsWith('account/')` to it in `dispatchNotification` instead of dropping.
+- Register one account listener in warmup (not per-thread); the snapshot is **account-wide** → fan it to all Codex sessions.
+- For data before the first turn, also pull `account/rateLimits/read` on provision.
+- Consume the **generated** `RateLimitSnapshot`/`RateLimitWindow` types; never hand-edit `codex-protocol/*`.
+
+If you're touching usage limits, read [`reference/usage-limits.md`](reference/usage-limits.md) and the cross-provider spec [`docs/reference/USAGE_LIMITS.md`](../../../docs/reference/USAGE_LIMITS.md).

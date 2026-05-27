@@ -344,6 +344,19 @@ export const ChatInputCM = memo(function ChatInputCM({
             });
           return true;
         }
+        case 'joke': {
+          echoUserMessage(text);
+          pushSystemMessage(
+            `Three providers walk into a bar.\n\n` +
+            `Claude: "I'll have a beer in acceptEdits."\n` +
+            `Codex: "Workspace-write on the tap, and sandbox the peanuts."\n` +
+            `Hermes: "/reasoning high — make it the perfect joke."\n\n` +
+            `Bartender: "That'll be one tool call."\n\n` +
+            `They all pull out their phones.\n\n` +
+            `Still waiting on the Telegram callback.`
+          );
+          return true;
+        }
         default:
           return false;
       }

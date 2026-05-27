@@ -4,6 +4,7 @@ import type {
   SendTurnInput,
   AlertSeverity,
   ThinkingEffort,
+  UsageLimitSnapshot,
 } from './types.js';
 import type { ProcessState } from '../types.js';
 import { parseCodexThread, listCodexThreads } from '../transcripts/codexParser.js';
@@ -79,6 +80,7 @@ type RegisterInput = Omit<
   | 'currentToolStartedAt'
   | 'activeSubagents'
   | 'lastActivity'
+  | 'usageLimits'
   | 'lastDetectedOptions'
   | 'userMessages'
   | 'messages'
@@ -104,6 +106,13 @@ export class AgentSessionManager extends EventEmitter {
   private adapters: Record<string, ProviderAdapter>;
   private permManager: PermissionManager;
   private elicitManager: ElicitationManager;
+  // Out-of-band usage-limits refresh is EVENT-DRIVEN (on turn-complete + session
+  // open), not polled — limits only move when work happens. Usage limits are
+  // account-wide, so we fetch ONCE per provider (via a representative session)
+  // and fan the snapshot to all that provider's sessions. This set guards
+  // against overlapping in-flight fetches for the same provider (rapid turns).
+  // See docs/reference/USAGE_LIMITS.md.
+  private usageFetchInFlight = new Set<string>();
 
   constructor(permManager: PermissionManager, elicitManager: ElicitationManager) {
     super();
@@ -191,6 +200,7 @@ export class AgentSessionManager extends EventEmitter {
       currentToolStartedAt: null,
       activeSubagents: 0,
       lastActivity: 0,
+      usageLimits: null,
       lastDetectedOptions: null,
       userMessages: [],
       messages: [],
@@ -377,6 +387,9 @@ export class AgentSessionManager extends EventEmitter {
   async provisionSession(sessionId: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s) return;
+    // One-shot usage-limits refresh on session open so the badge isn't blank
+    // until the first turn (event-driven, not a poll). Fires for every provider.
+    void this.refreshUsageLimits(s.provider);
     if (s.agentSessionId) return;
     const adapter = this.adapters[s.provider];
     if (!adapter?.provisionSession) return;
@@ -641,6 +654,10 @@ export class AgentSessionManager extends EventEmitter {
         /* see note above */
       }
       this.emit('turn-complete', { sessionId });
+      // Refresh usage limits the moment a turn ends — this is when they change.
+      // Account-wide fetch, fanned to all the provider's sessions. Event-driven,
+      // not polled. See docs/reference/USAGE_LIMITS.md.
+      void this.refreshUsageLimits(s.provider);
       // session:idle — the universal "agent loop is done, ready for the next
       // user turn" signal. Distinct from turn-complete in that it ALSO fires
       // after errors and aborts (turn-complete fires for every termination
@@ -723,6 +740,7 @@ export class AgentSessionManager extends EventEmitter {
           console.error('[agent] failed to insert usage record:', err);
         }
       },
+      applyUsageLimits: (snapshot) => this.setSessionUsageLimits(sessionId, snapshot),
       emitTurnResult: (input) => this.emit('turn-result', { sessionId, ...input }),
       setCurrentTool: (name) => {
         const s = this.sessions.get(sessionId);
@@ -815,6 +833,55 @@ export class AgentSessionManager extends EventEmitter {
       adapter?.reset?.(s);
     }
     this.sessions.delete(sessionId);
+  }
+
+  /** Set + broadcast a session's usage-limit snapshot. Used by both the
+   * per-turn adapter callback and the out-of-band poll loop. */
+  private setSessionUsageLimits(sessionId: string, snapshot: UsageLimitSnapshot): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    s.usageLimits = snapshot;
+    this.emit('usage-limits-changed', { sessionId, snapshot });
+  }
+
+  /**
+   * Refresh one provider's usage limits out-of-band, then fan the snapshot to
+   * all that provider's sessions. Event-driven: called after every turn
+   * completes (the moment limits actually change) and once when a session opens.
+   * Fetches ONCE per provider (limits are account-wide); a per-provider in-flight
+   * guard collapses overlapping calls from rapid turns. No-ops for providers
+   * whose adapter doesn't implement `fetchUsageLimits`.
+   */
+  async refreshUsageLimits(provider: string): Promise<void> {
+    const adapter = this.adapters[provider];
+    if (!adapter?.fetchUsageLimits) return;
+    if (this.usageFetchInFlight.has(provider)) return;
+    // Any session of this provider works as the fetch context (creds are
+    // machine-wide); skip if the provider has no live sessions.
+    const rep = [...this.sessions.values()].find((s) => s.provider === provider);
+    if (!rep) return;
+    this.usageFetchInFlight.add(provider);
+    try {
+      const snapshot = await adapter.fetchUsageLimits(rep);
+      if (!snapshot) return;
+      for (const s of this.sessions.values()) {
+        if (s.provider === provider) this.setSessionUsageLimits(s.id, snapshot);
+      }
+    } catch (err) {
+      console.warn(`[agent] fetchUsageLimits failed for ${provider}:`, err);
+    } finally {
+      this.usageFetchInFlight.delete(provider);
+    }
+  }
+
+  /**
+   * One-shot refresh of every provider that has live sessions. Called once from
+   * the daemon entrypoint after boot so re-opening the app shows current usage
+   * without waiting for the first turn. NOT a recurring poll.
+   */
+  refreshAllUsageLimits(): void {
+    const providers = new Set([...this.sessions.values()].map((s) => s.provider));
+    for (const p of providers) void this.refreshUsageLimits(p);
   }
 
   /**

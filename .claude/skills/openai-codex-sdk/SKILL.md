@@ -1,6 +1,6 @@
 ---
 name: openai-codex-sdk
-description: Authoritative reference for working on MultiTable's OpenAI Codex SDK integration (`@openai/codex-sdk`). Trigger when the user mentions the Codex SDK, `Codex`, `Thread`, `runStreamed`, `ThreadEvent`, `ThreadItem`, sandbox/approval policy, `~/.codex/sessions`, `resumeThread`, `codex exec`, plan-mode for Codex, or modifying anything under `packages/daemon/src/agent/providers/codex.ts` or `packages/daemon/src/transcripts/codexParser.ts`.
+description: Authoritative reference for working on MultiTable's OpenAI Codex SDK integration (`@openai/codex-sdk`). Trigger when the user mentions the Codex SDK, `Codex`, `Thread`, `runStreamed`, `ThreadEvent`, `ThreadItem`, sandbox/approval policy, `~/.codex/sessions`, `resumeThread`, `codex exec`, plan-mode for Codex, usage limits / rate limits (`account/rateLimits/updated`, `RateLimitSnapshot`), or modifying anything under `packages/daemon/src/agent/providers/codex.ts` or `packages/daemon/src/transcripts/codexParser.ts`.
 allowed-tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 
@@ -32,6 +32,7 @@ There is **no long-lived child** and **no host-side approval callback**. All app
 | Stop a turn mid-stream, or resume an aborted thread | [`reference/abort-and-resume.md`](reference/abort-and-resume.md) |
 | Wire auth, env, baseUrl, MCP servers, web search | [`reference/auth-config-mcp.md`](reference/auth-config-mcp.md) |
 | Use `outputSchema` for structured responses | [`reference/structured-output.md`](reference/structured-output.md) |
+| Surface usage / rate limits (`account/rateLimits/*`) in the per-session indicator | [`reference/usage-limits.md`](reference/usage-limits.md) |
 | Get oriented in `agent/providers/codex.ts` | [`multitable/codex-adapter-architecture.md`](multitable/codex-adapter-architecture.md) |
 | Understand why we reconcile from disk after every turn | [`multitable/reconcile-and-jsonl.md`](multitable/reconcile-and-jsonl.md) |
 | Diagnose a bug we've already seen | [`multitable/known-bugs.md`](multitable/known-bugs.md) + [`pitfalls.md`](pitfalls.md) |
