@@ -234,6 +234,94 @@ body {
   padding: 4px;
 }
 
+.terminal-keyboard {
+  flex-shrink: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, 32px);
+  grid-auto-columns: 52px;
+  gap: 4px;
+  align-content: center;
+  min-height: 76px;
+  padding: 5px 8px 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--bg-statusbar);
+  border-top: 1px solid var(--border);
+  scrollbar-gutter: stable;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+}
+
+.terminal-keyboard__key {
+  width: 52px;
+  min-width: 52px;
+  height: 32px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-snug);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.terminal-keyboard__label {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  font-size: calc(1em * var(--terminal-key-label-scale, 1));
+  line-height: 1;
+}
+
+.terminal-keyboard__key:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.terminal-keyboard__key--active {
+  border-color: var(--accent-amber);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.terminal-keyboard__key:active {
+  transform: translateY(1px);
+}
+
+.terminal-keyboard__key:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (max-width: 720px) {
+  .terminal-keyboard {
+    grid-template-rows: repeat(3, 38px);
+    grid-auto-columns: 56px;
+    gap: 5px;
+    min-height: 132px;
+    padding: 7px 8px 8px;
+  }
+
+  .terminal-keyboard__key {
+    width: 56px;
+    min-width: 56px;
+    height: 38px;
+    padding: 0 5px;
+    font-size: 12px;
+  }
+}
+
 /* ---------- Custom scrollbars ---------- */
 .mt-scroll {
   scrollbar-width: thin;

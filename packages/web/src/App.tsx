@@ -20,7 +20,6 @@ import { AddProcessModal } from './components/modals/AddProcessModal';
 import { GlobalSettingsModal } from './components/modals/GlobalSettingsModal';
 import { ProjectSettingsModal } from './components/modals/ProjectSettingsModal';
 import { AddProjectModal } from './components/modals/AddProjectModal';
-import { TouchToolbar } from './components/mobile/TouchToolbar';
 import { IconButton } from './components/ui';
 import { useAppStore } from './stores/appStore';
 import { wsClient } from './lib/ws';
@@ -1331,7 +1330,6 @@ function App() {
 
       <OptionSelector />
       {!isMobile && <StatusBar />}
-      {isMobile && <TouchToolbar />}
       <CommandPalette />
       <NotificationCenter />
       <ElicitationModalHost />
