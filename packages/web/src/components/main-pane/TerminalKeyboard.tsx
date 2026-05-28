@@ -89,14 +89,15 @@ function withCsiModifiers(input: string, modifiers: Modifiers) {
   const modifierParam = xtermModifierParam(modifiers);
   if (modifierParam === 1) return input;
 
-  const csiFinal = input.match(/^\x1b\[([ABCDHF])$/);
-  if (csiFinal && CSI_FINALS.has(csiFinal[1])) {
-    return `\x1b[1;${modifierParam}${csiFinal[1]}`;
+  if (input.length === 3 && input.startsWith('\x1b[') && CSI_FINALS.has(input[2])) {
+    return `\x1b[1;${modifierParam}${input[2]}`;
   }
 
-  const tildeFinal = input.match(/^\x1b\[(\d+)~$/);
-  if (tildeFinal) {
-    return `\x1b[${tildeFinal[1]};${modifierParam}~`;
+  if (input.startsWith('\x1b[') && input.endsWith('~')) {
+    const params = input.slice(2, -1);
+    if (params.length > 0 && /^\d+$/.test(params)) {
+      return `\x1b[${params};${modifierParam}~`;
+    }
   }
 
   return input;
