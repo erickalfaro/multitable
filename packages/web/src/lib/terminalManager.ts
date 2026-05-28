@@ -129,6 +129,11 @@ class TerminalManager {
     if (entry) entry.terminal.write(data);
   }
 
+  focus(processId: string): void {
+    const entry = this.entries.get(processId);
+    if (entry) entry.terminal.focus();
+  }
+
   updateThemeColors(theme: { background: string; foreground: string; cursor: string }): void {
     for (const { terminal } of this.entries.values()) {
       terminal.options.theme = theme;

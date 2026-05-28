@@ -4,6 +4,7 @@ import { useAppStore } from '../../stores/appStore';
 import { useIsMobile } from '../../lib/useIsMobile';
 import { SessionHeaderBar } from './SessionHeaderBar';
 import { ProcessBanner } from './ProcessBanner';
+import { TerminalKeyboard } from './TerminalKeyboard';
 import { PermissionBar } from '../permission/PermissionBar';
 import type { ManagedProcess, Session } from '../../lib/types';
 
@@ -84,6 +85,8 @@ export function TerminalView({ processId, process }: Props) {
           <div
             style={{
               flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
               backgroundColor: 'var(--bg-primary)',
               overflow: 'hidden',
               minHeight: 0,
@@ -95,8 +98,9 @@ export function TerminalView({ processId, process }: Props) {
             <div
               ref={containerRef}
               className="xterm-container"
-              style={{ width: '100%', height: '100%' }}
+              style={{ width: '100%', flex: 1, minHeight: 0 }}
             />
+            <TerminalKeyboard processId={processId} />
             {/* Session-scoped permission confirmations (overlay on terminal) */}
             {session && <PermissionBar sessionId={session.id} />}
           </div>
