@@ -1,4 +1,5 @@
 import chokidar from 'chokidar';
+import fs from 'fs';
 import path from 'path';
 import { getStatusSummary, isGitRepo } from './index.js';
 import type { GitStatusSummary } from '../types.js';
@@ -12,6 +13,37 @@ interface WatchEntry {
 }
 
 const DEBOUNCE_MS = 500;
+
+// Read `.gitignore` at the project root and translate each pattern into the
+// glob shape chokidar's `ignored` option expects. We don't need 100%-faithful
+// gitignore semantics — the goal is "don't recursively walk into trees the user
+// has already told git to ignore," so we err on the side of ignoring more.
+// Without this, chokidar's initial recursive scan reads every entry in the
+// working tree (even ones that match `ignored` patterns — those are post-stat
+// filters in chokidar 3) and a project with millions of files in an ignored
+// dir (e.g. `data/minute_level/` in an ML repo) OOMs the daemon at boot.
+//
+// Skips negations (`!...`) — chokidar can't un-ignore. Strips leading `/` and
+// trailing `/`, then emits both `**/<pat>` and `**/<pat>/**` so the pattern
+// catches the dir and everything beneath it. This is slightly broader than
+// gitignore (a leading-slash anchored pattern will match at any depth here)
+// but that's the safe side to err on for watcher exclusion.
+function loadGitignorePatterns(projectPath: string): string[] {
+  try {
+    const raw = fs.readFileSync(path.join(projectPath, '.gitignore'), 'utf8');
+    const out: string[] = [];
+    for (const line of raw.split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('#') || t.startsWith('!')) continue;
+      const cleaned = t.replace(/^\/+/, '').replace(/\/+$/, '');
+      if (!cleaned) continue;
+      out.push(`**/${cleaned}`, `**/${cleaned}/**`);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
 
 // Mirrors the FileWatcher pattern. One watcher per project; on any debounced
 // filesystem change inside the working tree we recompute status and emit it.
@@ -58,9 +90,11 @@ export class GitWatcher {
         '**/.gradle/**',
         '**/.idea/**',
         '**/.vscode/**',
+        '**/.ipynb_checkpoints/**',
         path.join(projectPath, '.git', 'objects', '**'),
         path.join(projectPath, '.git', 'logs', '**'),
         path.join(projectPath, '.git', 'lfs', '**'),
+        ...loadGitignorePatterns(projectPath),
       ],
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
     });
