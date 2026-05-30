@@ -334,8 +334,24 @@ export class PermissionManager extends EventEmitter {
 
   /**
    * Respond to a pending permission prompt.
+   *
+   * `exitPlanMode` is the target session mode chosen when approving an
+   * `ExitPlanMode` prompt (the Claude-Code "auto-accept edits" vs "manually
+   * approve" choice). It is only meaningful for ExitPlanMode prompts; for every
+   * other tool it is ignored. When present (or defaulted), we emit
+   * `permission:exit-plan-approved` so the manager can authoritatively flip the
+   * session mode out of `plan` — the SDK already exits plan mode for THIS turn
+   * internally, but the host-side `s.mode` (and the UI badge / next turn) must
+   * be kept in sync. The value is NOT threaded back through the SDK
+   * `PermissionResult` — the bundled `claude` binary's Zod schema rejects extra
+   * fields on the allow/deny result, so this stays an out-of-band event.
    */
-  respond(id: string, decision: PermissionDecision, updatedInput?: Record<string, any>): void {
+  respond(
+    id: string,
+    decision: PermissionDecision,
+    updatedInput?: Record<string, any>,
+    exitPlanMode?: string,
+  ): void {
     const entry = this.pending.get(id);
     if (!entry) return;
 
@@ -354,6 +370,14 @@ export class PermissionManager extends EventEmitter {
     if (approved) {
       sendAll(entry, (eventName) => buildAllowBody(eventName, updatedInput));
       resolveAllSdk(entry, { kind: 'allow', updatedInput: updatedInput ?? entry.prompt.toolInput });
+      if (entry.prompt.toolName === 'ExitPlanMode') {
+        // Telegram / no-choice approvals omit the target → fall back to
+        // 'default' (manual approve), matching the Claude-Code default.
+        this.emit('permission:exit-plan-approved', {
+          sessionId: entry.sessionId,
+          mode: exitPlanMode ?? 'default',
+        });
+      }
     } else {
       sendAll(entry, (eventName) => buildDenyBody(eventName));
       resolveAllSdk(entry, { kind: 'deny', message: 'Denied by user' });

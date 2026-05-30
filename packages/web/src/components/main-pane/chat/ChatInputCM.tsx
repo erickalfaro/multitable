@@ -510,6 +510,33 @@ export const ChatInputCM = memo(function ChatInputCM({
           return true;
         },
       },
+      {
+        // Shift+Tab cycles the session mode through the provider's advertised
+        // modes (like the Claude Code TUI). Reads FRESH session state from the
+        // store — the editor closure is created once per [processId,
+        // attachmentKind], so the captured `session` const would be stale.
+        // Returning true + preventDefault consumes the event so focus stays in
+        // the editor. (Plain Tab is bound to indentWithTab; Shift-Tab is free.)
+        key: 'Shift-Tab',
+        preventDefault: true,
+        run: () => {
+          const store = useAppStore.getState();
+          const s = store.sessions[processId];
+          const modes = s?.capabilities?.modes ?? [];
+          if (!s || modes.length < 2) return true;
+          const prevMode = s.mode;
+          const curIdx = modes.findIndex((m) => m.value === prevMode);
+          const next = modes[(curIdx + 1 + modes.length) % modes.length];
+          if (!next || next.value === prevMode) return true;
+          // Optimistic badge update, then authoritative persist with rollback.
+          store.upsertSession({ ...s, mode: next.value });
+          api.sessions.setMode(processId, next.value).catch(() => {
+            const cur = useAppStore.getState().sessions[processId];
+            if (cur) useAppStore.getState().upsertSession({ ...cur, mode: prevMode });
+          });
+          return true;
+        },
+      },
     ]);
 
     const domHandlers = EditorView.domEventHandlers({

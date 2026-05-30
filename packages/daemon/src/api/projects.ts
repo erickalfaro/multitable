@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { spawn } from 'child_process';
 import simpleGit from 'simple-git';
 import {
@@ -202,6 +203,11 @@ function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 // Directory entries always hidden from the File Viewer tree, even with ?all=1.
 const FILE_TREE_HARD_EXCLUDE = new Set(['.git', 'node_modules']);
+// Paginated File Viewer reads: never enumerate more than this many entries from a
+// single directory, so a pathological dir (millions of files) can't hang the daemon.
+// Sorting requires the full set, so this also bounds the sortable universe; beyond it
+// the response is flagged `truncated`.
+const MAX_DIR_ENTRIES = 10000;
 
 export function createProjectsRouter(
   manager: PtyManager,
@@ -218,6 +224,113 @@ export function createProjectsRouter(
     } catch (err) {
       res.status(500).json({ error: 'Failed to load projects' });
     }
+  });
+
+  // GET /api/projects/browse-dir?path= — lists subdirectories of an arbitrary
+  // directory on the daemon host so a remote/mobile web client can pick a
+  // project folder without the host-side native dialog. Must be registered
+  // before `GET /:id`, or `browse-dir` is captured as `req.params.id`.
+  //
+  // Security: this lists arbitrary host directories over HTTP and deliberately
+  // applies NO traversal guard — unlike `/:id/files`, the whole host FS is the
+  // legitimate scope, since the user is choosing where their project lives. This
+  // matches MultiTable's existing model: spawned agents already have full FS
+  // read/write on the host, and the daemon binds only 127.0.0.1 + the trusted
+  // Tailscale interface, never the public internet.
+  router.get('/browse-dir', (req: Request, res: Response) => {
+    const requested =
+      typeof req.query.path === 'string' && req.query.path.trim()
+        ? req.query.path
+        : os.homedir();
+    let resolved: string;
+    try {
+      resolved = path.resolve(requested);
+    } catch {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(resolved, { withFileTypes: true });
+    } catch (err: any) {
+      const code = err?.code;
+      if (code === 'ENOENT' || code === 'ENOTDIR')
+        return res.status(404).json({ error: 'Directory not found' });
+      if (code === 'EACCES' || code === 'EPERM')
+        return res.status(403).json({ error: 'Permission denied' });
+      return res.status(400).json({ error: err?.message || 'Failed to read directory' });
+    }
+
+    // Directories only — the picker never needs files, and skipping them means a
+    // folder holding a huge number of files costs nothing extra (we never collect,
+    // stat, or serialize them; only symlinks are stat'd to resolve their target).
+    const entries: { name: string; path: string; type: 'directory' }[] = [];
+    for (const dirent of dirents) {
+      let isDir = dirent.isDirectory();
+      if (!isDir && !dirent.isSymbolicLink()) continue;
+      if (dirent.isSymbolicLink()) {
+        // withFileTypes reports the symlink itself; stat to follow it so users
+        // can navigate into symlinked directories. Skip dangling/broken links.
+        try {
+          isDir = fs.statSync(path.join(resolved, dirent.name)).isDirectory();
+        } catch {
+          continue;
+        }
+      }
+      if (isDir) entries.push({ name: dirent.name, path: path.join(resolved, dirent.name), type: 'directory' });
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    const parent = path.dirname(resolved);
+    const roots: { label: string; path: string }[] = [{ label: 'Home', path: os.homedir() }];
+    if (process.platform === 'win32') {
+      for (const letter of 'CDEFGHIJ') {
+        const drive = `${letter}:\\`;
+        try {
+          if (fs.existsSync(drive)) roots.push({ label: drive, path: drive });
+        } catch {
+          /* ignore */
+        }
+      }
+    } else {
+      roots.push({ label: '/', path: '/' });
+      if (process.platform === 'darwin' && fs.existsSync('/Volumes'))
+        roots.push({ label: '/Volumes', path: '/Volumes' });
+    }
+
+    res.json({
+      path: resolved,
+      parent: parent === resolved ? null : parent,
+      entries,
+      roots,
+    });
+  });
+
+  // POST /api/projects/browse-mkdir { parent, name } — creates a new folder on
+  // the daemon host so a remote/mobile client can set up a fresh project
+  // directory before adding it. Same host-FS scope/security note as browse-dir.
+  router.post('/browse-mkdir', (req: Request, res: Response) => {
+    const { parent, name } = req.body || {};
+    if (typeof parent !== 'string' || !parent.trim())
+      return res.status(400).json({ error: 'parent is required' });
+    if (typeof name !== 'string' || !name.trim())
+      return res.status(400).json({ error: 'name is required' });
+    if (/[/\\]/.test(name) || name === '.' || name === '..')
+      return res.status(400).json({ error: 'Invalid folder name' });
+
+    const target = path.join(path.resolve(parent), name.trim());
+    try {
+      fs.mkdirSync(target, { recursive: false });
+    } catch (err: any) {
+      const code = err?.code;
+      if (code === 'EEXIST')
+        return res.status(409).json({ error: 'A folder with that name already exists' });
+      if (code === 'EACCES' || code === 'EPERM')
+        return res.status(403).json({ error: 'Permission denied' });
+      if (code === 'ENOENT') return res.status(404).json({ error: 'Parent directory not found' });
+      return res.status(400).json({ error: err?.message || 'Failed to create folder' });
+    }
+    res.status(201).json({ path: target });
   });
 
   // GET /api/projects/:id
@@ -558,14 +671,77 @@ export function createProjectsRouter(
     // dotfile-hiding behavior.
     const includeAll = req.query.all === '1' || req.query.all === 'true';
 
+    const keep = (name: string) => {
+      if (FILE_TREE_HARD_EXCLUDE.has(name)) return false;
+      if (includeAll) return true;
+      return !name.startsWith('.');
+    };
+    const sortEntries = (a: { name: string; type: string }, b: { name: string; type: string }) => {
+      if (a.type === b.type) return a.name.localeCompare(b.name);
+      return a.type === 'directory' ? -1 : 1;
+    };
+
+    // ?limit present → paginated, memory-bounded read for the File Viewer tree.
+    // Callers that omit it (e.g. the @-mention index) keep the legacy plain-array
+    // response below.
+    const hasLimit = req.query.limit !== undefined;
+    if (hasLimit) {
+      const limit = Math.max(1, Math.min(1000, Number(req.query.limit) || 50));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+      let dir: fs.Dir | null = null;
+      try {
+        // Stream dirents (name + type, no per-entry stat) up to a hard cap so even a
+        // directory with millions of entries can't blow up memory or hang. Sorting
+        // needs the whole set, so the cap also bounds the sortable universe.
+        dir = fs.opendirSync(resolved);
+        const collected: { name: string; path: string; type: 'directory' | 'file' }[] = [];
+        let truncated = false;
+        for (let dirent = dir.readSync(); dirent !== null; dirent = dir.readSync()) {
+          if (!keep(dirent.name)) continue;
+          if (collected.length >= MAX_DIR_ENTRIES) {
+            truncated = true;
+            break;
+          }
+          collected.push({
+            name: dirent.name,
+            path: relPath ? `${relPath}/${dirent.name}` : dirent.name,
+            type: dirent.isDirectory() ? 'directory' : 'file',
+          });
+        }
+        collected.sort(sortEntries);
+        const page = collected.slice(offset, offset + limit);
+        // Stat only the visible page (≤ limit) for size/modifiedAt.
+        const entries = page.map((e) => {
+          try {
+            const stat = fs.statSync(path.join(resolved, e.name));
+            return { ...e, size: stat.size, modifiedAt: stat.mtimeMs };
+          } catch {
+            return { ...e, size: 0, modifiedAt: 0 };
+          }
+        });
+        return res.json({
+          entries,
+          total: collected.length,
+          offset,
+          limit,
+          hasMore: offset + entries.length < collected.length,
+          truncated,
+        });
+      } catch (err: any) {
+        return res.status(400).json({ error: err.message || 'Failed to read directory' });
+      } finally {
+        try {
+          dir?.closeSync();
+        } catch {
+          /* already closed / never opened */
+        }
+      }
+    }
+
     try {
       const entries = fs.readdirSync(resolved);
       const result = entries
-        .filter((name) => {
-          if (FILE_TREE_HARD_EXCLUDE.has(name)) return false;
-          if (includeAll) return true;
-          return !name.startsWith('.');
-        })
+        .filter(keep)
         .map((name) => {
           try {
             const fullPath = path.join(resolved, name);
@@ -583,10 +759,7 @@ export function createProjectsRouter(
             return { name, path: entryRelPath, type: 'file', size: 0, modifiedAt: 0 };
           }
         })
-        .sort((a, b) => {
-          if (a.type === b.type) return a.name.localeCompare(b.name);
-          return a.type === 'directory' ? -1 : 1;
-        });
+        .sort(sortEntries);
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ error: err.message || 'Failed to read directory' });

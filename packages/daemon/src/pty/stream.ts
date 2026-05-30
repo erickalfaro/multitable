@@ -299,13 +299,21 @@ function handleSessionSend(msg: WsMessage, agentManager: AgentSessionManager, ws
 }
 
 function handlePermissionRespond(msg: WsMessage, permManager: PermissionManager): void {
-  const { id, decision, updatedInput } = msg.payload || {};
+  const { id, decision, updatedInput, mode } = msg.payload || {};
   if (!id) return;
   const normalized: 'allow' | 'deny' | 'always-allow' =
     decision === 'allow' || decision === 'deny' || decision === 'always-allow'
       ? decision
       : 'deny';
-  permManager.respond(id, normalized, updatedInput);
+  // `mode` is the ExitPlanMode target chosen on approval (auto-accept vs
+  // manual). No provider allowlist here — setMode validates it against the
+  // adapter's capabilities.modes downstream.
+  permManager.respond(
+    id,
+    normalized,
+    updatedInput,
+    typeof mode === 'string' ? mode : undefined,
+  );
 }
 
 function handleElicitationRespond(msg: WsMessage, elicitManager: ElicitationManager): void {

@@ -235,8 +235,15 @@ class WsClient {
     }
   }
 
-  respondPermission(id: string, decision: 'allow' | 'deny' | 'always-allow'): void {
-    this.send({ type: 'permission:respond', payload: { id, decision } });
+  // `mode` is only sent when approving an ExitPlanMode prompt — it carries the
+  // chosen target session mode (auto-accept vs manually-approve). The daemon
+  // flips the session mode authoritatively on receipt.
+  respondPermission(
+    id: string,
+    decision: 'allow' | 'deny' | 'always-allow',
+    mode?: string,
+  ): void {
+    this.send({ type: 'permission:respond', payload: { id, decision, ...(mode ? { mode } : {}) } });
   }
 
   answerQuestion(id: string, answers: string[][]): void {
