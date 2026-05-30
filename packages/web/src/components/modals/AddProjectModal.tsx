@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { Modal, Input, Button } from '../ui';
 import { PastAgentsBrowser } from './PastAgentsBrowser';
 import { DirectoryBrowser } from './DirectoryBrowser';
+import { useIsMobile } from '../../lib/useIsMobile';
 
 interface Props {
   onClose: () => void;
@@ -44,6 +45,26 @@ export function AddProjectModal({ onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const store = useAppStore();
+  const isMobile = useIsMobile();
+  const browserRef = useRef<HTMLDivElement>(null);
+
+  const toggleBrowser = () => {
+    const next = !browserOpen;
+    setBrowserOpen(next);
+    // On mobile, opening with the soft keyboard up would hide the panel behind it.
+    // Blur the focused input so the keyboard dismisses and the browser is visible.
+    if (next && typeof document !== 'undefined') {
+      (document.activeElement as HTMLElement | null)?.blur();
+    }
+  };
+
+  // Make sure the panel is actually on-screen when it opens (it renders below the
+  // input, which can be below the fold on a phone).
+  useEffect(() => {
+    if (browserOpen) {
+      browserRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [browserOpen]);
 
   const handleAdd = async () => {
     if (!dirPath.trim()) return;
@@ -98,46 +119,38 @@ export function AddProjectModal({ onClose }: Props) {
         </>
       }
     >
-      <Input
-        autoFocus
-        value={dirPath}
-        onChange={(e) => setDirPath(e.target.value)}
-        onKeyDown={handleKeyDown}
-        onDrop={handleDrop}
-        placeholder="Drop, paste, or pick a folder"
-        style={{
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          boxShadow: 'none',
-          outline: 'none',
-        }}
-        wrapperStyle={{
-          boxShadow: 'none',
-          border: '1px solid var(--border)',
-        }}
-        rightIcon={
-          <button
-            type="button"
-            onClick={() => setBrowserOpen((v) => !v)}
-            title="Browse for folder"
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Input
+            autoFocus={!isMobile}
+            value={dirPath}
+            onChange={(e) => setDirPath(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onDrop={handleDrop}
+            placeholder="Drop, paste, or pick a folder"
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'none',
-              border: 'none',
-              padding: 4,
-              margin: -4,
-              borderRadius: 'var(--radius-snug)',
-              color: browserOpen ? 'var(--accent-amber)' : 'var(--text-muted)',
-              cursor: 'pointer',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              boxShadow: 'none',
+              outline: 'none',
             }}
-          >
-            <FolderOpen size={14} />
-          </button>
-        }
-      />
+            wrapperStyle={{
+              boxShadow: 'none',
+              border: '1px solid var(--border)',
+            }}
+          />
+        </div>
+        <Button
+          variant={browserOpen ? 'primary' : 'secondary'}
+          onClick={toggleBrowser}
+          leftIcon={<FolderOpen size={14} />}
+          style={{ flexShrink: 0 }}
+        >
+          Browse
+        </Button>
+      </div>
       {browserOpen && (
         <div
+          ref={browserRef}
           style={{
             marginTop: 12,
             border: '1px solid var(--border)',
