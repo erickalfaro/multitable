@@ -1,9 +1,9 @@
 import React, { memo, useEffect, useMemo, useState, useRef } from 'react';
-import { Copy, Check } from 'lucide-react';
 import { getHighlighter, normalizeLang, pickShikiTheme } from '../../../lib/shiki';
 import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
 import { useIsStreaming } from './StreamingContext';
+import { CopyButton } from '../../ui';
 
 function escapeHtml(s: string): string {
   return s
@@ -17,52 +17,6 @@ function escapeHtml(s: string): string {
 interface Props {
   code: string;
   lang?: string;
-}
-
-function CopyButton({ text, visible }: { text: string; visible: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const [hover, setHover] = useState(false);
-
-  const onClick = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // ignore — clipboard may be unavailable
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      title={copied ? 'Copied' : 'Copy code'}
-      style={{
-        position: 'absolute',
-        top: 6,
-        right: 6,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 22,
-        height: 22,
-        padding: 0,
-        background: hover ? 'var(--bg-hover)' : 'var(--bg-elevated)',
-        border: '1px solid var(--border-strong)',
-        borderRadius: 'var(--radius-snug)',
-        color: copied ? 'var(--accent-amber)' : 'var(--text-muted)',
-        cursor: 'pointer',
-        opacity: visible || copied ? 1 : 0,
-        transition: 'opacity var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out)',
-        fontFamily: 'inherit',
-      }}
-    >
-      {copied ? <Check size={11} /> : <Copy size={11} />}
-    </button>
-  );
 }
 
 // Renders a code block with shiki. Falls back to a plain <pre> until the
@@ -162,7 +116,14 @@ export const CodeBlock = memo(function CodeBlock({ code, lang }: Props) {
         }}
         dangerouslySetInnerHTML={{ __html: innerHtml }}
       />
-      <CopyButton text={code} visible={hover} />
+      <CopyButton
+        variant="overlay"
+        visible={hover}
+        getText={code}
+        title="Copy code"
+        size={11}
+        style={{ top: 6, right: 6 }}
+      />
     </div>
   );
 });

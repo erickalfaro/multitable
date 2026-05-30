@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import toast from 'react-hot-toast';
 import { terminalManager } from '../../lib/terminalManager';
 import { wsClient } from '../../lib/ws';
+import { readClipboard, promptManualPaste } from '../../lib/clipboard';
 
 type TerminalKey = {
   label: string;
@@ -148,13 +148,12 @@ export function TerminalKeyboard({ processId }: Props) {
   const clearModifiers = () => setModifiers({ ctrl: false, shift: false });
 
   const pasteFromClipboard = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) sendInput(text);
-    } catch {
-      toast.error('Clipboard access denied');
-      terminalManager.focus(processId);
-    }
+    // Clipboard API only works in secure contexts (HTTPS / localhost). Over LAN
+    // HTTP it's unavailable, so fall back to a manual paste overlay.
+    let text = await readClipboard();
+    if (text === null) text = await promptManualPaste();
+    if (text) sendInput(text);
+    else terminalManager.focus(processId);
   };
 
   const onPress = (key: TerminalKey) => {

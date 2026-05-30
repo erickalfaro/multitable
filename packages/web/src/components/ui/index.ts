@@ -2,6 +2,8 @@ export { Button } from './Button';
 export type { ButtonVariant, ButtonSize } from './Button';
 export { IconButton } from './IconButton';
 export type { IconButtonSize, IconButtonVariant } from './IconButton';
+export { CopyButton } from './CopyButton';
+export type { CopyButtonVariant } from './CopyButton';
 export { Input } from './Input';
 export { Select } from './Select';
 export { Card } from './Card';
