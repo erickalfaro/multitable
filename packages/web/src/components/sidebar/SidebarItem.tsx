@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
+import toast from 'react-hot-toast';
 import { StatusDot } from './StatusDot';
 import { SessionStatusLoader } from './SessionStatusLoader';
 import { Bell, Square } from 'lucide-react';
 import type { ManagedProcess, Session } from '../../lib/types';
 import { api, stopProcessByType } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
-import { IconButton, AgentBadge } from '../ui';
+import { IconButton, AgentBadge, Spinner } from '../ui';
 import { relativeTime } from '../../lib/relativeTime';
 
 interface Props {
@@ -65,6 +66,34 @@ export function SidebarItem({
         0
       : 0;
 
+  const upsertSession = useAppStore((s) => s.upsertSession);
+  const [aiRenaming, setAiRenaming] = useState(false);
+
+  // Loader-icon shortcut: clicking the loader triggers "Rename with AI"
+  // directly (mirrors the Sparkles button in SessionHeaderBar) without
+  // selecting/opening the row. Sessions only.
+  const handleLoaderRename = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (process.type !== 'session' || aiRenaming) return;
+    const session = process as Session;
+    setAiRenaming(true);
+    try {
+      const result = await api.sessions.renameAi(session.id);
+      upsertSession({ ...session, ...result.session });
+      toast.success(`Renamed to "${result.name}"`, { duration: 2200 });
+    } catch (err: any) {
+      toast.error(`AI rename: ${err?.message || 'failed'}`, {
+        duration: 5000,
+        style: { maxWidth: 480 },
+      });
+    } finally {
+      setAiRenaming(false);
+    }
+  };
+
+  const sessionTags =
+    process.type === 'session' ? ((process as Session).tags ?? []) : [];
+
   const className =
     'mt-sidebar-item' +
     (isSelected ? ' is-selected' : '') +
@@ -98,22 +127,31 @@ export function SidebarItem({
       }}
     >
       <div
+        className={process.type === 'session' ? 'mt-loader-rename' : undefined}
+        onClick={process.type === 'session' ? handleLoaderRename : undefined}
+        title={process.type === 'session' ? 'Rename with AI' : undefined}
+        role={process.type === 'session' ? 'button' : undefined}
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           width: 12,
           flexShrink: 0,
+          cursor: process.type === 'session' ? 'pointer' : undefined,
         }}
       >
         {process.type === 'session' ? (
-          <SessionStatusLoader
-            loaderVariant={(process as Session).loaderVariant ?? null}
-            state={process.state}
-            projectId={process.projectId}
-            active={sessionActive}
-            isIdle={isIdle}
-          />
+          aiRenaming ? (
+            <Spinner size="sm" />
+          ) : (
+            <SessionStatusLoader
+              loaderVariant={(process as Session).loaderVariant ?? null}
+              state={process.state}
+              projectId={process.projectId}
+              active={sessionActive}
+              isIdle={isIdle}
+            />
+          )
         ) : (
           <StatusDot state={process.state} isIdle={isIdle} />
         )}
@@ -249,6 +287,39 @@ export function SidebarItem({
             )}
           </div>
         </div>
+        {sessionTags.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 4,
+              marginTop: 4,
+            }}
+          >
+            {sessionTags.map((tag) => (
+              <span
+                key={tag}
+                title={tag}
+                style={{
+                  fontSize: 9.5,
+                  lineHeight: 1.4,
+                  letterSpacing: '0.02em',
+                  color: 'var(--text-secondary)',
+                  background: 'var(--bg-hover)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-snug)',
+                  padding: '0px 5px',
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
         {subtitle && (
           <div
             style={{

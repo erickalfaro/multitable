@@ -28,11 +28,29 @@ const SYSTEM_PROMPT = [
   'Output the title and nothing else.',
 ].join(' ');
 
+// A curated, standardized tag vocabulary offered to the model as SUGGESTIONS
+// so labels stay consistent across sessions. The model is explicitly free to
+// coin its own tag when none of these fit (e.g. a specific feature, file, or
+// product name). Keep these short (1 word where possible) and lowercase.
+const SUGGESTED_TAGS = [
+  // work type
+  'feature', 'bugfix', 'refactor', 'debugging', 'testing', 'docs', 'cleanup',
+  'review', 'research', 'config', 'optimization', 'migration', 'setup',
+  // area / layer
+  'frontend', 'backend', 'ui', 'ux', 'api', 'database', 'auth', 'cli',
+  'infra', 'ci/cd', 'devops', 'networking', 'styling', 'state', 'build',
+  // cross-cutting
+  'security', 'performance', 'git', 'deployment', 'dependencies', 'logging',
+];
+
 const TAGS_SYSTEM_PROMPT = [
   'You generate compact topic tags for coding-agent sessions.',
-  'Read ONLY the user prompts and infer the main keywords or topics.',
-  'Constraints: output a JSON array of 1 to 5 strings. Each string must be 1 to 3 words and max 24 characters.',
-  'Use specific product, file, domain, bug, or feature terms when present. No markdown, no prose, no trailing commentary.',
+  'Read ONLY the user prompts and infer the main topics.',
+  'Prefer tags from this standardized list when they fit:',
+  SUGGESTED_TAGS.join(', ') + '.',
+  'These are SUGGESTIONS, not a closed set — if none fit well, invent your own short tag (a specific feature, file, domain, or product name).',
+  'Constraints: output a JSON array of 1 to 5 strings. Each tag is preferably 1 word (max 2), lowercase, and max 24 characters.',
+  'No markdown, no prose, no trailing commentary — output only the JSON array.',
 ].join(' ');
 
 const TIMEOUT_MS = 30_000;
@@ -119,11 +137,20 @@ export async function generateSessionLabel(
 }
 
 function sanitizeTags(raw: string): string[] {
+  // Haiku frequently wraps the array in a ```json code fence and/or adds
+  // prose around it despite the system prompt. Strip fences first, then pull
+  // out the first [...] block so we parse the actual array rather than tripping
+  // JSON.parse on the surrounding noise (which used to leak "json" and bracket
+  // fragments as literal tags via the line-split fallback).
+  const unfenced = raw.replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+  const arrayMatch = unfenced.match(/\[[\s\S]*\]/);
+
   let values: unknown = null;
   try {
-    values = JSON.parse(raw);
+    values = JSON.parse(arrayMatch ? arrayMatch[0] : unfenced);
   } catch {
-    values = raw
+    values = (arrayMatch ? arrayMatch[0] : unfenced)
+      .replace(/^[[\]]+|[[\]]+$/g, '')
       .split(/[\n,]/)
       .map((part) => part.replace(/^[-*\d.\s]+/, '').trim())
       .filter(Boolean);
@@ -138,7 +165,8 @@ function sanitizeTags(raw: string): string[] {
     const cleaned = value
       .replace(/\s+/g, ' ')
       .trim()
-      .replace(/^["'`]+|["'`]+$/g, '')
+      // Strip wrapping brackets/quotes/backticks a fallback split can leave on.
+      .replace(/^[[\]"'`]+|[[\]"'`]+$/g, '')
       .replace(/[.!?]+$/, '')
       .trim();
     if (!cleaned) continue;

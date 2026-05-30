@@ -157,6 +157,9 @@ export interface Session extends ManagedProcess {
   claudeState?: ClaudeSessionState; // in-memory — lost on daemon restart
   scratchpad?: string;
   loaderVariant?: string | null; // dot-matrix loader assigned at session creation
+  // AI-inferred topic tags labeling what the session is about. Generated
+  // alongside the name by POST /api/sessions/:id/rename-ai; persisted.
+  tags?: string[];
   createdAt?: number;
   lastActiveAt?: number | null; // bumped per turn boundary so the sidebar can sort by recency
 }

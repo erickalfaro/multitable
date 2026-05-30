@@ -11,7 +11,7 @@ import {
 } from '../db/store.js';
 import { parseSessionCost } from '../hooks/costParser.js';
 import { parseSessionPrompts, parseAllProjectPrompts } from '../hooks/promptsParser.js';
-import { generateSessionLabel } from '../hooks/labeler.js';
+import { generateSessionLabel, generateSessionTags } from '../hooks/labeler.js';
 import {
   parseTranscriptChain,
   walkParentUuidChain,
@@ -489,11 +489,13 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
 
   // POST /api/sessions/:id/rename-ai
   //
-  // Generates a short title from the session's user prompts via Haiku and
-  // overwrites session.name. Mirrors the prompt-lookup chain of
-  // /api/sessions/:id/prompts (current JSONL → all project JSONLs →
-  // in-memory userMessages) so resumed and brand-new sessions both work.
-  // Emits `session-renamed` so subscribers see `session:updated`.
+  // In ONE call: generates a short title from the session's user prompts via
+  // Haiku and overwrites session.name, AND infers a small set of topic tags
+  // (persisted to session.tags) that label what the session is about. Mirrors
+  // the prompt-lookup chain of /api/sessions/:id/prompts (current JSONL → all
+  // project JSONLs → in-memory userMessages) so resumed and brand-new sessions
+  // both work. Tag generation is best-effort — a tag failure never blocks the
+  // rename. Emits `session-renamed` so subscribers see `session:updated`.
   router.post('/:id/rename-ai', async (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
@@ -521,7 +523,12 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
       return res.status(400).json({ error: 'No prompts yet — send a message first' });
     }
 
-    const result = await generateSessionLabel(prompts);
+    // Title (required) and tags (best-effort) are generated concurrently from
+    // the same prompts so the whole feature is a single round trip.
+    const [result, tagsResult] = await Promise.all([
+      generateSessionLabel(prompts),
+      generateSessionTags(prompts),
+    ]);
     if (!result.ok) {
       console.error('[rename-ai] labeler failed:', result.error);
       return res.status(502).json({ error: result.error });
@@ -541,10 +548,18 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
       return res.status(502).json({ error: 'AI returned an empty title' });
     }
 
-    const updated = updateSession(req.params.id, { name });
+    // Only overwrite tags when generation succeeded — a tag failure leaves any
+    // existing tags untouched rather than wiping them.
+    if (!tagsResult.ok) {
+      console.error('[rename-ai] tag generation failed:', tagsResult.error);
+    }
+    const updated = updateSession(
+      req.params.id,
+      tagsResult.ok ? { name, tags: tagsResult.tags } : { name }
+    );
     if (!updated) return res.status(500).json({ error: 'Failed to persist new name' });
     agentManager.emit('session-renamed', { sessionId: req.params.id });
-    res.json({ session: updated, name });
+    res.json({ session: updated, name, tags: updated.tags });
   });
 
   return router;
