@@ -226,7 +226,8 @@ export const api = {
         { thinkingEffort },
       ),
     stop: (id: string) => post<{ ok: boolean }>(`/api/sessions/${id}/stop`),
-    renameAi: (id: string) => post<{ session: Session; name: string }>(`/api/sessions/${id}/rename-ai`),
+    renameAi: (id: string) =>
+      post<{ session: Session; name: string; tags: string[] }>(`/api/sessions/${id}/rename-ai`),
     cost: (id: string) => get<{
       tokensIn: number;
       tokensOut: number;

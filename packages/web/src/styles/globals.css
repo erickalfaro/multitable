@@ -512,6 +512,18 @@ select:focus-visible,
   opacity: 1;
   pointer-events: auto;
 }
+/* The loader icon doubles as a "Rename with AI" shortcut. On hover it grows
+   and gains an amber ring so it reads as a clickable action, not just status. */
+.mt-loader-rename {
+  border-radius: 999px;
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.mt-loader-rename:hover {
+  transform: scale(1.35);
+  box-shadow: 0 0 0 3px var(--accent-amber-dim);
+}
 
 /* ---------- Resizable panel handle ----------
  * react-resizable-panels renders the handle as a 0-width div by default. We
