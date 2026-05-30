@@ -7,11 +7,27 @@ import { ToolInputPreview } from './ToolInputPreview';
 
 function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
   const removePermission = useAppStore(s => s.removePermission);
+  const session = useAppStore(s => s.sessions[prompt.sessionId]);
 
-  const respond = (decision: 'allow' | 'deny' | 'always-allow') => {
-    wsClient.respondPermission(prompt.id, decision);
+  const respond = (decision: 'allow' | 'deny' | 'always-allow', mode?: string) => {
+    wsClient.respondPermission(prompt.id, decision, mode);
     removePermission(prompt.id);
   };
+
+  // ExitPlanMode gets the Claude-Code-style choice: approving exits plan mode
+  // and the chosen target controls how edits proceed. Targets are read from the
+  // session's advertised modes so we never send a value the provider rejects
+  // (Claude → acceptEdits/default; Grok → auto/default, since it has no
+  // acceptEdits). The daemon flips the session mode on receipt; "Keep planning"
+  // (deny) leaves the session in plan mode.
+  const isExitPlan = prompt.toolName === 'ExitPlanMode';
+  const modeValues = session?.capabilities?.modes?.map(m => m.value) ?? [];
+  const autoTarget = modeValues.includes('acceptEdits')
+    ? 'acceptEdits'
+    : modeValues.includes('auto')
+      ? 'auto'
+      : 'acceptEdits';
+  const manualTarget = 'default';
 
   return (
     <div
@@ -53,17 +69,34 @@ function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
       <div style={{ marginTop: 18, marginBottom: 10 }}>
         <ToolInputPreview toolName={prompt.toolName} input={prompt.toolInput} />
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <Button size="sm" variant="primary" onClick={() => respond('allow')}>
-          Allow
-        </Button>
-        <Button size="sm" variant="secondary" onClick={() => respond('always-allow')}>
-          Always Allow
-        </Button>
-        <div style={{ flex: 1 }} />
-        <Button size="sm" variant="danger" onClick={() => respond('deny')}>
-          Deny
-        </Button>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {isExitPlan ? (
+          <>
+            <Button size="sm" variant="primary" onClick={() => respond('allow', autoTarget)}>
+              Auto-accept edits
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => respond('allow', manualTarget)}>
+              Manually approve edits
+            </Button>
+            <div style={{ flex: 1 }} />
+            <Button size="sm" variant="danger" onClick={() => respond('deny')}>
+              Keep planning
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button size="sm" variant="primary" onClick={() => respond('allow')}>
+              Allow
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => respond('always-allow')}>
+              Always Allow
+            </Button>
+            <div style={{ flex: 1 }} />
+            <Button size="sm" variant="danger" onClick={() => respond('deny')}>
+              Deny
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

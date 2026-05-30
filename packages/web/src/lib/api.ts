@@ -122,6 +122,18 @@ export const api = {
     get: (id: string) => get<Project>(`/api/projects/${id}`),
     create: (data: { path: string }) => post<Project>('/api/projects', data),
     browse: () => post<{ path: string | null }>('/api/projects/browse'),
+    // Web-based host directory browser (replaces the host-side native picker for
+    // remote/Tailscale/mobile clients). Lists subdirectories of an arbitrary
+    // directory on the daemon host; omit `path` to default to the host home dir.
+    browseDir: (path?: string) =>
+      get<{
+        path: string;
+        parent: string | null;
+        entries: Array<{ name: string; path: string; type: 'directory' }>;
+        roots: Array<{ label: string; path: string }>;
+      }>(`/api/projects/browse-dir${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+    mkdir: (parent: string, name: string) =>
+      post<{ path: string }>('/api/projects/browse-mkdir', { parent, name }),
     update: (id: string, data: Partial<Project>) => put<Project>(`/api/projects/${id}`, data),
     delete: (id: string) => del(`/api/projects/${id}`),
     setActive: (id: string) => put<Project>(`/api/projects/${id}/active`),
@@ -141,6 +153,33 @@ export const api = {
           modifiedAt: number;
         }>
       >(`/api/projects/${id}/files${suffix ? `?${suffix}` : ''}`);
+    },
+    // Paginated, memory-bounded directory read for the File Viewer tree. Passing
+    // `limit` switches the daemon to the envelope response (vs the legacy array
+    // returned by `files()` above, still used by the @-mention index).
+    filesPage: (
+      id: string,
+      opts: { path?: string; all?: boolean; limit: number; offset: number },
+    ) => {
+      const qs = new URLSearchParams();
+      if (opts.path) qs.set('path', opts.path);
+      if (opts.all) qs.set('all', '1');
+      qs.set('limit', String(opts.limit));
+      qs.set('offset', String(opts.offset));
+      return get<{
+        entries: Array<{
+          name: string;
+          path: string;
+          type: 'directory' | 'file';
+          size: number;
+          modifiedAt: number;
+        }>;
+        total: number;
+        offset: number;
+        limit: number;
+        hasMore: boolean;
+        truncated: boolean;
+      }>(`/api/projects/${id}/files?${qs.toString()}`);
     },
     readFile: (id: string, filePath: string) =>
       get<{ content: string; exists: boolean; size?: number; modifiedAt?: number }>(

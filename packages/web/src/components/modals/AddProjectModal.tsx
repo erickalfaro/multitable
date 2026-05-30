@@ -5,6 +5,7 @@ import { useAppStore } from '../../stores/appStore';
 import toast from 'react-hot-toast';
 import { Modal, Input, Button } from '../ui';
 import { PastAgentsBrowser } from './PastAgentsBrowser';
+import { DirectoryBrowser } from './DirectoryBrowser';
 
 interface Props {
   onClose: () => void;
@@ -41,7 +42,7 @@ function extractDroppedPath(dt: DataTransfer): string | null {
 export function AddProjectModal({ onClose }: Props) {
   const [dirPath, setDirPath] = useState('');
   const [loading, setLoading] = useState(false);
-  const [browsing, setBrowsing] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const store = useAppStore();
 
   const handleAdd = async () => {
@@ -60,18 +61,6 @@ export function AddProjectModal({ onClose }: Props) {
       toast.error(e?.message ?? 'Failed to add project');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleBrowse = async () => {
-    setBrowsing(true);
-    try {
-      const { path } = await api.projects.browse();
-      if (path) setDirPath(path);
-    } catch (e: any) {
-      toast.error(e?.message ?? 'Failed to open folder picker');
-    } finally {
-      setBrowsing(false);
     }
   };
 
@@ -128,8 +117,7 @@ export function AddProjectModal({ onClose }: Props) {
         rightIcon={
           <button
             type="button"
-            onClick={handleBrowse}
-            disabled={browsing}
+            onClick={() => setBrowserOpen((v) => !v)}
             title="Browse for folder"
             style={{
               display: 'inline-flex',
@@ -140,14 +128,33 @@ export function AddProjectModal({ onClose }: Props) {
               padding: 4,
               margin: -4,
               borderRadius: 'var(--radius-snug)',
-              color: 'var(--text-muted)',
-              cursor: browsing ? 'default' : 'pointer',
+              color: browserOpen ? 'var(--accent-amber)' : 'var(--text-muted)',
+              cursor: 'pointer',
             }}
           >
             <FolderOpen size={14} />
           </button>
         }
       />
+      {browserOpen && (
+        <div
+          style={{
+            marginTop: 12,
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-snug)',
+            padding: 8,
+          }}
+        >
+          <DirectoryBrowser
+            initialPath={dirPath.trim().startsWith('/') ? dirPath.trim() : undefined}
+            onSelect={(p) => {
+              setDirPath(p);
+              setBrowserOpen(false);
+            }}
+            onCancel={() => setBrowserOpen(false)}
+          />
+        </div>
+      )}
       <div
         style={{
           marginTop: 16,

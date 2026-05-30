@@ -124,6 +124,23 @@ export class AgentSessionManager extends EventEmitter {
       hermes: new HermesAdapter(permManager),
       grok: new GrokAdapter(permManager),
     };
+
+    // Authoritative plan→execute mode flip. When the user approves an
+    // ExitPlanMode prompt (and picks auto-accept vs manual), the permission
+    // manager emits this so we persist the session mode out of `plan` and
+    // broadcast the badge change. Provider-agnostic (Claude + Grok both raise
+    // ExitPlanMode prompts) and channel-agnostic (web + Telegram). setMode
+    // validates the target against the adapter's capabilities.modes.
+    this.permManager.on(
+      'permission:exit-plan-approved',
+      ({ sessionId, mode }: { sessionId: string; mode: string }) => {
+        try {
+          this.setMode(sessionId, mode);
+        } catch (err) {
+          console.error('[agent] exit-plan mode flip failed:', err);
+        }
+      },
+    );
   }
 
   /**

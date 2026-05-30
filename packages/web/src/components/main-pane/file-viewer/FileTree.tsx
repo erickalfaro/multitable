@@ -25,6 +25,13 @@ interface Props {
 }
 
 const ROOT = '';
+const PAGE_SIZE = 50;
+
+interface DirMeta {
+  total: number;
+  hasMore: boolean;
+  truncated: boolean;
+}
 
 export function FileTree({
   projectId,
@@ -36,27 +43,52 @@ export function FileTree({
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [childrenByDir, setChildrenByDir] = useState<Record<string, Entry[]>>({});
+  const [metaByDir, setMetaByDir] = useState<Record<string, DirMeta>>({});
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+  const [loadingMoreDirs, setLoadingMoreDirs] = useState<Set<string>>(new Set());
   const [errorByDir, setErrorByDir] = useState<Record<string, string>>({});
 
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+  const childrenRef = useRef(childrenByDir);
+  childrenRef.current = childrenByDir;
 
+  // Load (or extend) a directory page-by-page. append=false resets to the first
+  // PAGE_SIZE entries (initial expand / refresh); append=true fetches the next page
+  // from the current loaded count and appends it.
   const loadDir = useCallback(
-    async (dir: string) => {
-      setLoadingDirs((s) => new Set(s).add(dir));
-      setErrorByDir((e) => {
-        const next = { ...e };
-        delete next[dir];
-        return next;
-      });
+    async (dir: string, append = false) => {
+      const offset = append ? (childrenRef.current[dir]?.length ?? 0) : 0;
+      const spinnerSetter = append ? setLoadingMoreDirs : setLoadingDirs;
+      spinnerSetter((s) => new Set(s).add(dir));
+      if (!append) {
+        setErrorByDir((e) => {
+          const next = { ...e };
+          delete next[dir];
+          return next;
+        });
+      }
       try {
-        const entries = await api.projects.files(projectId, dir || undefined, true);
-        setChildrenByDir((c) => ({ ...c, [dir]: entries }));
+        const res = await api.projects.filesPage(projectId, {
+          path: dir || undefined,
+          all: true,
+          limit: PAGE_SIZE,
+          offset,
+        });
+        setChildrenByDir((c) => ({
+          ...c,
+          [dir]: append ? [...(c[dir] ?? []), ...res.entries] : res.entries,
+        }));
+        setMetaByDir((m) => ({
+          ...m,
+          [dir]: { total: res.total, hasMore: res.hasMore, truncated: res.truncated },
+        }));
       } catch (err: any) {
-        setErrorByDir((e) => ({ ...e, [dir]: err?.message || 'Failed to read directory' }));
+        if (!append) {
+          setErrorByDir((e) => ({ ...e, [dir]: err?.message || 'Failed to read directory' }));
+        }
       } finally {
-        setLoadingDirs((s) => {
+        spinnerSetter((s) => {
           const next = new Set(s);
           next.delete(dir);
           return next;
@@ -138,7 +170,8 @@ export function FileTree({
         </div>
       );
     }
-    return entries.map((entry) => {
+    const meta = metaByDir[dir];
+    const rows = entries.map((entry) => {
       if (entry.type === 'directory') {
         const isOpen = expanded.has(entry.path);
         return (
@@ -182,6 +215,59 @@ export function FileTree({
         </Row>
       );
     });
+
+    if (meta?.hasMore) {
+      const remaining = Math.max(0, meta.total - entries.length);
+      const isLoadingMore = loadingMoreDirs.has(dir);
+      rows.push(
+        <Row
+          key={`__more__${dir}`}
+          depth={depth}
+          onClick={() => {
+            if (!isLoadingMore) void loadDir(dir, true);
+          }}
+        >
+          {isLoadingMore ? (
+            <Loader2 size={11} className="mt-spin" style={{ flexShrink: 0 }} />
+          ) : (
+            <span style={{ width: 11, flexShrink: 0 }} />
+          )}
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 11.5,
+              color: 'var(--text-muted)',
+              fontStyle: 'italic',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {isLoadingMore ? 'Loading…' : `Load more (${remaining} more)`}
+          </span>
+        </Row>,
+      );
+    }
+
+    if (meta?.truncated) {
+      rows.push(
+        <div
+          key={`__truncated__${dir}`}
+          style={{
+            padding: '4px 8px',
+            paddingLeft: 12 + depth * 14,
+            fontSize: 11,
+            color: 'var(--text-faint)',
+            fontStyle: 'italic',
+          }}
+        >
+          directory too large to list fully — showing first {meta.total}
+        </div>,
+      );
+    }
+
+    return rows;
   };
 
   if (variant === 'sidebar') {
