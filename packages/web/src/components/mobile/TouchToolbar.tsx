@@ -1,7 +1,7 @@
 import React from 'react';
-import toast from 'react-hot-toast';
 import { useAppStore } from '../../stores/appStore';
 import { wsClient } from '../../lib/ws';
+import { readClipboard, promptManualPaste } from '../../lib/clipboard';
 import { AttachButton } from '../main-pane/AttachButton';
 import type { AttachmentKind } from '../../lib/attachments';
 
@@ -79,12 +79,11 @@ export function TouchToolbar() {
   };
 
   const pasteFromClipboard = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) wsClient.sendInput(selectedProcessId, text);
-    } catch {
-      toast.error('Clipboard access denied');
-    }
+    // Clipboard API only works in secure contexts (HTTPS / localhost). Over LAN
+    // HTTP it's unavailable, so fall back to a manual paste overlay.
+    let text = await readClipboard();
+    if (text === null) text = await promptManualPaste();
+    if (text) wsClient.sendInput(selectedProcessId, text);
   };
 
   return (

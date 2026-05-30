@@ -1,6 +1,11 @@
 import React, { memo } from 'react';
 import { ChevronUp, ChevronDown } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useChatScroller } from './ChatScroller';
+import { CopyButton } from '../../ui';
+import { copyToClipboard } from '../../../lib/clipboard';
+import { useIsMobile } from '../../../lib/useIsMobile';
+import { useLongPress } from '../../../lib/useLongPress';
 
 interface Props {
   text: string;
@@ -26,6 +31,10 @@ export const UserMessage = memo(function UserMessage({
   hasNext,
 }: Props) {
   const { scrollRoot, scrollToElement } = useChatScroller();
+  const isMobile = useIsMobile();
+  const longPress = useLongPress(async () => {
+    if (await copyToClipboard(text)) toast.success('Copied');
+  });
 
   const jumpTo = (targetIndex: number) => (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -51,6 +60,7 @@ export const UserMessage = memo(function UserMessage({
         fontSize: 12.5,
         lineHeight: 1.5,
       }}
+      {...(isMobile ? longPress : null)}
     >
       <div
         style={{
@@ -75,6 +85,10 @@ export const UserMessage = memo(function UserMessage({
           title="Jump to next prompt"
           icon={<ChevronDown size={12} />}
         />
+        {/* Desktop only — mobile copies via long-press on the bar. */}
+        {!isMobile && (
+          <CopyButton getText={text} title="Copy prompt" size={11} style={{ border: '1px solid var(--border)' }} />
+        )}
       </div>
     </div>
   );

@@ -1,8 +1,13 @@
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import { Streamdown } from 'streamdown';
+import toast from 'react-hot-toast';
 import 'streamdown/styles.css';
 import { StreamingContext } from './StreamingContext';
 import { MD_COMPONENTS } from '../../../lib/markdown';
+import { CopyButton } from '../../ui';
+import { copyToClipboard } from '../../../lib/clipboard';
+import { useIsMobile } from '../../../lib/useIsMobile';
+import { useLongPress } from '../../../lib/useLongPress';
 
 interface Props {
   text: string;
@@ -15,9 +20,35 @@ interface Props {
 // which auto-closes unclosed code fences during streaming. Code fences are
 // handed off to the shiki-backed CodeBlock. Inline code uses a compact chip.
 // Memoized so unrelated parent re-renders don't re-parse the markdown.
+//
+// Copy: desktop reveals an overlay button on hover (top-right of the content
+// box, clear of TurnRow's left rail); mobile copies via long-press + toast
+// (no hover on touch). Hover state is kept internal so the memo on
+// {text, costLabel, streaming} still holds.
 export const AssistantMessage = memo(function AssistantMessage({ text, costLabel, streaming }: Props) {
+  const isMobile = useIsMobile();
+  const [hover, setHover] = useState(false);
+  const longPress = useLongPress(async () => {
+    if (await copyToClipboard(text)) toast.success('Copied');
+  });
+
   return (
-    <div style={{ margin: 0, color: 'var(--text-primary)', minWidth: 0 }}>
+    <div
+      style={{ position: 'relative', margin: 0, color: 'var(--text-primary)', minWidth: 0 }}
+      onMouseEnter={isMobile ? undefined : () => setHover(true)}
+      onMouseLeave={isMobile ? undefined : () => setHover(false)}
+      {...(isMobile ? longPress : null)}
+    >
+      {!isMobile && (
+        <CopyButton
+          variant="overlay"
+          visible={hover}
+          getText={() => text}
+          title="Copy message"
+          size={12}
+          style={{ top: 0, right: 0, zIndex: 1 }}
+        />
+      )}
       <div
         className="mt-chat-assistant"
         style={{
