@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { StatusDot } from './StatusDot';
 import { SessionStatusLoader } from './SessionStatusLoader';
-import { Bell, Square } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import type { ManagedProcess, Session } from '../../lib/types';
-import { api, stopProcessByType } from '../../lib/api';
+import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
-import { IconButton, AgentBadge, Spinner } from '../ui';
+import { AgentBadge, Spinner } from '../ui';
 import { relativeTime } from '../../lib/relativeTime';
 import {
   CATEGORY_COLOR_VAR,
@@ -247,8 +247,7 @@ export function SidebarItem({
             );
           })()}
           {/* Right-side slot: always 22px tall so hover doesn't change row
-              height and cause jitter as items reflow below. Metrics and the
-              Stop button share the slot and cross-fade via opacity. */}
+              height and cause jitter as items reflow below. */}
           <div
             style={{
               position: 'relative',
@@ -261,9 +260,7 @@ export function SidebarItem({
           >
             {metrics && (
               <span
-                className={
-                  process.state === 'running' ? 'mt-sidebar-item-meta hide-on-hover' : 'mt-sidebar-item-meta'
-                }
+                className="mt-sidebar-item-meta"
                 style={{
                   fontSize: 11.5,
                   color: 'var(--text-muted)',
@@ -277,9 +274,7 @@ export function SidebarItem({
             {!metrics && process.type === 'session' && sessionRecency > 0 && (
               <span
                 title={new Date(sessionRecency).toLocaleString()}
-                className={
-                  process.state === 'running' ? 'mt-sidebar-item-meta hide-on-hover' : 'mt-sidebar-item-meta'
-                }
+                className="mt-sidebar-item-meta"
                 style={{
                   fontSize: 10,
                   color: 'var(--text-muted)',
@@ -289,29 +284,6 @@ export function SidebarItem({
               >
                 {relativeTime(sessionRecency)}
               </span>
-            )}
-            {process.state === 'running' && (
-              <div
-                className="mt-sidebar-item-actions"
-                style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: 0,
-                  display: 'flex',
-                  gap: 2,
-                }}
-              >
-                <IconButton
-                  size="sm"
-                  label="Stop"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    stopProcessByType(process).catch(() => {/* swallow */});
-                  }}
-                >
-                  <Square size={11} />
-                </IconButton>
-              </div>
             )}
           </div>
         </div>

@@ -495,22 +495,9 @@ select:focus-visible,
 .mt-sidebar-item:not(.is-selected):not(.is-multi):hover {
   background-color: var(--bg-hover);
 }
-/* Cross-fade between live metrics and the inline Stop action on row hover.
-   Faster than the JS opacity dance the component used to do. */
+/* Metrics text fades smoothly when its content changes. */
 .mt-sidebar-item-meta {
   transition: opacity var(--dur-fast) var(--ease-out);
-}
-.mt-sidebar-item:hover .mt-sidebar-item-meta.hide-on-hover {
-  opacity: 0;
-}
-.mt-sidebar-item-actions {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--dur-fast) var(--ease-out);
-}
-.mt-sidebar-item:hover .mt-sidebar-item-actions {
-  opacity: 1;
-  pointer-events: auto;
 }
 /* The loader icon doubles as a "Rename with AI" shortcut. On hover it grows
    and gains an amber ring so it reads as a clickable action, not just status. */
