@@ -299,6 +299,13 @@ export class ClaudeAdapter implements ProviderAdapter {
         // Mode passthrough: `s.mode` is already a native `PermissionMode`
         // value (validated by the API + DB migration). No translation.
         permissionMode: s.mode as PermissionMode,
+        // The SDK refuses to honor `bypassPermissions` unless this confirmation
+        // flag is also set (sdk.d.ts:1455-1459). Without it the SDK silently
+        // falls back to default behavior — every tool call invokes
+        // `canUseTool`, which routes to PermissionManager and prompts the user
+        // anyway, defeating the entire point of the mode. Only set it when the
+        // mode actually requires it; keep the safety check armed otherwise.
+        ...(s.mode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
         canUseTool: this.makeCanUseTool(s),
         onElicitation: this.makeOnElicitation(s, cb),
         hooks: this.makeHooks(s, cb),
