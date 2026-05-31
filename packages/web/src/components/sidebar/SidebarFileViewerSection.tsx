@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { toast } from 'react-hot-toast';
 import { useAppStore } from '../../stores/appStore';
 import { validateNewPath } from '../../lib/filePath';
+import { useFileUpload } from '../../lib/useFileUpload';
 import { FileTree } from '../main-pane/file-viewer/FileTree';
+import { ContextMenu } from '../context-menu/ContextMenu';
 import { SidebarSection } from './SidebarSection';
 import { SidebarFileTreeActions } from './SidebarFileTreeActions';
 
@@ -45,6 +47,16 @@ export function SidebarFileViewerSection({ projectId }: Props) {
   const [newFileMode, setNewFileMode] = useState(false);
   const [newFilePath, setNewFilePath] = useState('');
 
+  // Hidden <input type="file" multiple> + per-file upload pipeline. One per
+  // project so the input doesn't unmount mid-upload when the section
+  // collapses/expands.
+  const { openPicker, hiddenInput } = useFileUpload(projectId);
+
+  // Header context menu (right-click on desktop, long-press on mobile) — its
+  // only entry uploads to the project root. Coordinates come from the touch
+  // event / mouse event so the menu lands under the user's finger / cursor.
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number } | null>(null);
+
   const createNewFile = () => {
     const err = validateNewPath(newFilePath);
     if (err) {
@@ -65,7 +77,21 @@ export function SidebarFileViewerSection({ projectId }: Props) {
         setNewFileMode((v) => !v);
         setNewFilePath('');
       }}
+      onHeaderRequestMenu={(x, y) => setHeaderMenu({ x, y })}
     >
+      {hiddenInput}
+      {headerMenu && (
+        <ContextMenu
+          position={{ x: headerMenu.x, y: headerMenu.y }}
+          items={[
+            {
+              label: 'Upload file(s) to project root',
+              action: () => openPicker(''),
+            },
+          ]}
+          onClose={() => setHeaderMenu(null)}
+        />
+      )}
       {newFileMode && (
         <div
           style={{
@@ -129,6 +155,7 @@ export function SidebarFileViewerSection({ projectId }: Props) {
           setFileViewerOpenPath(projectId, rel);
           setSelectedFileViewer(projectId);
         }}
+        onUploadHere={(dir) => openPicker(dir)}
         fileActions={(entry) => (
           <SidebarFileTreeActions filePath={entry.path} targetSessionId={activeSessionId} />
         )}

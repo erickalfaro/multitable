@@ -1,5 +1,5 @@
-import { Router } from 'express';
-import type { Request, Response } from 'express';
+import express, { Router } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
@@ -201,8 +201,58 @@ function defaultProcessConfig(overrides?: Partial<ProcessConfig>): ProcessConfig
 
 // File Viewer: cap on a single editable text file (read + write).
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+// File Viewer: cap on a single uploaded binary (matches the attachment cap).
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+// Top-level directories where uploads are flatly refused, even though the
+// path-traversal check would otherwise let them through. .git would corrupt
+// repo state; node_modules is package-manager territory. These mirror the
+// File Viewer's listing-time hard exclude.
+const UPLOAD_BLOCKED_TOPLEVEL = new Set(['.git', 'node_modules']);
 // Directory entries always hidden from the File Viewer tree, even with ?all=1.
 const FILE_TREE_HARD_EXCLUDE = new Set(['.git', 'node_modules']);
+
+// express.raw() with the upload cap. Wraps the parser so a payload-too-large
+// (or any other body-parser error) becomes a JSON response, matching the rest
+// of the API rather than escaping to the default HTML error handler. Pattern
+// mirrors `rawAttachmentBody` in api/attachments.ts.
+const rawUploadParser = express.raw({ type: () => true, limit: MAX_UPLOAD_BYTES });
+function rawFileUploadBody(req: Request, res: Response, next: NextFunction): void {
+  rawUploadParser(req, res, (err?: any) => {
+    if (!err) return next();
+    const status = typeof err.status === 'number' ? err.status : 400;
+    res.status(status).json({ error: err.message || 'Invalid upload' });
+  });
+}
+
+function safeDecodeHeader(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+// Strip path separators and control chars; preserve the extension verbatim
+// (we don't trust MIME for the extension on free-form uploads). Returns null
+// when the input would resolve to nothing safe.
+function sanitizeUploadFilename(raw: string): string | null {
+  if (!raw) return null;
+  // Take only the basename to defeat `foo/../bar` style.
+  const base = path.basename(raw);
+  const cleaned = base
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f]/g, '') // strip control chars
+    .replace(/[\\/]/g, '') // strip path separators (defensive)
+    .replace(/[<>:"|?*]/g, '') // strip Windows-reserved chars
+    .trim();
+  if (!cleaned || cleaned === '.' || cleaned === '..') return null;
+  // Cap length; keep the trailing extension.
+  if (cleaned.length <= 200) return cleaned;
+  const ext = path.extname(cleaned);
+  const stem = path.basename(cleaned, ext);
+  return stem.slice(0, 200 - ext.length) + ext;
+}
+
 // Paginated File Viewer reads: never enumerate more than this many entries from a
 // single directory, so a pathological dir (millions of files) can't hang the daemon.
 // Sorting requires the full set, so this also bounds the sortable universe; beyond it
@@ -856,6 +906,118 @@ export function createProjectsRouter(
       res.json({ ok: true, path: relPath, size: stat.size, modifiedAt: stat.mtimeMs });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to write file' });
+    }
+  });
+
+  // POST /api/projects/:id/file-upload — upload one binary file into the
+  // project tree. Raw-body upload (matches the attachment endpoint pattern in
+  // api/attachments.ts) so we can carry any MIME type without multipart
+  // overhead, and so a mobile browser over Tailscale just uses a stock
+  // <input type="file">. One file per request — the client loops for batches.
+  //
+  // Headers:
+  //   X-Filename   URI-encoded original filename (required)
+  //   X-Target-Dir URI-encoded folder relative to project root (optional,
+  //                empty = root)
+  // Response: 201 { ok: true, path, size, modifiedAt }
+  // Conflict policy: 409 if the target file already exists (no overwrite,
+  // no auto-rename — see plan).
+  router.post('/:id/file-upload', rawFileUploadBody, (req: Request, res: Response) => {
+    const project = getProjectById(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const body = req.body;
+    if (!body || !Buffer.isBuffer(body) || body.length === 0) {
+      return res.status(400).json({ error: 'Empty upload' });
+    }
+    // Defense in depth — the parser also enforces this, but the parser's
+    // error wrapper returns its own JSON before reaching here.
+    if (body.length > MAX_UPLOAD_BYTES) {
+      return res.status(413).json({ error: 'File too large' });
+    }
+
+    const filenameHeader = req.headers['x-filename'];
+    const rawName =
+      typeof filenameHeader === 'string' ? safeDecodeHeader(filenameHeader) : '';
+    const filename = sanitizeUploadFilename(rawName);
+    if (!filename) {
+      return res.status(400).json({ error: 'X-Filename header is required' });
+    }
+
+    const targetDirHeader = req.headers['x-target-dir'];
+    const rawTargetDir =
+      typeof targetDirHeader === 'string' ? safeDecodeHeader(targetDirHeader) : '';
+    const targetDir = rawTargetDir.trim();
+
+    // Mirror the file-content write check: reject absolute paths and any
+    // segment that's `..`. Empty string means "project root", which is fine.
+    if (targetDir) {
+      if (path.isAbsolute(targetDir) || targetDir.split(/[\\/]/).includes('..')) {
+        return res.status(400).json({ error: 'Invalid target directory' });
+      }
+      // Explicit hard-block for the same toplevel dirs the file listing hides:
+      // writing into .git/** would corrupt repo state, and node_modules is
+      // package-manager territory.
+      const firstSegment = targetDir.split(/[\\/]/).filter(Boolean)[0];
+      if (firstSegment && UPLOAD_BLOCKED_TOPLEVEL.has(firstSegment)) {
+        return res.status(403).json({ error: `Uploads into ${firstSegment} are not allowed` });
+      }
+    }
+
+    const normalizedProjectPath = path.resolve(project.path);
+    const targetDirResolved = targetDir
+      ? path.resolve(normalizedProjectPath, targetDir)
+      : normalizedProjectPath;
+    if (!targetDirResolved.startsWith(normalizedProjectPath)) {
+      return res.status(403).json({ error: 'Target is outside project directory' });
+    }
+    const fullPath = path.join(targetDirResolved, filename);
+    const fullResolved = path.resolve(fullPath);
+    if (!fullResolved.startsWith(normalizedProjectPath)) {
+      return res.status(403).json({ error: 'Target is outside project directory' });
+    }
+
+    // Conflict policy: refuse rather than overwrite. The client surfaces this
+    // as a per-file toast so the user can rename or delete and retry.
+    if (fs.existsSync(fullResolved)) {
+      const relConflict = path.relative(normalizedProjectPath, fullResolved);
+      return res.status(409).json({ error: 'File already exists', path: relConflict });
+    }
+    // If something with the same name exists but is a directory, the existsSync
+    // above is true so we already returned 409. The check below catches the
+    // edge case where the *target dir* path collides with an existing file.
+    try {
+      if (fs.existsSync(targetDirResolved) && !fs.statSync(targetDirResolved).isDirectory()) {
+        return res.status(400).json({ error: 'Target path is not a directory' });
+      }
+    } catch {
+      /* fall through — mkdir below will surface the real error */
+    }
+
+    try {
+      fs.mkdirSync(targetDirResolved, { recursive: true });
+      const tmp = `${fullResolved}.mt-tmp-${Date.now()}`;
+      try {
+        fs.writeFileSync(tmp, body);
+        fs.renameSync(tmp, fullResolved);
+      } catch (e) {
+        try {
+          if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+        } catch {
+          /* best-effort temp cleanup */
+        }
+        throw e;
+      }
+      const stat = fs.statSync(fullResolved);
+      const relPath = path.relative(normalizedProjectPath, fullResolved);
+      res.status(201).json({
+        ok: true,
+        path: relPath,
+        size: stat.size,
+        modifiedAt: stat.mtimeMs,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to write upload' });
     }
   });
 

@@ -190,6 +190,44 @@ export const api = {
         `/api/projects/${id}/file-content`,
         { path: filePath, content },
       ),
+    // Upload a single binary file under `targetDir` (empty = project root). The
+    // request body is the raw file; filename + target dir travel in headers to
+    // dodge multipart parsing — matches the attachment endpoint shape. The
+    // server rejects collisions with 409 so the caller can surface a per-file
+    // toast and retry under a new name.
+    uploadFile: async (
+      id: string,
+      targetDir: string,
+      file: File,
+    ): Promise<{ ok: true; path: string; size: number; modifiedAt: number }> => {
+      const res = await fetch(`/api/projects/${encodeURIComponent(id)}/file-upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'X-Filename': encodeURIComponent(file.name || 'upload'),
+          'X-Target-Dir': encodeURIComponent(targetDir || ''),
+        },
+        body: file,
+      });
+      if (!res.ok) {
+        let msg = `${res.status} ${res.statusText}`;
+        try {
+          const data = await res.json();
+          if (data?.error) msg = data.error;
+        } catch {
+          /* keep status fallback */
+        }
+        const err = new Error(msg) as Error & { status?: number };
+        err.status = res.status;
+        throw err;
+      }
+      return (await res.json()) as {
+        ok: true;
+        path: string;
+        size: number;
+        modifiedAt: number;
+      };
+    },
     openFile: (id: string, filePath: string) => post<void>(`/api/projects/${id}/open-file`, { path: filePath }),
     diff: (id: string) => get<{ diff: string }>(`/api/projects/${id}/diff`),
     slashCommands: (id: string) =>

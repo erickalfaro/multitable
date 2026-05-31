@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronRight, Folder, FileText, Loader2 } from 'lucide-react';
 import { api } from '../../../lib/api';
+import { useLongPress } from '../../../lib/useLongPress';
+import { ContextMenu } from '../../context-menu/ContextMenu';
 
 interface Entry {
   name: string;
@@ -19,6 +21,11 @@ interface Props {
   // Directories never get one. Clicking inside it must not open the file —
   // the renderer wraps it with stopPropagation.
   fileActions?: (entry: { name: string; path: string }) => React.ReactNode;
+  // Optional: when set, folder rows show an "Upload file(s) here" entry on
+  // right-click (desktop) or long-press (mobile). The arg is the folder's
+  // path relative to the project root. Files (non-directories) never trigger
+  // this — uploading to a file would be ambiguous.
+  onUploadHere?: (targetDir: string) => void;
   // 'panel' = legacy fixed-width bordered column (center File Viewer host);
   // 'sidebar' = full-width, transparent, no own scroll (host scrolls).
   variant?: 'panel' | 'sidebar';
@@ -39,6 +46,7 @@ export function FileTree({
   onOpenFile,
   refreshKey,
   fileActions,
+  onUploadHere,
   variant = 'panel',
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -47,6 +55,11 @@ export function FileTree({
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const [loadingMoreDirs, setLoadingMoreDirs] = useState<Set<string>>(new Set());
   const [errorByDir, setErrorByDir] = useState<Record<string, string>>({});
+  // Folder context menu (right-click + long-press). Position is in client
+  // coords because <ContextMenu> uses position: fixed.
+  const [folderMenu, setFolderMenu] = useState<{ x: number; y: number; dir: string } | null>(
+    null,
+  );
 
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
@@ -176,19 +189,17 @@ export function FileTree({
         const isOpen = expanded.has(entry.path);
         return (
           <div key={entry.path}>
-            <Row depth={depth} onClick={() => toggleDir(entry.path)}>
-              <ChevronRight
-                size={11}
-                style={{
-                  flexShrink: 0,
-                  color: 'var(--text-faint)',
-                  transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
-                  transition: 'transform var(--dur-fast) var(--ease-out)',
-                }}
-              />
-              <Folder size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
-              <Name>{entry.name}</Name>
-            </Row>
+            <FolderRow
+              entry={entry}
+              depth={depth}
+              isOpen={isOpen}
+              onToggle={() => toggleDir(entry.path)}
+              onOpenMenu={
+                onUploadHere
+                  ? (dir, x, y) => setFolderMenu({ dir, x, y })
+                  : null
+              }
+            />
             {isOpen && renderLevel(entry.path, depth + 1)}
           </div>
         );
@@ -270,8 +281,27 @@ export function FileTree({
     return rows;
   };
 
+  const folderContextMenu =
+    folderMenu && onUploadHere ? (
+      <ContextMenu
+        position={{ x: folderMenu.x, y: folderMenu.y }}
+        items={[
+          {
+            label: 'Upload file(s) here',
+            action: () => onUploadHere(folderMenu.dir),
+          },
+        ]}
+        onClose={() => setFolderMenu(null)}
+      />
+    ) : null;
+
   if (variant === 'sidebar') {
-    return <div style={{ padding: '2px 0' }}>{renderLevel(ROOT, 0)}</div>;
+    return (
+      <div style={{ padding: '2px 0' }}>
+        {renderLevel(ROOT, 0)}
+        {folderContextMenu}
+      </div>
+    );
   }
 
   return (
@@ -286,6 +316,7 @@ export function FileTree({
       }}
     >
       {renderLevel(ROOT, 0)}
+      {folderContextMenu}
     </div>
   );
 }
@@ -294,16 +325,31 @@ function Row({
   depth,
   selected,
   onClick,
+  onContextMenu,
+  onTouchStart,
+  onTouchMove,
+  onTouchEnd,
+  onTouchCancel,
   children,
 }: {
   depth: number;
   selected?: boolean;
   onClick: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
+  onTouchStart?: (e: React.TouchEvent) => void;
+  onTouchMove?: (e: React.TouchEvent) => void;
+  onTouchEnd?: () => void;
+  onTouchCancel?: () => void;
   children: React.ReactNode;
 }) {
   return (
     <div
       onClick={onClick}
+      onContextMenu={onContextMenu}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchCancel}
       className="mt-sidebar-item"
       style={{
         display: 'flex',
@@ -316,10 +362,78 @@ function Row({
         WebkitUserSelect: 'none',
         backgroundColor: selected ? 'var(--bg-elevated)' : 'transparent',
         borderLeft: selected ? '3px solid var(--accent-amber)' : '3px solid transparent',
+        // Suppress iOS long-press text-selection callout — folder rows have
+        // userSelect:none above but the callout is governed by a separate prop.
+        WebkitTouchCallout: 'none',
       }}
     >
       {children}
     </div>
+  );
+}
+
+// A folder row that wires right-click + long-press into the menu callback.
+// We need this as its own component because useLongPress is a hook and would
+// otherwise be called inside renderLevel's .map() — a rules-of-hooks violation
+// since folder count varies between renders.
+function FolderRow({
+  entry,
+  depth,
+  isOpen,
+  onToggle,
+  onOpenMenu,
+}: {
+  entry: Entry;
+  depth: number;
+  isOpen: boolean;
+  onToggle: () => void;
+  onOpenMenu: ((dir: string, x: number, y: number) => void) | null;
+}) {
+  // useLongPress fires its callback without args. We need touch coords to
+  // position the menu, so stash the last touch start position in a ref and
+  // read it back when the timer fires.
+  const lastTouch = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const longPress = useLongPress(() => {
+    if (onOpenMenu) onOpenMenu(entry.path, lastTouch.current.x, lastTouch.current.y);
+  });
+
+  return (
+    <Row
+      depth={depth}
+      onClick={onToggle}
+      onContextMenu={
+        onOpenMenu
+          ? (e) => {
+              e.preventDefault();
+              onOpenMenu(entry.path, e.clientX, e.clientY);
+            }
+          : undefined
+      }
+      onTouchStart={
+        onOpenMenu
+          ? (e) => {
+              const t = e.touches[0];
+              if (t) lastTouch.current = { x: t.clientX, y: t.clientY };
+              longPress.onTouchStart(e);
+            }
+          : undefined
+      }
+      onTouchMove={onOpenMenu ? longPress.onTouchMove : undefined}
+      onTouchEnd={onOpenMenu ? longPress.onTouchEnd : undefined}
+      onTouchCancel={onOpenMenu ? longPress.onTouchCancel : undefined}
+    >
+      <ChevronRight
+        size={11}
+        style={{
+          flexShrink: 0,
+          color: 'var(--text-faint)',
+          transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+          transition: 'transform var(--dur-fast) var(--ease-out)',
+        }}
+      />
+      <Folder size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
+      <Name>{entry.name}</Name>
+    </Row>
   );
 }
 
