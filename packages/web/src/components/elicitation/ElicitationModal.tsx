@@ -3,175 +3,34 @@ import { ExternalLink } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import type { ElicitationPrompt } from '../../lib/types';
 import { wsClient } from '../../lib/ws';
-import { Modal, Button, Input } from '../ui';
+import { Modal, Button } from '../ui';
+import {
+  Field,
+  coerce,
+  defaultForField,
+  type FieldSchema,
+  type FormValue,
+} from '../command-console/shared/elicitationFields';
 
-type FormValue = string | number | boolean | string[];
+/**
+ * Full-screen blocking modal for URL-mode MCP elicitations only.
+ *
+ * Background: the Command Console now lists *every* pending elicitation
+ * inline (`components/command-console/shared/ElicitationFormCard.tsx`,
+ * `ElicitationUrlCard.tsx`). Form-mode prompts resolve there — they don't
+ * need to interrupt whatever the user is doing.
+ *
+ * URL-mode prompts still pop a modal: browser-auth flows are security-
+ * sensitive and benefit from a hard focus break. The URL row also still
+ * appears in the Console so the user can act on it from the global inbox
+ * if they dismissed the modal.
+ *
+ * (Form-mode rendering is kept in this file behind a feature flag — see
+ * `ALLOW_FORM_MODAL` — in case we ever want to re-enable the blocking
+ * variant; it's dead code today.)
+ */
 
-interface FieldSchema {
-  type?: 'string' | 'number' | 'integer' | 'boolean' | 'array';
-  title?: string;
-  description?: string;
-  enum?: Array<string | number | boolean>;
-  default?: FormValue;
-  items?: { type?: string; enum?: Array<string | number | boolean> };
-  format?: string;
-  minLength?: number;
-  maxLength?: number;
-  minimum?: number;
-  maximum?: number;
-}
-
-function defaultForField(name: string, schema: FieldSchema): FormValue {
-  if (schema.default !== undefined) return schema.default;
-  if (schema.enum && schema.enum.length > 0) return String(schema.enum[0]);
-  if (schema.type === 'boolean') return false;
-  if (schema.type === 'number' || schema.type === 'integer') return 0;
-  if (schema.type === 'array') return [];
-  return '';
-}
-
-function coerce(name: string, schema: FieldSchema, raw: FormValue): FormValue {
-  if (schema.type === 'number' || schema.type === 'integer') {
-    const n = typeof raw === 'number' ? raw : Number(raw);
-    return Number.isFinite(n) ? n : 0;
-  }
-  if (schema.type === 'boolean') return Boolean(raw);
-  if (schema.type === 'array') {
-    return Array.isArray(raw)
-      ? raw.filter((v): v is string => typeof v === 'string')
-      : [];
-  }
-  return String(raw ?? '');
-}
-
-interface FieldProps {
-  name: string;
-  schema: FieldSchema;
-  required: boolean;
-  value: FormValue;
-  onChange: (v: FormValue) => void;
-}
-
-function Field({ name, schema, required, value, onChange }: FieldProps) {
-  const labelText = schema.title || name;
-
-  const labelStyle: React.CSSProperties = {
-    display: 'block',
-    fontSize: 12,
-    fontWeight: 500,
-    color: 'var(--text-secondary)',
-    marginBottom: 4,
-  };
-  const descStyle: React.CSSProperties = {
-    fontSize: 11.5,
-    color: 'var(--text-muted)',
-    marginTop: 4,
-  };
-
-  if (schema.enum && schema.enum.length > 0) {
-    return (
-      <div style={{ marginBottom: 12 }}>
-        <label style={labelStyle}>
-          {labelText}
-          {required && <span style={{ color: 'var(--status-error)' }}> *</span>}
-        </label>
-        <select
-          value={String(value ?? '')}
-          onChange={(e) => onChange(e.target.value)}
-          style={{
-            width: '100%',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            padding: '6px 10px',
-            color: 'var(--text-primary)',
-            fontSize: 13,
-          }}
-        >
-          {schema.enum.map((opt) => (
-            <option key={String(opt)} value={String(opt)}>
-              {String(opt)}
-            </option>
-          ))}
-        </select>
-        {schema.description && <div style={descStyle}>{schema.description}</div>}
-      </div>
-    );
-  }
-
-  if (schema.type === 'boolean') {
-    return (
-      <div style={{ marginBottom: 12 }}>
-        <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={Boolean(value)}
-            onChange={(e) => onChange(e.target.checked)}
-          />
-          {labelText}
-          {required && <span style={{ color: 'var(--status-error)' }}> *</span>}
-        </label>
-        {schema.description && <div style={descStyle}>{schema.description}</div>}
-      </div>
-    );
-  }
-
-  if (schema.type === 'number' || schema.type === 'integer') {
-    return (
-      <div style={{ marginBottom: 12 }}>
-        <label style={labelStyle}>
-          {labelText}
-          {required && <span style={{ color: 'var(--status-error)' }}> *</span>}
-        </label>
-        <Input
-          type="number"
-          min={schema.minimum}
-          max={schema.maximum}
-          value={typeof value === 'number' ? value : ''}
-          onChange={(e) => onChange(Number(e.target.value))}
-        />
-        {schema.description && <div style={descStyle}>{schema.description}</div>}
-      </div>
-    );
-  }
-
-  // Default: string input. Multi-line if maxLength suggests freeform text.
-  const isLong = (schema.maxLength ?? 0) > 200 || schema.format === 'textarea';
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <label style={labelStyle}>
-        {labelText}
-        {required && <span style={{ color: 'var(--status-error)' }}> *</span>}
-      </label>
-      {isLong ? (
-        <textarea
-          value={String(value ?? '')}
-          onChange={(e) => onChange(e.target.value)}
-          rows={4}
-          style={{
-            width: '100%',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            padding: '6px 10px',
-            color: 'var(--text-primary)',
-            fontSize: 13,
-            fontFamily: 'inherit',
-            resize: 'vertical',
-          }}
-        />
-      ) : (
-        <Input
-          value={String(value ?? '')}
-          onChange={(e) => onChange(e.target.value)}
-          minLength={schema.minLength}
-          maxLength={schema.maxLength}
-        />
-      )}
-      {schema.description && <div style={descStyle}>{schema.description}</div>}
-    </div>
-  );
-}
+const ALLOW_FORM_MODAL = false;
 
 interface FormProps {
   prompt: ElicitationPrompt;
@@ -197,11 +56,7 @@ function ElicitationForm({ prompt, onClose }: FormProps) {
   const submit = (): void => {
     const content: Record<string, string | number | boolean | string[]> = {};
     for (const [name, field] of Object.entries(fields)) {
-      content[name] = coerce(name, field, values[name]) as
-        | string
-        | number
-        | boolean
-        | string[];
+      content[name] = coerce(name, field, values[name]) as string | number | boolean | string[];
     }
     wsClient.respondElicitation(prompt.id, 'accept', content);
     onClose();
@@ -314,7 +169,14 @@ function ElicitationUrl({ prompt, onClose }: UrlProps) {
         {prompt.message}
       </div>
       {prompt.url && (
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', wordBreak: 'break-all', marginBottom: 8 }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: 'var(--text-muted)',
+            wordBreak: 'break-all',
+            marginBottom: 8,
+          }}
+        >
           {prompt.url}
         </div>
       )}
@@ -325,7 +187,16 @@ function ElicitationUrl({ prompt, onClose }: UrlProps) {
 export function ElicitationModalHost() {
   const pending = useAppStore((s) => s.pendingElicitations);
   const removeElicitation = useAppStore((s) => s.removeElicitation);
-  const current = useMemo(() => pending[0] ?? null, [pending]);
+
+  // Pick the highest-priority modal candidate: a URL-mode prompt anywhere in
+  // the pending list. Form-mode prompts are deliberately not auto-popped —
+  // they live inline in the Command Console (`ElicitationFormCard`).
+  const current = useMemo(() => {
+    const url = pending.find((p) => p.mode === 'url');
+    if (url) return url;
+    if (ALLOW_FORM_MODAL) return pending[0] ?? null;
+    return null;
+  }, [pending]);
 
   // Keep the WS authoritative — remove the local entry only after it's also
   // resolved server-side. Server's elicitation:resolved broadcast already
@@ -349,5 +220,7 @@ export function ElicitationModalHost() {
 
   if (!current) return null;
   if (current.mode === 'url') return <ElicitationUrl prompt={current} onClose={onClose} />;
+  // Reachable only when ALLOW_FORM_MODAL is flipped on; today this branch is
+  // dead code preserved as documentation.
   return <ElicitationForm prompt={current} onClose={onClose} />;
 }

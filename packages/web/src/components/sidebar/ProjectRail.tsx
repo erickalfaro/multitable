@@ -3,6 +3,7 @@ import { Plus, Bell } from 'lucide-react';
 import {
   useAppStore,
   useProjectAttentionTotal,
+  useProjectDominantCategory,
   useProjectPermissionCount,
   useProjectUnreadCount,
 } from '../../stores/appStore';
@@ -13,6 +14,7 @@ import { buildProjectMenuItems } from '../../lib/projectActions';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import { LogoArt } from './LogoArt';
 import { IconButton } from '../ui';
+import { CATEGORY_COLOR_VAR, CATEGORY_ICON } from '../../lib/alertVisuals';
 
 function projectInitials(name: string): string {
   const words = name.trim().split(/[\s_\-/]+/).filter(Boolean);
@@ -28,6 +30,7 @@ function ProjectRailItem({ project }: { project: Project }) {
   const total = useProjectAttentionTotal(project.id);
   const permissionCount = useProjectPermissionCount(project.id);
   const unreadAttention = useProjectUnreadCount(project.id);
+  const dominantCategory = useProjectDominantCategory(project.id);
   const [hover, setHover] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -102,38 +105,51 @@ function ProjectRailItem({ project }: { project: Project }) {
           }}
         >
           {projectInitials(project.name)}
-          {total > 0 && (
-            <span
-              title={
-                permissionCount > 0 && unreadAttention > 0
-                  ? `${permissionCount} permission${permissionCount === 1 ? '' : 's'} pending, ${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
-                  : permissionCount > 0
-                    ? `${permissionCount} confirmation${permissionCount === 1 ? '' : 's'} pending`
-                    : `${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
-              }
-              style={{
-                position: 'absolute',
-                top: -5,
-                right: -6,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 2,
-                padding: '1px 4px',
-                borderRadius: 'var(--radius-snug)',
-                background: 'var(--bg-sidebar)',
-                color: 'var(--accent-amber)',
-                border: '1px solid var(--accent-amber)',
-                fontSize: 9,
-                fontWeight: 600,
-                lineHeight: 1,
-                flexShrink: 0,
-                animation: 'mt-pulse 1.6s ease-in-out infinite',
-              }}
-            >
-              <Bell size={8} />
-              {total}
-            </span>
-          )}
+          {total > 0 && (() => {
+            // Matches SidebarItem: only switch to a category tint when the
+            // badge is purely unread alerts. Permission-pending state keeps
+            // the amber bell so confirmations stay the universal "you must
+            // act" signal regardless of which category produced them.
+            const onlyUnread = permissionCount === 0 && unreadAttention > 0;
+            const tint =
+              onlyUnread && dominantCategory
+                ? CATEGORY_COLOR_VAR[dominantCategory]
+                : 'var(--accent-amber)';
+            const BadgeIcon =
+              onlyUnread && dominantCategory ? CATEGORY_ICON[dominantCategory] : Bell;
+            return (
+              <span
+                title={
+                  permissionCount > 0 && unreadAttention > 0
+                    ? `${permissionCount} permission${permissionCount === 1 ? '' : 's'} pending, ${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
+                    : permissionCount > 0
+                      ? `${permissionCount} confirmation${permissionCount === 1 ? '' : 's'} pending`
+                      : `${unreadAttention} unread ${dominantCategory ?? 'alert'}${unreadAttention === 1 ? '' : 's'}`
+                }
+                style={{
+                  position: 'absolute',
+                  top: -5,
+                  right: -6,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 2,
+                  padding: '1px 4px',
+                  borderRadius: 'var(--radius-snug)',
+                  background: 'var(--bg-sidebar)',
+                  color: tint,
+                  border: `1px solid ${tint}`,
+                  fontSize: 9,
+                  fontWeight: 600,
+                  lineHeight: 1,
+                  flexShrink: 0,
+                  animation: 'mt-pulse 1.6s ease-in-out infinite',
+                }}
+              >
+                <BadgeIcon size={8} />
+                {total}
+              </span>
+            );
+          })()}
         </span>
       </button>
       {menu && (

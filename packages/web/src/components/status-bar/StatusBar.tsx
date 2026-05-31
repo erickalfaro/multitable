@@ -1,19 +1,15 @@
 import React from 'react';
-import { useProcess } from '../../hooks/useProcess';
 import { useAppStore } from '../../stores/appStore';
 import { Settings, Bell, Bug } from 'lucide-react';
-import { StatusDot } from '../sidebar/StatusDot';
 import { IconButton } from '../ui';
 
 export function StatusBar() {
   const {
-    selectedProcessId,
     setGlobalSettingsOpen,
     setNotificationCenterOpen,
     devLogOpen,
     setDevLogOpen,
   } = useAppStore();
-  const process = useProcess(selectedProcessId);
   const totalUnread = useAppStore((s) =>
     Object.values(s.unreadBySession).reduce((n, v) => n + v, 0),
   );
@@ -35,21 +31,6 @@ export function StatusBar() {
         fontFamily: 'inherit',
       }}
     >
-      {process && (
-        <>
-          <StatusDot state={process.state} size={11} />
-          <span
-            style={{
-              fontSize: 10,
-              color: 'var(--text-muted)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.12em',
-            }}
-          >
-            {process.state}
-          </span>
-        </>
-      )}
       <div style={{ flex: 1 }} />
 
       <button

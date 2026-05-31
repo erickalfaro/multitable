@@ -10,14 +10,7 @@ import {
 } from './sound';
 import { showOsNotificationIfHidden } from './browserNotifications';
 import { isCategoryMuted, isSeverityChimeMuted, loadPrefs } from './notificationPrefs';
-
-const TOAST_STYLE_BY_SEVERITY: Record<AlertSeverity, Record<string, string>> = {
-  info: { borderLeft: '3px solid var(--text-secondary)' },
-  success: { borderLeft: '3px solid var(--status-running)' },
-  warning: { borderLeft: '3px solid var(--status-stopped)' },
-  error: { borderLeft: '3px solid var(--status-error)' },
-  attention: { borderLeft: '3px solid var(--accent)' },
-};
+import { SEVERITY_BORDER_VAR } from './alertVisuals';
 
 function chimeFor(severity: AlertSeverity): (() => void) | null {
   switch (severity) {
@@ -75,16 +68,23 @@ export function handleSessionAlert(alert: SessionAlert): void {
     const message = body ? `${headline}\n${body}` : headline;
     const opts = {
       duration: alert.ttlMs ?? (alert.severity === 'attention' ? Infinity : undefined),
-      style: { ...TOAST_STYLE_BY_SEVERITY[alert.severity], maxWidth: 480 },
+      // Severity drives the toast border so the existing red/amber/green
+      // urgency vocabulary is preserved. Category visuals (icon, tint) live
+      // in NotificationCenter rows where there's room to encode both signals.
+      style: { borderLeft: `3px solid ${SEVERITY_BORDER_VAR[alert.severity]}`, maxWidth: 480 },
     };
     if (alert.severity === 'error') toast.error(message, opts);
     else if (alert.severity === 'success') toast.success(message, opts);
     else toast(message, opts);
   }
 
-  // Special-case the permission category: the existing PermissionBar renders
-  // the card and plays its own chime; don't double up.
+  // Skip the generic severity chime for categories that have their own
+  // interactive surface in the Command Console / per-session bar: the
+  // PermissionBar renders the card and plays its own chime, and elicitation
+  // cards live inline in the Console now. Both would otherwise double-chime
+  // against the severity chime fired here.
   if (alert.category === 'permission') return;
+  if (alert.category === 'elicitation') return;
   if (isSeverityChimeMuted(alert.severity)) return;
 
   const chime = chimeFor(alert.severity);

@@ -2,12 +2,17 @@ import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { StatusDot } from './StatusDot';
 import { SessionStatusLoader } from './SessionStatusLoader';
-import { Bell, Square } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import type { ManagedProcess, Session } from '../../lib/types';
-import { api, stopProcessByType } from '../../lib/api';
+import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
-import { IconButton, AgentBadge, Spinner } from '../ui';
+import { AgentBadge, Spinner } from '../ui';
 import { relativeTime } from '../../lib/relativeTime';
+import {
+  CATEGORY_COLOR_VAR,
+  CATEGORY_ICON,
+  dominantAlertForSession,
+} from '../../lib/alertVisuals';
 
 interface Props {
   process: ManagedProcess;
@@ -39,6 +44,14 @@ export function SidebarItem({
   const unreadAttention = useAppStore(s =>
     process.type === 'session' ? s.unreadBySession[process.id] ?? 0 : 0,
   );
+  // Dominant category drives the badge tint when there are unread alerts.
+  // Returns the category name so the selector returns a stable scalar (a
+  // SessionAlert reference would re-fire the render on every alert update).
+  const dominantCategory = useAppStore(s => {
+    if (process.type !== 'session') return null;
+    if ((s.unreadBySession[process.id] ?? 0) === 0) return null;
+    return dominantAlertForSession(s.alerts, process.id)?.category ?? null;
+  });
   const hasStreamingText = useAppStore(s =>
     process.type === 'session' ? Boolean(s.streamingBySession[process.id]) : false,
   );
@@ -188,39 +201,53 @@ export function SidebarItem({
               style={{ marginLeft: 4, flexShrink: 0 }}
             />
           )}
-          {pendingCount > 0 && (
-            <span
-              title={
-                permissionCount > 0 && unreadAttention > 0
-                  ? `${permissionCount} permission${permissionCount === 1 ? '' : 's'} pending, ${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
-                  : permissionCount > 0
-                    ? `${permissionCount} confirmation${permissionCount === 1 ? '' : 's'} pending`
-                    : `${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
-              }
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-                marginLeft: 6,
-                padding: '1px 6px',
-                borderRadius: 'var(--radius-snug)',
-                background: 'transparent',
-                color: 'var(--accent-amber)',
-                border: '1px solid var(--accent-amber)',
-                fontSize: 9.5,
-                fontWeight: 500,
-                letterSpacing: '0.06em',
-                flexShrink: 0,
-                animation: 'mt-pulse 1.6s ease-in-out infinite',
-              }}
-            >
-              <Bell size={9} />
-              {pendingCount}
-            </span>
-          )}
+          {pendingCount > 0 && (() => {
+            // When the badge is *only* unread alerts (no pending permissions),
+            // pick up the dominant category's color + icon so the user can
+            // tell an `auth` from a `budget` event at a glance. The amber
+            // bell is kept for the permission-only and mixed states because
+            // permission prompts are the one thing that always demands the
+            // user's action regardless of category.
+            const onlyUnread = permissionCount === 0 && unreadAttention > 0;
+            const tint =
+              onlyUnread && dominantCategory
+                ? CATEGORY_COLOR_VAR[dominantCategory]
+                : 'var(--accent-amber)';
+            const BadgeIcon =
+              onlyUnread && dominantCategory ? CATEGORY_ICON[dominantCategory] : Bell;
+            return (
+              <span
+                title={
+                  permissionCount > 0 && unreadAttention > 0
+                    ? `${permissionCount} permission${permissionCount === 1 ? '' : 's'} pending, ${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
+                    : permissionCount > 0
+                      ? `${permissionCount} confirmation${permissionCount === 1 ? '' : 's'} pending`
+                      : `${unreadAttention} unread ${dominantCategory ?? 'alert'}${unreadAttention === 1 ? '' : 's'}`
+                }
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  marginLeft: 6,
+                  padding: '1px 6px',
+                  borderRadius: 'var(--radius-snug)',
+                  background: 'transparent',
+                  color: tint,
+                  border: `1px solid ${tint}`,
+                  fontSize: 9.5,
+                  fontWeight: 500,
+                  letterSpacing: '0.06em',
+                  flexShrink: 0,
+                  animation: 'mt-pulse 1.6s ease-in-out infinite',
+                }}
+              >
+                <BadgeIcon size={9} />
+                {pendingCount}
+              </span>
+            );
+          })()}
           {/* Right-side slot: always 22px tall so hover doesn't change row
-              height and cause jitter as items reflow below. Metrics and the
-              Stop button share the slot and cross-fade via opacity. */}
+              height and cause jitter as items reflow below. */}
           <div
             style={{
               position: 'relative',
@@ -233,9 +260,7 @@ export function SidebarItem({
           >
             {metrics && (
               <span
-                className={
-                  process.state === 'running' ? 'mt-sidebar-item-meta hide-on-hover' : 'mt-sidebar-item-meta'
-                }
+                className="mt-sidebar-item-meta"
                 style={{
                   fontSize: 11.5,
                   color: 'var(--text-muted)',
@@ -249,9 +274,7 @@ export function SidebarItem({
             {!metrics && process.type === 'session' && sessionRecency > 0 && (
               <span
                 title={new Date(sessionRecency).toLocaleString()}
-                className={
-                  process.state === 'running' ? 'mt-sidebar-item-meta hide-on-hover' : 'mt-sidebar-item-meta'
-                }
+                className="mt-sidebar-item-meta"
                 style={{
                   fontSize: 10,
                   color: 'var(--text-muted)',
@@ -261,29 +284,6 @@ export function SidebarItem({
               >
                 {relativeTime(sessionRecency)}
               </span>
-            )}
-            {process.state === 'running' && (
-              <div
-                className="mt-sidebar-item-actions"
-                style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: 0,
-                  display: 'flex',
-                  gap: 2,
-                }}
-              >
-                <IconButton
-                  size="sm"
-                  label="Stop"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    stopProcessByType(process).catch(() => {/* swallow */});
-                  }}
-                >
-                  <Square size={11} />
-                </IconButton>
-              </div>
             )}
           </div>
         </div>
