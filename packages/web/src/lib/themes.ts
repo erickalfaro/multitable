@@ -17,6 +17,20 @@ export interface ThemeColors {
   statusStopped: string;
   bgHover: string;
   selectionBorder: string;
+  // Per-alert-category tints for notification icons + sidebar badges.
+  // Picked to sit at roughly the same perceived lightness as --text-secondary
+  // so icons don't shout. See lib/alertVisuals.tsx for the icon mapping.
+  catTurn: string;
+  catTool: string;
+  catPermission: string;
+  catElicitation: string;
+  catRateLimit: string;
+  catAuth: string;
+  catTask: string;
+  catCompaction: string;
+  catSync: string;
+  catBudget: string;
+  catStatus: string;
 }
 
 export interface Theme {
@@ -50,6 +64,17 @@ export const THEME_COLOR_KEYS: Array<{
   { key: 'statusWarning', label: 'Warning', cssVar: '--status-warning' },
   { key: 'statusError', label: 'Error', cssVar: '--status-error' },
   { key: 'statusStopped', label: 'Stopped', cssVar: '--status-stopped' },
+  { key: 'catTurn', label: 'Alert · turn', cssVar: '--cat-turn' },
+  { key: 'catTool', label: 'Alert · tool', cssVar: '--cat-tool' },
+  { key: 'catPermission', label: 'Alert · permission', cssVar: '--cat-permission' },
+  { key: 'catElicitation', label: 'Alert · elicitation', cssVar: '--cat-elicitation' },
+  { key: 'catRateLimit', label: 'Alert · rate limit', cssVar: '--cat-rate-limit' },
+  { key: 'catAuth', label: 'Alert · auth', cssVar: '--cat-auth' },
+  { key: 'catTask', label: 'Alert · task', cssVar: '--cat-task' },
+  { key: 'catCompaction', label: 'Alert · compaction', cssVar: '--cat-compaction' },
+  { key: 'catSync', label: 'Alert · sync', cssVar: '--cat-sync' },
+  { key: 'catBudget', label: 'Alert · budget', cssVar: '--cat-budget' },
+  { key: 'catStatus', label: 'Alert · status', cssVar: '--cat-status' },
 ];
 
 // Obsidian — light fallback (warm cream).
@@ -79,6 +104,17 @@ export const BUILTIN_LIGHT: Theme = {
     statusWarning: '#c46a00',
     statusError: '#c92a2a',
     statusStopped: '#a8a397',
+    catTurn: '#5b6470',
+    catTool: '#7a5a2a',
+    catPermission: '#8a4a1f',
+    catElicitation: '#4a6a8a',
+    catRateLimit: '#7a5a8a',
+    catAuth: '#2a6a7a',
+    catTask: '#2f7a4a',
+    catCompaction: '#6a5a4a',
+    catSync: '#4a7a7a',
+    catBudget: '#7a2a4a',
+    catStatus: '#5a5a5a',
   },
 };
 
@@ -108,6 +144,17 @@ export const BUILTIN_DARK: Theme = {
     statusWarning: '#ff8a00',
     statusError: '#ff4d4f',
     statusStopped: '#4a4a55',
+    catTurn: '#9aa3b2',
+    catTool: '#c2a371',
+    catPermission: '#e08a4a',
+    catElicitation: '#7eb0e6',
+    catRateLimit: '#b89ad0',
+    catAuth: '#5fb3c5',
+    catTask: '#5ec88a',
+    catCompaction: '#a89888',
+    catSync: '#6fb5b5',
+    catBudget: '#d06088',
+    catStatus: '#909090',
   },
 };
 

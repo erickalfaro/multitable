@@ -27,6 +27,8 @@ import {
   saveActiveThemeIdToStorage,
 } from '../lib/themes';
 import { loadSnapshot, saveSnapshot } from '../lib/persistedStore';
+import { dominantAlertForSessions } from '../lib/alertVisuals';
+import type { AlertCategory } from '../lib/types';
 
 interface AppState {
   // Projects
@@ -1403,4 +1405,27 @@ export function useProjectPermissionCount(projectId: string): number {
 
 export function useProjectUnreadCount(projectId: string): number {
   return useAppStore((s) => selectProjectAttention(s, projectId).unreadAttention);
+}
+
+/**
+ * Project-level dominant alert category — the highest-priority pending alert
+ * across all of a project's sessions. ProjectRail uses this to tint its
+ * roll-up badge so a project with auth failures looks visually distinct from
+ * a project that's only blowing through its rate limit. Returns null when
+ * the project has no unread alerts (permission-only state keeps the amber
+ * default in the rail badge).
+ *
+ * Returns a scalar string so Zustand's default reference equality short-
+ * circuits re-renders on unrelated alert mutations.
+ */
+export function useProjectDominantCategory(projectId: string): AlertCategory | null {
+  return useAppStore((s) => {
+    const ids = new Set(
+      Object.values(s.sessions)
+        .filter((x) => x.projectId === projectId)
+        .map((x) => x.id),
+    );
+    if (ids.size === 0) return null;
+    return dominantAlertForSessions(s.alerts, ids)?.category ?? null;
+  });
 }

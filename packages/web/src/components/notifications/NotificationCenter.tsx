@@ -1,25 +1,9 @@
-import React, { useMemo } from 'react';
-import { X, Trash2, ChevronRight, Bell, AlertTriangle, AlertCircle, CheckCircle2, Info } from 'lucide-react';
+import { useMemo } from 'react';
+import { X, Trash2, ChevronRight, Bell } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
-import type { SessionAlert, AlertSeverity } from '../../lib/types';
+import type { SessionAlert } from '../../lib/types';
 import { IconButton } from '../ui';
-
-function severityIcon(severity: AlertSeverity): React.ReactNode {
-  const size = 14;
-  switch (severity) {
-    case 'attention':
-      return <Bell size={size} color="var(--accent)" />;
-    case 'error':
-      return <AlertCircle size={size} color="var(--status-error)" />;
-    case 'warning':
-      return <AlertTriangle size={size} color="var(--status-stopped)" />;
-    case 'success':
-      return <CheckCircle2 size={size} color="var(--status-running)" />;
-    case 'info':
-    default:
-      return <Info size={size} color="var(--text-secondary)" />;
-  }
-}
+import { categoryIcon, SEVERITY_BORDER_VAR } from '../../lib/alertVisuals';
 
 function formatRelative(ts: number): string {
   const diff = Date.now() - ts;
@@ -43,12 +27,16 @@ function NotificationRow({ alert, sessionName, onJump, onDismiss }: RowProps) {
       style={{
         padding: '10px 12px',
         borderBottom: '1px solid var(--border)',
+        // Severity stays the urgency channel (red on error, amber on attention,
+        // green on success) so the at-a-glance vocabulary survives even as the
+        // icon shape now encodes category instead.
+        borderLeft: `3px solid ${SEVERITY_BORDER_VAR[alert.severity]}`,
         display: 'flex',
         gap: 10,
         alignItems: 'flex-start',
       }}
     >
-      <div style={{ marginTop: 2, flexShrink: 0 }}>{severityIcon(alert.severity)}</div>
+      <div style={{ marginTop: 2, flexShrink: 0 }}>{categoryIcon(alert.category)}</div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <span
