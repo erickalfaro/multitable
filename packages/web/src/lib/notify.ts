@@ -78,9 +78,13 @@ export function handleSessionAlert(alert: SessionAlert): void {
     else toast(message, opts);
   }
 
-  // Special-case the permission category: the existing PermissionBar renders
-  // the card and plays its own chime; don't double up.
+  // Skip the generic severity chime for categories that have their own
+  // interactive surface in the Command Console / per-session bar: the
+  // PermissionBar renders the card and plays its own chime, and elicitation
+  // cards live inline in the Console now. Both would otherwise double-chime
+  // against the severity chime fired here.
   if (alert.category === 'permission') return;
+  if (alert.category === 'elicitation') return;
   if (isSeverityChimeMuted(alert.severity)) return;
 
   const chime = chimeFor(alert.severity);
