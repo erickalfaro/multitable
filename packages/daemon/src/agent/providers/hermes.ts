@@ -436,6 +436,37 @@ export class HermesAdapter implements ProviderAdapter {
         text: buffers.assistantText || null,
       });
       cb.emitStateSnapshot();
+
+      // ACP stopReasons per the spec: end_turn | max_tokens |
+      // max_turn_requests | refusal | cancelled. Only end_turn (clean
+      // completion) and cancelled (user-initiated) are quiet outcomes;
+      // everything else is a model-side failure that MUST reach the user.
+      // Without this branch a `refusal` or `max_tokens` turn looks
+      // indistinguishable from a clean turn-end with no assistant text.
+      const reason = result.stopReason ?? '';
+      if (reason && reason !== 'end_turn' && reason !== 'cancelled') {
+        const msg: Message = {
+          id: `hermes:${hermesSessionId}:stop-error:${Date.now()}`,
+          ts: Date.now(),
+          kind: 'system',
+          text: `Hermes turn ended with stopReason="${reason}".`,
+        };
+        cb.pushMessages([msg]);
+        cb.emitToolEvent([msg]);
+        cb.emitAlert({
+          category: 'turn',
+          severity: 'error',
+          title: `Hermes turn ended: ${reason}`,
+          body:
+            reason === 'refusal'
+              ? 'The model refused to respond. Try rephrasing or relaxing the prompt.'
+              : reason === 'max_tokens'
+                ? 'The response was cut off at the model output-token ceiling.'
+                : reason === 'max_turn_requests'
+                  ? 'The agent hit the maximum number of internal tool-call iterations for this turn.'
+                  : `Unrecognized stopReason — see Hermes logs.`,
+        });
+      }
     } catch (err) {
       console.error('[hermes] turn failed', {
         sessionId: s.id,

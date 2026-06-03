@@ -322,8 +322,21 @@ export class ClaudeAdapter implements ProviderAdapter {
         try {
           this.handleSdkMessage(s, msg, cb);
         } catch (handlerErr) {
-          // Don't let a handler bug abort the whole turn — log and continue.
+          // Don't let a handler bug abort the whole turn — log it AND
+          // surface it as a low-severity alert so silent bugs in our own
+          // SDK-message dispatch don't go unnoticed (the user asked for
+          // every model/SDK failure to be visible).
           console.error('[claude-adapter] handler error:', handlerErr);
+          const detail =
+            handlerErr instanceof Error
+              ? handlerErr.message
+              : String(handlerErr);
+          cb.emitAlert({
+            category: 'turn',
+            severity: 'warning',
+            title: 'Claude SDK handler error',
+            body: detail,
+          });
         }
       }
     } finally {
@@ -520,7 +533,24 @@ export class ClaudeAdapter implements ProviderAdapter {
           text: info.text,
         });
         cb.emitStateSnapshot();
-        this.maybeEmitResultAlert(info.subtype, info.totalCostUsd, cb);
+        // Model-side failures must ALWAYS reach the user. The SDK's
+        // SDKResultError carries an `errors: string[]` payload that we
+        // surface as a visible system message in the chat (and as a
+        // severity:error alert). Without this, an `error_during_execution`
+        // result silently looked like a clean turn-end with no assistant
+        // text — the user sees nothing.
+        if (info.isError) {
+          const errText = info.errors.length > 0 ? info.errors.join('\n') : info.subtype;
+          const sysMsg: Message = {
+            id: `claude-result-error:${s.id}:${Date.now()}`,
+            ts: Date.now(),
+            kind: 'system',
+            text: `Claude turn ended in error (${info.subtype}): ${errText}`,
+          };
+          cb.pushMessages([sysMsg]);
+          cb.emitToolEvent([sysMsg]);
+        }
+        this.maybeEmitResultAlert(info.subtype, info.totalCostUsd, info.errors, cb);
         return;
       }
       default:
@@ -1076,7 +1106,12 @@ export class ClaudeAdapter implements ProviderAdapter {
     }
   }
 
-  private maybeEmitResultAlert(subtype: string, totalCostUsd: number, cb: AdapterCallbacks): void {
+  private maybeEmitResultAlert(
+    subtype: string,
+    totalCostUsd: number,
+    errors: string[],
+    cb: AdapterCallbacks,
+  ): void {
     if (subtype === 'error_max_budget_usd') {
       cb.emitAlert({
         category: 'budget',
@@ -1097,6 +1132,17 @@ export class ClaudeAdapter implements ProviderAdapter {
         severity: 'error',
         title: 'Structured-output retries exhausted',
         body: 'Claude could not produce a valid structured response after the maximum retries.',
+      });
+    } else if (subtype === 'error_during_execution') {
+      // The SDK's catch-all internal failure (network drop after some
+      // bytes, malformed stream, server-side 5xx mid-turn, tool runner
+      // crash, etc.). Surface the SDK's `errors` array verbatim so the
+      // user always knows what actually failed.
+      cb.emitAlert({
+        category: 'turn',
+        severity: 'error',
+        title: 'Claude turn failed mid-execution',
+        body: errors.length > 0 ? errors.join('\n') : 'No further detail provided by the SDK.',
       });
     }
   }
