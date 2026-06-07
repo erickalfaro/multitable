@@ -28,6 +28,38 @@ import type {
   ProviderCapabilities,
 } from './types.js';
 
+// === Disable cache-diagnostics feature flag ================================
+//
+// The bundled `claude` CLI ships an internal experimental "prompt cache
+// diagnostics" feature, gated by a GrowthBook A/B flag (default OFF, but
+// some accounts/sessions get rolled in). When ON, the CLI appends a
+// `diagnostics.previous_message_id` field to every `/v1/messages` request,
+// computed by walking the JSONL backward for the most recent
+// `assistant && requestId` row and reading its `message.id` — with NO
+// validation that the id starts with `msg_…`.
+//
+// On a JSONL with a synthetic-tailed conversation (locally-generated
+// assistant placeholders persisted during a 529 retry storm, or
+// harness-emitted pseudo-system notices like the oversized-image warning),
+// that `message.id` is a UUID, and the API responds with a permanent 400:
+//
+//   "diagnostics.previous_message_id: must be the `id` from a prior
+//    /v1/messages response (starts with `msg_`)"
+//
+// See upstream issues #58427 and #59520 (open, unfixed as of CC 2.1.167).
+//
+// The minimum-impact workaround is to disable the GrowthBook lookup chain
+// entirely: setting `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` makes the
+// CLI's flag-fetch function return the default `false`, the cache-diagnostics
+// path never activates, and `previous_message_id` is never built into the
+// request body — for all sessions, not just corrupted ones. The env var is
+// an Anthropic-documented supported control (it also disables `/feedback`
+// and GrowthBook A/B telemetry; prompt caching itself is unaffected — that's
+// a separate SDK option). See docs/skills/claude-agent-sdk/pitfalls.md §10.
+if (!('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' in process.env)) {
+  process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1';
+}
+
 const requireFromHere = createRequire(__filename);
 
 function isMuslRuntime(): boolean {

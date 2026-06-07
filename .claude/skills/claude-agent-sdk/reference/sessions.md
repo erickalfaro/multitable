@@ -66,3 +66,16 @@ The SDK supports custom `SessionStore` adapters for storing JSONL outside `~/.cl
 - **Treating `s.claudeSessionId` as truth before the first turn.** It's `null` until `system.init` fires. Don't query the JSONL based on it during session creation; wait until the first turn returns.
 - **Forking by deleting and recreating.** That loses history. Use `forkSession: true` to keep the prior context.
 - **Hand-editing the JSONL.** The SDK appends; if your edit breaks JSON parsing, the session is corrupt and `resume` will fail. Use `deleteSession` or move/archive the file instead.
+
+## Corrupted-tail resume — `previous_message_id` 400
+
+Known upstream Claude Code bug (issues [#58427](https://github.com/anthropics/claude-code/issues/58427) and [#59520](https://github.com/anthropics/claude-code/issues/59520), open as of CC 2.1.167). When the JSONL tail contains assistant entries whose `message.id` is a UUID rather than a `msg_…` API id — caused by 529 retry storms persisting synthetic placeholders, or by harness-emitted pseudo-system notices — the CLI's next `/v1/messages` call ships that UUID as `diagnostics.previous_message_id` and the API 400s permanently:
+
+```
+API Error: 400 diagnostics.previous_message_id: must be the `id` from a prior
+/v1/messages response (starts with `msg_`)
+```
+
+MultiTable disables this code path entirely by setting `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` at module load in [`agent/providers/claude.ts`](../../../../packages/daemon/src/agent/providers/claude.ts) (only if the env doesn't already define it — operator override wins). This collapses the CLI's GrowthBook A/B flag fetcher, the `tengu_prompt_cache_diagnostics` feature short-circuits to its default `false`, and the diagnostics block is never built into any request — no JSONL mutation needed.
+
+Full gate chain, side effects, and revisit conditions in [`pitfalls.md` §10](../pitfalls.md).
