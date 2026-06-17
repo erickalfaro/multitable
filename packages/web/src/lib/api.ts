@@ -243,7 +243,7 @@ export const api = {
       data: {
         name: string;
         command: string;
-        agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok';
+        agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
         model?: string;
       },
     ) => post<Session>(`/api/projects/${projectId}/sessions`, data),
@@ -307,7 +307,7 @@ export const api = {
     clearScrollback: (id: string) => del(`/api/processes/${id}/scrollback`),
   },
   providers: {
-    models: (provider: 'claude' | 'codex' | 'hermes' | 'grok') =>
+    models: (provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor') =>
       get<{
         provider: string;
         models: Array<{
@@ -327,7 +327,7 @@ export const api = {
     catalog: () =>
       get<
         Record<
-          'claude' | 'codex' | 'hermes' | 'grok',
+          'claude' | 'codex' | 'hermes' | 'grok' | 'cursor',
           {
             models: Array<{
               id: string;
@@ -345,7 +345,7 @@ export const api = {
       >('/api/providers/catalog'),
     // Trigger live discovery. Server returns 202; the actual catalog lands
     // via the `providers:catalog-updated` WS event.
-    refresh: (provider?: 'claude' | 'codex' | 'hermes' | 'grok') =>
+    refresh: (provider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor') =>
       post<{ ok: boolean; refreshing: string[] }>(
         '/api/providers/refresh',
         provider ? { provider } : {},

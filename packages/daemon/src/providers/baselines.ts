@@ -105,7 +105,31 @@ export const GROK_BASELINE: BaselineModel[] = [
   },
 ];
 
-export function baselineFor(provider: 'claude' | 'codex' | 'hermes' | 'grok'): BaselineModel[] {
+// Cursor CLI (`cursor-agent`) baseline. `cursor-agent models` lists 100+ models
+// (Composer, GPT-5.x, Claude, Gemini, Grok) and is the source of truth via live
+// discovery; this seed shows through before the first probe / if it fails.
+// `composer-2.5` is Cursor's current default. Effort is encoded IN the model id
+// (e.g. gpt-5.5-high), so no effort tiers are declared here — see the
+// cursor-cli skill (reference/models.md).
+export const CURSOR_BASELINE: BaselineModel[] = [
+  {
+    id: 'composer-2.5',
+    displayName: 'Composer 2.5',
+    description: "Cursor's default coding model.",
+    isDefault: true,
+    supportsEffort: false,
+  },
+  {
+    id: 'auto',
+    displayName: 'Auto',
+    description: 'Let Cursor pick the best available model per turn.',
+    supportsEffort: false,
+  },
+];
+
+export function baselineFor(
+  provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor',
+): BaselineModel[] {
   switch (provider) {
     case 'claude':
       return CLAUDE_BASELINE;
@@ -115,5 +139,7 @@ export function baselineFor(provider: 'claude' | 'codex' | 'hermes' | 'grok'): B
       return HERMES_BASELINE;
     case 'grok':
       return GROK_BASELINE;
+    case 'cursor':
+      return CURSOR_BASELINE;
   }
 }
