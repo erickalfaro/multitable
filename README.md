@@ -14,10 +14,9 @@
 </p>
 
 MultiTable is an open-source **AI agent framework** and meta-harness that gives you a
-common orchestration layer over Claude Code, OpenAI Codex, and Hermes (xAI Grok) — and
-the agents you'll add next: swap or combine harnesses without rewriting, approve risky
-actions from anywhere, and keep every project and every agent in one place. Copilot
-and Gemini are next.
+common orchestration layer over LLM providers (Claude Code, OpenAI Codex, GrokBuild,
+etc.): swap or combine harnesses without rewriting, approve risky actions from
+anywhere, and keep every project and every agent in one place.
 
 <p align="center">
   <img src="docs/images/demo.gif" alt="MultiTable" width="760">
@@ -27,32 +26,29 @@ and Gemini are next.
 
 ## Why MultiTable?
 
-MultiTable lets you:
+- **🔀 Swap or combine harnesses without rewriting.** One contract, every
+  agent. Claude on one task, Codex on another, Grok reviewing both — same
+  chat UI, same permission prompts, same git diff, same notifications, no
+  matter who's answering.
 
-- **🔀 Switch between agents and projects without losing context.** Real work
-  means jumping between several repos and, increasingly, between several
-  agents — Claude on one task, Codex on another, a dev server and a shell
-  open the whole time. Pick a project, pick an agent, send a prompt; switch
-  to another project and another agent without losing any of the others.
+- **🗂️ Every project, every agent, one place.** Pick a project, pick an
+  agent, send a prompt. Jump between repos and agents in a single click
+  without losing any of the others running in the background.
 
-- **🤖 Drive every agent through one contract.** Same chat UI, same
-  permission prompts, same git diff, same notifications, regardless of which
-  agent is answering. Past threads from the official Claude / Codex / Hermes
-  CLIs are listed and resumable — MultiTable reads and writes the same
-  on-disk state, so nothing is locked in.
-
-- **📱 Work with agents from any device, including your phone.** The daemon
-  runs on your machine and serves a React UI at `http://localhost:3000`.
-  Host it somewhere you can reach (a home server, a VPS,
-  [Tailscale](https://tailscale.com)) and you can drive your agents from a
-  phone or tablet — including approving permission prompts remotely over
-  Telegram.
+- **📱 Drive your agents from any device.** The daemon runs on your machine
+  and serves a React UI at `http://localhost:3000`. Host it on a home
+  server, a VPS, or [Tailscale](https://tailscale.com) and run prompts from
+  a phone or tablet.
 
 - **🛡️ Approve risky actions from anywhere.** Permission prompts, MCP
-  elicitations, and alerts can be forwarded to a Telegram chat with
-  callback-button responses, edited in place when you resolve them.
+  elicitations, and alerts forward to a Telegram chat with one-tap callback
+  buttons — edited in place when you resolve them.
 
-- **🏠 Everything runs locally.** No accounts, no telemetry — the only
+- **🔓 Nothing is locked in.** Past threads from the official Claude,
+  Codex, and Grok CLIs are listed and resumable. MultiTable reads and
+  writes the same on-disk state — your sessions stay yours.
+
+- **🏠 Everything runs locally.** No accounts, no telemetry. The only
   network calls are your LLM provider's API and, if you opt in, Telegram.
 
 ---
