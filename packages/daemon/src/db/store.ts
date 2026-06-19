@@ -312,7 +312,7 @@ export interface SessionRecord {
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok';
+  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
@@ -359,14 +359,16 @@ function rowToSession(row: SessionRow): SessionRecord {
   // Provider hydration. `agent_provider` is free-text in the schema, so we
   // narrow to the known adapter set here. Unknown values fall back to Claude
   // (the original default) so a stale row can't take the daemon down.
-  const provider: 'claude' | 'codex' | 'hermes' | 'grok' =
+  const provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' =
     row.agent_provider === 'codex'
       ? 'codex'
       : row.agent_provider === 'hermes'
         ? 'hermes'
         : row.agent_provider === 'grok'
           ? 'grok'
-          : 'claude';
+          : row.agent_provider === 'cursor'
+            ? 'cursor'
+            : 'claude';
   const agentSessionId = row.agent_session_id ?? row.claude_session_id;
   const agentSessionIdHistory =
     parseClaudeSessionIdHistory(row.agent_session_id_history).length > 0
@@ -406,11 +408,12 @@ function rowToSession(row: SessionRow): SessionRecord {
 
 function inferAgentProvider(
   command: string | null | undefined,
-): 'claude' | 'codex' | 'hermes' | 'grok' {
+): 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' {
   const first = (command ?? '').trim().split(/\s+/, 1)[0]?.toLowerCase() ?? '';
   if (first === 'codex') return 'codex';
   if (first === 'hermes') return 'hermes';
   if (first === 'grok') return 'grok';
+  if (first === 'cursor' || first === 'cursor-agent') return 'cursor';
   return 'claude';
 }
 
@@ -443,7 +446,7 @@ export function createSession(data: {
   autorespawn?: boolean;
   terminalAlerts?: boolean;
   fileWatchPatterns?: string[];
-  agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok';
+  agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
   model?: string | null;
   /**
    * Optional explicit loader variant. Used by the transcript-resume flow to
@@ -476,7 +479,17 @@ export function createSession(data: {
   // would be rejected by Codex's `thread/start`. The agent manager has the
   // authoritative list; we pick the right native string per provider here so
   // the row never holds a wrong-provider mode.
-  const initialMode = resolvedProvider === 'codex' ? 'workspace-write' : 'default';
+  // Each provider's adapter validates `mode` against its capabilities.modes, so
+  // seed a value that provider actually accepts. Codex → 'workspace-write';
+  // Cursor → 'force' (Run everything — usable out of the box; default mode would
+  // reject most tools against the near-empty ~/.cursor allowlist). Others get
+  // Claude's 'default'.
+  const initialMode =
+    resolvedProvider === 'codex'
+      ? 'workspace-write'
+      : resolvedProvider === 'cursor'
+        ? 'force'
+        : 'default';
   getDb().prepare(`
     INSERT INTO sessions (
       id, project_id, name, command, working_directory, type,
@@ -522,7 +535,7 @@ export function updateSession(id: string, data: Partial<{
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok';
+  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];

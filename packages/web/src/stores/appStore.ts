@@ -1270,13 +1270,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Model catalog cache. The daemon route serves `claude` / `codex` / `hermes`
   // today; copilot is `comingSoon` and short-circuits to a no-op so the chip
   // falls back to its prettifier without firing a 404.
-  modelCatalog: { claude: null, codex: null, hermes: null, copilot: null, grok: null },
+  modelCatalog: { claude: null, codex: null, hermes: null, copilot: null, grok: null, cursor: null },
   modelCatalogStatus: {
     claude: 'idle',
     codex: 'idle',
     hermes: 'idle',
     copilot: 'idle',
     grok: 'idle',
+    cursor: 'idle',
   },
   loadModelCatalog: (provider) => {
     const status = get().modelCatalogStatus[provider];
@@ -1286,7 +1287,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       modelCatalogStatus: { ...s.modelCatalogStatus, [provider]: 'loading' },
     }));
     api.providers
-      .models(provider as 'claude' | 'codex' | 'hermes' | 'grok')
+      .models(provider as 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor')
       .then((res) => {
         set((s) => ({
           modelCatalog: { ...s.modelCatalog, [provider]: res.models },
