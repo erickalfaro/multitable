@@ -10,6 +10,7 @@ import type { ProcessState } from '../types.js';
 import { parseCodexThread, listCodexThreads } from '../transcripts/codexParser.js';
 import { parseHermesSession } from '../transcripts/hermesParser.js';
 import { parseGrokSession } from '../transcripts/grokParser.js';
+import { parseCursorSession } from '../transcripts/cursorParser.js';
 import type { PermissionManager } from '../hooks/permissionManager.js';
 import type { ElicitationManager } from '../hooks/elicitationManager.js';
 import { createAlert } from './alerts.js';
@@ -19,6 +20,7 @@ import { CodexAdapter } from './providers/codex.js';
 import { ClaudeAdapter } from './providers/claude.js';
 import { HermesAdapter } from './providers/hermes.js';
 import { GrokAdapter } from './providers/grok.js';
+import { CursorAdapter } from './providers/cursor.js';
 import { trackedTimeout, type TrackedTimer } from '../devLog.js';
 import type {
   AdapterCallbacks,
@@ -123,6 +125,7 @@ export class AgentSessionManager extends EventEmitter {
       codex: new CodexAdapter(),
       hermes: new HermesAdapter(permManager),
       grok: new GrokAdapter(permManager),
+      cursor: new CursorAdapter(),
     };
 
     // Authoritative plan→execute mode flip. When the user approves an
@@ -280,6 +283,16 @@ export class AgentSessionManager extends EventEmitter {
         if (hydrated.length > 0) session.messages = hydrated;
       } catch (err) {
         console.error('[agent] grok hydration failed for', session.id, err);
+      }
+    }
+    // Cursor hydration from on-disk transcript — the Cursor CLI is the source
+    // of truth (~/.cursor/projects/<enc-cwd>/agent-transcripts/<id>/<id>.jsonl).
+    if (session.provider === 'cursor' && session.agentSessionId) {
+      try {
+        const hydrated = parseCursorSession(session.agentSessionId, session.workingDir);
+        if (hydrated.length > 0) session.messages = hydrated;
+      } catch (err) {
+        console.error('[agent] cursor hydration failed for', session.id, err);
       }
     }
     return session;

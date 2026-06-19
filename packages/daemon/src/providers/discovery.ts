@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { BaselineModel } from './baselines.js';
+import { resolveCursorCli } from '../agent/providers/cursor-cli/index.js';
 
 // Discovery functions for each provider. Each returns the live model catalog
 // as DiscoveredModel-shaped objects, or throws on failure (the caller — the
@@ -257,6 +258,54 @@ export async function discoverGrok(env: NodeJS.ProcessEnv): Promise<DiscoveredMo
       };
     });
 
+  return models;
+}
+
+// === Cursor ================================================================
+//
+// The Cursor CLI prints its catalog as plain text via `cursor-agent models`
+// (no --json flag): one `id - Display Name` line per model, with the active
+// default tagged ` (current, default)`. We resolve the executable the same way
+// the adapter does (on Windows the PATH entry is a `.cmd` shim, so we spawn the
+// bundled node.exe + index.js directly). Effort is encoded in the model id, so
+// every row is `supportsEffort: false`. Permissive: any failure → `[]` so the
+// seeded CURSOR_BASELINE shows through. See the cursor-cli skill.
+
+export async function discoverCursor(env: NodeJS.ProcessEnv): Promise<DiscoveredModel[]> {
+  let cli: { command: string; prefixArgs: string[] };
+  try {
+    cli = resolveCursorCli();
+  } catch {
+    return [];
+  }
+  let stdout: string;
+  try {
+    stdout = await execStdout(cli.command, [...cli.prefixArgs, 'models'], env, 8000);
+  } catch {
+    return [];
+  }
+
+  const models: DiscoveredModel[] = [];
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // Skip the header and the trailing tip.
+    if (/^available models/i.test(trimmed) || /^tip:/i.test(trimmed)) continue;
+    const sep = trimmed.indexOf(' - ');
+    if (sep <= 0) continue;
+    const id = trimmed.slice(0, sep).trim();
+    let displayName = trimmed.slice(sep + 3).trim();
+    if (!id) continue;
+    // Pull out a ` (current, default)` / ` (default)` marker.
+    const isDefault = /\(current,?\s*default\)|\(default\)/i.test(displayName);
+    displayName = displayName.replace(/\s*\((?:current,?\s*)?default\)\s*$/i, '').trim();
+    models.push({
+      id,
+      displayName: displayName || id,
+      ...(isDefault ? { isDefault: true } : {}),
+      supportsEffort: false,
+    });
+  }
   return models;
 }
 

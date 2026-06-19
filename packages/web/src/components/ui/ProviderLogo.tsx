@@ -30,6 +30,9 @@ const PATHS: Record<AgentProvider, string> = {
   // xAI Grok — the X mark (simple-icons MIT).
   grok:
     'M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z',
+  // Cursor — isometric-cube silhouette placeholder (brand mark is a layered
+  // cube) until official artwork lands.
+  cursor: 'M12 1.5l9.526 5.5v11L12 23.5 2.474 18V7zM12 3.81L4.474 8.155v8.69L12 21.19l7.526-4.345v-8.69z',
 };
 
 const LABEL: Record<AgentProvider, string> = {
@@ -38,6 +41,7 @@ const LABEL: Record<AgentProvider, string> = {
   copilot: 'GitHub Copilot',
   hermes: 'Hermes Agent (Grok)',
   grok: 'Grok Build',
+  cursor: 'Cursor',
 };
 
 export function ProviderLogo({ provider, size = 16, color, title, style }: Props) {
