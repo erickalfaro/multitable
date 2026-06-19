@@ -1,12 +1,14 @@
 {
   "name": "multitable",
   "version": "0.9.0",
-  "description": "A terminal multiplexer for the agentic coding age",
+  "description": "The local-first AI agent framework and meta-harness for all your coding agents.",
   "keywords": [
-    "terminal",
-    "multiplexer",
     "agent",
+    "agent-framework",
+    "meta-harness",
     "claude",
+    "codex",
+    "grok",
     "coding",
     "cli"
   ],

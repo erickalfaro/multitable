@@ -13,14 +13,42 @@ on:
 permissions:
   contents: read
 
+# Cancel in-progress runs on the same ref when a newer commit lands.
+# Saves minutes when force-pushing fixups to a PR branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Fast PR check: single cell (ubuntu + node 22). Runs on every PR and on master.
+  # The full cross-platform matrix only runs on push to master (below).
   lint-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  # Full cross-platform matrix — only on push to master, not on PRs.
+  # Catches macOS/Windows/node-20-specific regressions post-merge without
+  # blocking PR velocity. Not a required check.
+  matrix-build:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         node-version: [20, 22]
+        exclude:
+          # ubuntu+22 is already covered by lint-and-build
+          - os: ubuntu-latest
+            node-version: 22
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,11 +56,11 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
-      - run: npm run lint
       - run: npm run build
 
   # Single rollup check that branch protection requires.
-  # Green iff every matrix cell of lint-and-build was green.
+  # Green iff lint-and-build was green. matrix-build only runs on master pushes
+  # and is intentionally NOT required for PR merges — that's the speed win.
   # Stable name across matrix changes — don't rename without updating the
   # branch protection rule on master.
   ci:
@@ -43,6 +71,6 @@ jobs:
       - name: Check matrix result
         run: |
           if [ "${{ needs.lint-and-build.result }}" != "success" ]; then
-            echo "lint-and-build matrix did not succeed: ${{ needs.lint-and-build.result }}"
+            echo "lint-and-build did not succeed: ${{ needs.lint-and-build.result }}"
             exit 1
           fi
