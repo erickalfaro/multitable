@@ -215,7 +215,7 @@ gh pr merge --squash --delete-branch           # after CI green
 ```
 
 - **Always squash-merge** (PR title → commit subject, body → commit body).
-- **One PR = one logical change.** Small fixes are fine; don't batch unrelated work.
+- Batching unrelated changes in one PR is fine — the user prefers velocity over strict per-PR atomicity.
 - After merge: delete the local branch + `git fetch --prune`.
 - **Releases:** bump versions in all four `package.json`, update the README badge, tag `vX.Y.Z` on master post-merge, `gh release create vX.Y.Z --target master --generate-notes`.
 - **Don't rename the `ci` job** without updating the branch-protection `required_status_checks` via `gh api` — the rule references it by name; a silent rename turns the gate off.

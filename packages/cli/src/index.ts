@@ -23,7 +23,9 @@ function getDaemonConfig(): { port: number; host: string } {
 
 program
   .name('mt')
-  .description('MultiTable CLI')
+  .description(
+    'MultiTable — the local-first AI agent framework and meta-harness for all your coding agents.',
+  )
   .version('0.1.0');
 
 program

@@ -4,6 +4,8 @@
 
 <h1 align="center">MultiTable</h1>
 
+<h3 align="center">The local-first AI agent framework and meta-harness for all your coding agents.</h3>
+
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Node ≥18" src="https://img.shields.io/badge/node-%E2%89%A518-brightgreen">
@@ -11,33 +13,49 @@
   <img alt="v0.9.0" src="https://img.shields.io/badge/version-0.9.0-blue">
 </p>
 
-## What it is
-
-MultiTable is a local web app that puts every coding agent and every project behind
-one interface. A Node.js daemon runs on your machine and drives Claude Code, OpenAI
-Codex, and Hermes (xAI Grok) through one unified contract — same chat UI, same
-permission prompts, same git diff, same notifications, regardless of which agent is
-answering. Copilot and Gemini are next.
-
-The point is context switching. Real work means jumping between several repos and,
-increasingly, between several agents — Claude on one task, Codex on another, a dev
-server and a shell open the whole time. MultiTable keeps all of it in one place: pick a
-project, pick an agent, send a prompt; switch to another project and another agent
-without losing any of the others. Past threads from the official Claude/Codex/Hermes
-CLIs are listed and resumable — MultiTable reads and writes the same on-disk state, so
-nothing is locked in.
-
-It serves a React UI at `http://localhost:3000`. Because it's a web app it runs the
-same on macOS, Linux, and Windows, and if you host the daemon on a machine you can
-reach (a home server, a VPS, Tailscale) you can drive your agents from a phone or
-tablet — including approving permission prompts remotely over Telegram.
-
-Everything runs locally. No accounts, no telemetry — the only network calls are your
-LLM provider's API and, if you opt in, Telegram.
+MultiTable is an open-source **AI agent framework** and meta-harness that gives you a
+common orchestration layer over Claude Code, OpenAI Codex, and Hermes (xAI Grok) — and
+the agents you'll add next: swap or combine harnesses without rewriting, approve risky
+actions from anywhere, and keep every project and every agent in one place. Copilot
+and Gemini are next.
 
 <p align="center">
   <img src="docs/images/demo.gif" alt="MultiTable" width="760">
 </p>
+
+---
+
+## Why MultiTable?
+
+MultiTable lets you:
+
+- **🔀 Switch between agents and projects without losing context.** Real work
+  means jumping between several repos and, increasingly, between several
+  agents — Claude on one task, Codex on another, a dev server and a shell
+  open the whole time. Pick a project, pick an agent, send a prompt; switch
+  to another project and another agent without losing any of the others.
+
+- **🤖 Drive every agent through one contract.** Same chat UI, same
+  permission prompts, same git diff, same notifications, regardless of which
+  agent is answering. Past threads from the official Claude / Codex / Hermes
+  CLIs are listed and resumable — MultiTable reads and writes the same
+  on-disk state, so nothing is locked in.
+
+- **📱 Work with agents from any device, including your phone.** The daemon
+  runs on your machine and serves a React UI at `http://localhost:3000`.
+  Host it somewhere you can reach (a home server, a VPS,
+  [Tailscale](https://tailscale.com)) and you can drive your agents from a
+  phone or tablet — including approving permission prompts remotely over
+  Telegram.
+
+- **🛡️ Approve risky actions from anywhere.** Permission prompts, MCP
+  elicitations, and alerts can be forwarded to a Telegram chat with
+  callback-button responses, edited in place when you resolve them.
+
+- **🏠 Everything runs locally.** No accounts, no telemetry — the only
+  network calls are your LLM provider's API and, if you opt in, Telegram.
+
+---
 
 ## Prior art
 
