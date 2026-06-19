@@ -54,7 +54,7 @@ Missing credentials fail the first turn, surfaced via `session:turn-error`.
 - `hermes.ts` + `hermes-acp/` — `HermesAdapter` over `hermes acp` (one child per project cwd). See the `hermes-grok` skill for the ACP wire contract.
 - `index.ts` — re-exports.
 
-`agent/manager.ts` is a thin, provider-agnostic orchestrator: session state machine, DB persistence, WS dispatch, a 5-min no-progress watchdog, capability advertisement. `sendTurn()` looks up the adapter and delegates.
+`agent/manager.ts` is a thin, provider-agnostic orchestrator: session state machine, DB persistence, WS dispatch, two-phase watchdog (hard-kill at 180s before any SDK byte arrives — for auth/network/CA diagnostics; warn-only every 90s after first byte — never kills live work), capability advertisement. `sendTurn()` looks up the adapter and delegates.
 
 **To add a provider:** drop a `<provider>.ts` adapter, register it in the manager's adapter map, (if it persists to disk) add a `transcripts/<provider>Parser.ts`, advertise `capabilities.usageLimits` and either wire `applyUsageLimits(...)` or document why the provider has no live feed (see `docs/reference/USAGE_LIMITS.md`), **and create the provider's `.claude/skills/<provider>-sdk/` skill folder** (mandatory — see "Provider skill folders" below; a provider integration is not complete without it). No surgery on the manager's turn logic. Deep per-provider semantics live in the `claude-agent-sdk` / `openai-codex-sdk` / `hermes-grok` skills and `docs/reference/THREE_PROVIDER_INTEGRATION_PLAN.md` — consult those before changing an adapter.
 

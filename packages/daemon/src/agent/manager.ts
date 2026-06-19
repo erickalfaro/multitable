@@ -35,7 +35,10 @@ import type {
 //   - Session state machine (state, currentTurn, lastActivity)
 //   - In-memory s.messages cache + DB writes (sessions, cost_records)
 //   - WS event surface (every emit() here is rebroadcast by server.ts)
-//   - Watchdog (5-min no-progress per turn)
+//   - Two-phase watchdog: hard-kill ONLY before the first SDK byte arrives
+//     (handshake — surfaces auth/network failures with a real error); after
+//     that, the watchdog only WARNS and never kills (long thinks / subagents
+//     are legitimate work and the user can always click Stop).
 //   - Cross-cutting side effects (auto-rename, option detection)
 //   - Capability advertisement (UI gating via session:capabilities)
 //
@@ -506,32 +509,48 @@ export class AgentSessionManager extends EventEmitter {
     s.messages.push(userMsg);
     this.emit('user-message', { sessionId, messages: [userMsg] });
 
-    // Watchdog: abort the turn if no SDK message arrives for this long. The
-    // legitimate quiet windows are (1) waiting on a permission prompt and
-    // (2) running a long tool. We re-arm whenever a permission is pending so
-    // the user can take their time without tripping the watchdog, and we
-    // budget this per quiet stretch otherwise. Logged via trackedTimeout so
-    // the DevLog panel surfaces every arm/re-arm.
-    const NO_PROGRESS_MS = 90_000;
-    // While a tool is actively executing the agent IS making progress even
-    // though we see no SDK traffic — Hermes' terminal tool emits zero
-    // incremental ACP output for the entire duration of a command, so a
-    // legit multi-minute build/test/install is indistinguishable from a
-    // silent hang at the NO_PROGRESS_MS boundary. Re-arm while a tool is in
-    // flight, but only up to this generous ceiling so a genuinely wedged
-    // tool (interactive prompt waiting on stdin, server that never exits)
-    // still eventually trips the watchdog instead of pinning the session
-    // in "Running…" forever.
+    // Two-phase watchdog. The whole point: never throw away live agent work
+    // the user can't recover. The user can always click Stop themselves.
+    //
+    //   Phase 1 — HANDSHAKE (before any SDK message has arrived):
+    //     If the daemon sees zero bytes from the SDK/RPC after HANDSHAKE_MS,
+    //     hard-kill the turn. This is the auth/network/CA diagnostic path —
+    //     a bad ANTHROPIC_API_KEY, missing NODE_EXTRA_CA_CERTS, dead DNS,
+    //     unreachable codex app-server, etc. all manifest as "iterator opens
+    //     and silently never yields." Without this kill the session pins on
+    //     "Running…" forever and the user has no signal that creds are wrong.
+    //
+    //   Phase 2 — STEADY STATE (after the first SDK message):
+    //     The connection works. From here on the watchdog NEVER aborts. A
+    //     long extended-thinking turn, a subagent thinking after its last
+    //     tool returned, or a Hermes terminal tool that emits nothing mid-
+    //     stream are all legitimate work, and indistinguishable from a hang
+    //     at any timer boundary we pick. Instead we emit a single soft
+    //     warning alert once the quiet window stretches past WARN_MS, so
+    //     the user knows the watchdog noticed — and can choose to Stop.
+    //
+    // Re-arm conditions skip the kill even in phase 1: permission/elicitation
+    // pending (legitimately waiting on the human) and currentTool in flight
+    // (a long-running tool started recently — TOOL_GRACE_MS ceiling). Note
+    // tool re-arm only protects the parent's currentTool; a subagent's tool
+    // calls fire PreToolUse/PostToolUse on the parent too, so by the time a
+    // subagent goes quiet mid-think, currentTool is already null. That's
+    // exactly why phase 2 is warn-only.
+    const HANDSHAKE_MS = 180_000;
+    const WARN_MS = 90_000;
     const TOOL_GRACE_MS = 10 * 60_000;
     let stuckTimer: TrackedTimer | null = null;
     let abortedDueToStuck = false;
     let sawAnyMessage = false;
+    let warnedThisQuietStretch = false;
     const armStuckTimer = () => {
       if (stuckTimer) stuckTimer.cancel();
+      const handshake = !sawAnyMessage;
+      const ms = handshake ? HANDSHAKE_MS : WARN_MS;
       stuckTimer = trackedTimeout(
         () => {
-          // A tool that's been running for less than TOOL_GRACE_MS is a
-          // legitimate quiet window, not a hang (see TOOL_GRACE_MS above).
+          // Re-arm while the agent is legitimately blocked on the human or
+          // on a tool the parent knows is running.
           const toolInFlight =
             s.currentTool != null &&
             s.currentToolStartedAt != null &&
@@ -544,16 +563,35 @@ export class AgentSessionManager extends EventEmitter {
             armStuckTimer();
             return;
           }
-          abortedDueToStuck = true;
-          try {
-            ctrl.abort();
-          } catch {
-            /* ignore */
+          if (handshake) {
+            // Phase 1 — hard kill so the catch block can surface the
+            // "check NODE_EXTRA_CA_CERTS / credentials / network" diagnostic.
+            abortedDueToStuck = true;
+            try {
+              ctrl.abort();
+            } catch {
+              /* ignore */
+            }
+            return;
           }
+          // Phase 2 — warn once per quiet stretch and re-arm. Stays alive
+          // until the SDK speaks again (which resets warnedThisQuietStretch
+          // via the callback proxy below) or the user clicks Stop.
+          if (!warnedThisQuietStretch) {
+            warnedThisQuietStretch = true;
+            this.emitAlert({
+              sessionId,
+              category: 'turn',
+              severity: 'warning',
+              title: `${s.provider} quiet for ${WARN_MS / 1000}s`,
+              body: 'Still waiting — the agent may be thinking, in a subagent, or stuck. Click Stop to cancel.',
+            });
+          }
+          armStuckTimer();
         },
         {
-          label: 'turn watchdog',
-          ms: NO_PROGRESS_MS,
+          label: handshake ? 'turn handshake watchdog' : 'turn quiet warning',
+          ms,
           category: 'watchdog',
           detail: `session ${sessionId.slice(0, 8)}`,
           logFire: true,
@@ -562,7 +600,10 @@ export class AgentSessionManager extends EventEmitter {
     };
 
     // Wrap adapter callbacks to also bump activity / re-arm the stuck timer
-    // on every emit, so the watchdog tracks "real" SDK progress.
+    // on every emit, so the watchdog tracks "real" SDK progress. Each SDK
+    // message both clears `warnedThisQuietStretch` (so the next quiet stretch
+    // can warn again) and re-arms the timer (so a warning fires only after
+    // WARN_MS of true silence, not on first byte after a long quiet).
     const baseCb = this.makeAdapterCallbacks(sessionId);
     const cb: AdapterCallbacks = new Proxy(baseCb, {
       get: (target, prop, receiver) => {
@@ -570,6 +611,7 @@ export class AgentSessionManager extends EventEmitter {
         if (typeof fn !== 'function') return fn;
         return (...args: unknown[]) => {
           sawAnyMessage = true;
+          warnedThisQuietStretch = false;
           armStuckTimer();
           return (fn as (...a: unknown[]) => unknown).apply(target, args);
         };
@@ -580,11 +622,12 @@ export class AgentSessionManager extends EventEmitter {
     try {
       await adapter.runTurn(s, text, ctrl, cb);
       if (abortedDueToStuck) {
+        // Handshake watchdog only — see HANDSHAKE_MS comment above. Phase 2
+        // never aborts, so reaching here always means we saw zero bytes from
+        // the SDK/RPC and want to surface the auth/network diagnostic.
         throw new Error(
-          sawAnyMessage
-            ? `${s.provider} went silent for ${NO_PROGRESS_MS / 1000}s mid-turn — aborted.`
-            : `No response from ${s.provider} in ${NO_PROGRESS_MS / 1000}s. ` +
-              `Check NODE_EXTRA_CA_CERTS, credentials, or network connection.`,
+          `No response from ${s.provider} in ${HANDSHAKE_MS / 1000}s. ` +
+            `Check NODE_EXTRA_CA_CERTS, credentials, or network connection.`,
         );
       }
     } catch (err: unknown) {
@@ -622,10 +665,13 @@ export class AgentSessionManager extends EventEmitter {
         // No alert — the user *initiated* the cancel; toasting them about it
         // would be noise. The composer can react to session:idle if needed.
       } else {
-        // Real error path — watchdog or SDK/network/auth/etc.
+        // Real error path — handshake watchdog or SDK/network/auth/etc.
+        // Watchdog throws its own self-explanatory message above; for every
+        // other error path, surface the underlying error verbatim so the
+        // user always sees what actually went wrong.
         const message =
           isWatchdog && !new RegExp(s.provider, 'i').test(baseMessage)
-            ? `No response from ${s.provider} in ${NO_PROGRESS_MS / 1000}s. ` +
+            ? `No response from ${s.provider} in ${HANDSHAKE_MS / 1000}s. ` +
               `Check NODE_EXTRA_CA_CERTS, credentials, or network. (${baseMessage})`
             : baseMessage;
 

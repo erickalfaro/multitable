@@ -106,6 +106,13 @@ export interface ResultInfo {
     cacheReadInputTokens: number;
   };
   text: string | null;
+  // SDK's `errors: string[]` field on SDKResultError. Empty for SDKResultSuccess.
+  // Captured so the adapter can surface model-side failures verbatim to the
+  // user instead of silently dropping them.
+  errors: string[];
+  // True for any non-`success` result subtype (`error_during_execution`,
+  // `error_max_turns`, `error_max_budget_usd`, `error_max_structured_output_retries`).
+  isError: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,11 +362,19 @@ export function sdkResult(msg: any): ResultInfo | null {
     cacheReadInputTokens: toNum(u.cacheReadInputTokens ?? u.cache_read_input_tokens),
   };
 
+  const subtype = typeof msg.subtype === 'string' ? msg.subtype : '';
+  const rawErrors = Array.isArray(msg.errors) ? msg.errors : [];
+  const errors = rawErrors
+    .map((e: unknown) => (typeof e === 'string' ? e : ''))
+    .filter((e: string) => e.length > 0);
+
   return {
-    subtype: typeof msg.subtype === 'string' ? msg.subtype : '',
+    subtype,
     claudeSessionId: typeof msg.session_id === 'string' ? msg.session_id : '',
     totalCostUsd: toNum(msg.total_cost_usd),
     usage,
     text: typeof msg.result === 'string' ? msg.result : null,
+    errors,
+    isError: subtype !== '' && subtype !== 'success',
   };
 }

@@ -157,6 +157,76 @@ If you're touching usage limits, read [`reference/usage-limits.md`](reference/us
 
 ---
 
+## 10. JSONL resume 400: `diagnostics.previous_message_id`
+
+**Symptom:** the next turn after resuming a Claude session — particularly one started in the bare TUI — fails with:
+
+```
+API Error: 400 {"type":"error","error":{"type":"invalid_request_error",
+"message":"diagnostics.previous_message_id: must be the `id` from a prior
+/v1/messages response (starts with `msg_`)"}}
+```
+
+Every retry returns the same 400. The session is permanently 400-poisoned for the lifetime of that JSONL tail.
+
+**Root cause:** the bundled `claude` CLI (the binary at `node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`) ships an experimental **prompt-cache-diagnostics** feature. When it's active, the CLI request builder ends with:
+
+```js
+...r && O && z && U && !z$ ? { diagnostics: { previous_message_id: z } } : {}
+```
+
+where `z` comes from a backwards walk over the in-memory message list looking for the first `type==='assistant' && requestId` row, returning that row's `message.id` — with **no validation that the id matches `^msg_`**. When the JSONL tail has assistant rows whose `message.id` is a UUID (locally-generated placeholders from a 529 retry storm; harness-emitted pseudo-system notices like the oversized-image warning), the CLI ships the UUID as `previous_message_id` and the API rejects it.
+
+**Two confirmed triggers** (both upstream, both unfixed as of CC 2.1.167):
+
+- [anthropics/claude-code#58427](https://github.com/anthropics/claude-code/issues/58427) — synthetic assistant tail from `<synthetic>` placeholders after `/continue` past a usage-limit/network error. Also reproduces mid-session when the harness emits image-dimension-limit notices as pseudo-assistant rows.
+- [anthropics/claude-code#59520](https://github.com/anthropics/claude-code/issues/59520) — pointer advances optimistically before `message_stop`; transient 529/429 leaves it referencing a turn the server never minted a `msg_…` for.
+
+**The gate chain (load-bearing — read before changing the workaround):**
+
+```
+diagnostics.previous_message_id is sent  IFF
+  Of5() returns true
+    └─ k$("tengu_prompt_cache_diagnostics", false) returns true
+        └─ vHH() returns true  ← if false, k$ short-circuits to the default (false)
+            └─ !rU()
+                └─ rU() returns true IFF
+                     - CLAUDE_CODE_USE_BEDROCK is set, OR
+                     - CLAUDE_CODE_USE_VERTEX is set, OR
+                     - CLAUDE_CODE_USE_FOUNDRY is set, OR
+                     - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set
+```
+
+`tengu_prompt_cache_diagnostics` is a GrowthBook A/B flag with default `false`. Some accounts/sessions get rolled into the experiment and start sending the field; mine did, yours might.
+
+**Fix pattern (we have):** [`agent/providers/claude.ts`](../../../packages/daemon/src/agent/providers/claude.ts) sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` at module load (only if the env doesn't already define it — operator override wins). That collapses `vHH()` to `false`, makes the flag-fetcher short-circuit to its default, and the `diagnostics` block is **never built** for any request. No JSONL mutation, no truncation, no data loss, works for every session including already-corrupted ones.
+
+**Side effects of the env var** (Anthropic-documented, all acceptable here):
+
+| Effect | Impact on MultiTable |
+|---|---|
+| Disables GrowthBook A/B feature flag fetching | We don't depend on any experimental feature flag. |
+| Disables `/feedback` TUI command | Not surfaced in MultiTable's composer. |
+| Disables internal cache-hit-rate telemetry | We track our own usage via the `result` message. |
+| **Does NOT** disable prompt caching | Caching is the `enablePromptCaching` SDK option — a separate axis. |
+| **Does NOT** disable token / cost tracking | Those ride the `result` payload, not the diagnostics path. |
+
+**Operator override:** if a future operator needs the diagnostics feature on (Anthropic engineer debugging cache behavior, etc.), set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=` (empty string also works — the env presence check sees it absent). The module-load shim only sets the var when it's not already in the env, so any preexisting value wins.
+
+**When to revisit this fix:**
+- After every `@anthropic-ai/claude-agent-sdk` bump. Re-grep the bundled CLI binary for `previous_message_id`. If the string disappears, the CLI started validating (the bug got fixed). The env shim becomes dead code; remove it and add a one-line note to the SKILL.md changelog.
+- If a new bug-shape emerges that this env var doesn't cover (e.g. some other diagnostics field, or a separate corruption path), prefer adding a second env shim or an SDK option over reintroducing JSONL mutation.
+- If a real prompt-caching debugging session requires diagnostics ON, set the env var to empty in that operator's shell — don't remove the shim.
+
+**The JSONL-truncation approach we previously shipped:** rejected. Trade-offs were worse than the env-var path:
+- It mutated user data (backup files notwithstanding).
+- It lost the user's tail prompts (even if those prompts were unrecoverable in the corrupted state, the bare TUI in a healthy account never even tries to send the diagnostics field, so the loss was avoidable).
+- It was reactive (per-turn read of the JSONL) rather than preventive.
+
+If you're thinking about reintroducing JSONL surgery for ANY upstream bug, look for an env var first — the CLI's auth/telemetry/feature surface has knobs for almost everything.
+
+---
+
 ## When in doubt
 
 - Read [`multitable/architecture.md`](multitable/architecture.md) to find the right file.

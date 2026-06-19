@@ -20,6 +20,7 @@ This skill exists because MultiTable's daemon-side SDK integration has bitten us
 | Intercept `AskUserQuestion` or any other interactive prompt | [`reference/canusetool-and-elicitation.md`](reference/canusetool-and-elicitation.md) + [`multitable/permission-and-elicitation-wiring.md`](multitable/permission-and-elicitation-wiring.md) |
 | Add an SDK lifecycle hook (e.g. `Notification`, `PreCompact`) | [`reference/hooks.md`](reference/hooks.md) |
 | Resume / fork / list sessions | [`reference/sessions.md`](reference/sessions.md) |
+| Diagnose a `previous_message_id` 400 on resume | [`pitfalls.md` §10](pitfalls.md) (env-var fix at top of [`agent/providers/claude.ts`](../../../packages/daemon/src/agent/providers/claude.ts)) |
 | Stop a turn mid-stream, or fix abort regressions | [`reference/abort-and-stop.md`](reference/abort-and-stop.md) |
 | Add a custom MCP tool | [`reference/custom-tools-mcp.md`](reference/custom-tools-mcp.md) |
 | Use subagents | [`reference/subagents.md`](reference/subagents.md) |
