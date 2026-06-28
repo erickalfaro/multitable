@@ -354,6 +354,15 @@ export class AgentSessionManager extends EventEmitter {
   }
 
   /**
+   * Get the capability bag for a provider by name, without needing a session
+   * to exist yet. Used by the AddAgentModal so the creation-time mode picker
+   * can render the right options and gate creation-bound providers.
+   */
+  getProviderCapabilities(provider: string): ProviderCapabilities | null {
+    return this.adapters[provider]?.capabilities ?? null;
+  }
+
+  /**
    * Update the operating mode for a session. The change takes effect on the
    * next turn (modes drive provider option assembly inside runTurn). Emits
    * `mode-changed` so the UI can refresh the badge.
@@ -367,6 +376,15 @@ export class AgentSessionManager extends EventEmitter {
       const supported = adapter.capabilities.modes.map((o) => o.value).join(', ');
       throw new Error(
         `Provider ${s.provider} does not support mode '${mode}'. Supported: ${supported}`,
+      );
+    }
+    // Providers whose mode is creation-bound (Grok: session/load rehydrates the
+    // agent the session was created with) reject post-creation flips. The UI's
+    // ModeBadge renders these as read-only, but the API still validates so a
+    // raw curl can't bypass.
+    if (adapter && adapter.capabilities.modeSwitchScope === 'creation') {
+      throw new Error(
+        `Provider ${s.provider} mode is set at session creation and cannot be changed afterward.`,
       );
     }
     s.mode = mode;
@@ -386,6 +404,17 @@ export class AgentSessionManager extends EventEmitter {
       console.error('[agent] failed to persist mode:', err);
     }
     this.emit('mode-changed', { sessionId, mode });
+
+    // If a turn is currently in flight and the adapter supports live mid-turn
+    // mode flips (Claude via streaming-input Query.setPermissionMode), apply
+    // the change to the running SDK so the user doesn't have to wait for the
+    // next turn. Fire-and-forget — `s.mode` is already updated, so the next
+    // turn picks up the new mode regardless of whether the live apply lands.
+    if (s.state === 'running' && s.currentTurn && adapter?.applyModeChangeLive) {
+      adapter.applyModeChangeLive(s, mode).catch((err) => {
+        console.error('[agent] live mode change failed:', err);
+      });
+    }
   }
 
   /**
@@ -469,10 +498,42 @@ export class AgentSessionManager extends EventEmitter {
   async sendTurn({ sessionId, text }: SendTurnInput): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s) throw new Error(`unknown session ${sessionId}`);
-    if (s.currentTurn) throw new Error('turn already in flight');
 
     const adapter = this.adapters[s.provider];
     if (!adapter) throw new Error(`no adapter registered for provider '${s.provider}'`);
+
+    // Mid-turn injection ("send while thinking"). If a turn is already running
+    // AND the adapter advertises midTurnInput AND has an enqueueMessage
+    // implementation, push the new message onto the SDK's input stream so the
+    // agent receives it without waiting for the current turn to complete.
+    // Matches Claude Code TUI's behavior. For providers without this capability,
+    // fall through to the original guard (caller falls back to client-side
+    // queue).
+    //
+    // Order matters: do the SDK call FIRST, then emit the optimistic
+    // user-message only on success. Emitting first then rolling back on a
+    // throw would leave a phantom user message in the UI (the WS event has
+    // already been broadcast and the web store doesn't observe rollbacks).
+    if (s.currentTurn) {
+      if (adapter.capabilities.midTurnInput && adapter.enqueueMessage) {
+        const ok = await adapter.enqueueMessage(s, text);
+        if (!ok) throw new Error('adapter rejected mid-turn enqueue');
+        const injectedAt = Date.now();
+        const injectedId = `inject-${injectedAt}-${Math.random().toString(36).slice(2, 8)}`;
+        s.userMessages.push(text);
+        s.lastActivity = injectedAt;
+        const userMsg: import('../transcripts/parser.js').Message = {
+          id: injectedId,
+          ts: injectedAt,
+          kind: 'user',
+          text,
+        };
+        s.messages.push(userMsg);
+        this.emit('user-message', { sessionId, messages: [userMsg] });
+        return;
+      }
+      throw new Error('turn already in flight');
+    }
 
     const ctrl = new AbortController();
     const turnStartedAt = Date.now();

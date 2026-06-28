@@ -186,6 +186,16 @@ export interface ProviderCapabilities {
   streamingDeltaSemantics: 'additive' | 'cumulative';
   // When the model id can be changed.
   modelSwitchScope: 'per-turn' | 'per-thread' | 'per-session';
+  // When the operating mode can be changed.
+  //  'live'     — flip applies to the in-flight turn (Claude via Query.setPermissionMode).
+  //  'per-turn' — flip takes effect on the NEXT turn; current turn unaffected
+  //               (Cursor: fresh spawn per turn; Codex: drops cached thread —
+  //               surface a warning before applying; Hermes: re-keys child).
+  //  'creation' — mode is bound at session creation and the post-creation
+  //               selector is read-only (Grok: `session/load` rehydrates the
+  //               agent the session was created with — selector flips don't
+  //               reliably change capability; user picks at creation only).
+  modeSwitchScope: 'live' | 'per-turn' | 'creation';
   // Native modes the adapter accepts, with display metadata. The `value` of
   // each entry is the literal string the SDK takes (no MultiTable translation
   // layer); the UI renders them verbatim and the API validates against this
@@ -247,6 +257,27 @@ export interface ProviderAdapter {
 
   // Optional: clean up per-session adapter caches. Called from /reset.
   reset?(s: AgentSession): void;
+
+  // Optional: apply a mode change to an in-flight turn. Only called by the
+  // manager when `s.state === 'running'` and `s.currentTurn` is non-null.
+  // Resolve `true` if the change was applied live to the running turn; `false`
+  // (or undefined / not implemented) means the manager should fall back to the
+  // per-turn pickup path (reset adapter cache so the NEXT turn sees the new
+  // mode). Claude implements this via `Query.setPermissionMode()` against the
+  // captured Query handle (requires streaming-input mode). Codex/Hermes wire
+  // protocols don't support mid-turn mode change today, so they leave it
+  // unimplemented.
+  applyModeChangeLive?(s: AgentSession, mode: string): Promise<boolean>;
+
+  // Optional: inject a user message into a turn that is currently in flight.
+  // Used by manager.sendTurn to deliver "send while thinking" without ending
+  // the current turn. Resolve `true` if the message was injected live; `false`
+  // (or undefined / not implemented) tells the caller to fall back to the
+  // client-side queue. Claude implements via `Query.streamInput()` on the
+  // captured streaming-input Query handle. Adapters whose wire protocol can't
+  // accept mid-turn input (`capabilities.midTurnInput === false`) leave this
+  // unimplemented.
+  enqueueMessage?(s: AgentSession, text: string): Promise<boolean>;
 
   // Optional: tear down per-session resources entirely. Called from session
   // delete. For Copilot this will eventually call session.disconnect().

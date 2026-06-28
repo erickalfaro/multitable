@@ -127,6 +127,24 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
     { value: currentMode, label: currentMode, description: '' };
   const showModes = supportedModes.length > 1;
 
+  // Mode-flip gating, derived from the adapter's modeSwitchScope:
+  //   'live'     — always enabled (Claude).
+  //   'per-turn' — disabled mid-turn; flipping mid-turn would silently defer to
+  //                the next turn, which is the bug we're papering over.
+  //   'creation' — locked at session creation (Grok); selector is read-only.
+  // The daemon validates these too, so a stray API call still returns 400.
+  const modeSwitchScope: 'live' | 'per-turn' | 'creation' =
+    caps?.modeSwitchScope ?? 'per-turn';
+  const isRunning = session.state === 'running';
+  const modeLocked = modeSwitchScope === 'creation';
+  const modeBlockedDuringTurn = modeSwitchScope === 'per-turn' && isRunning;
+  const modeDisabled = modeLocked || modeBlockedDuringTurn;
+  const modeDisabledReason = modeLocked
+    ? `${session.agentProvider === 'grok' ? 'Grok' : 'Provider'} mode is set at session creation. Pick a different mode by creating a new agent.`
+    : modeBlockedDuringTurn
+      ? 'Wait for the current turn to finish before changing mode.'
+      : null;
+
   // The trigger chip reflects the active mode's risk tone so the chip itself
   // reads as its assigned color — matching the dot + rail on the dropdown rows.
   const triggerTone = modeOptionTone(current);
@@ -136,8 +154,28 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
   if (!showModes && !effortEnabled) return null;
 
   const setMode = async (mode: string) => {
+    if (mode === currentMode) {
+      setOpen(false);
+      return;
+    }
+    if (modeDisabled) {
+      if (modeDisabledReason) toast(modeDisabledReason, { icon: '🔒' });
+      setOpen(false);
+      return;
+    }
+    // Codex flips drop Codex's cached thread — surface a confirm so the user
+    // knows their next message starts a fresh Codex thread. Our in-memory
+    // conversation is preserved but Codex's own thread state resets.
+    if (session.agentProvider === 'codex') {
+      const ok = window.confirm(
+        `Changing Codex mode will reset Codex's thread on the next message.\n\nYour conversation history in MultiTable is preserved, but Codex starts a fresh thread under the new mode.\n\nSwitch to "${mode}"?`,
+      );
+      if (!ok) {
+        setOpen(false);
+        return;
+      }
+    }
     setOpen(false);
-    if (mode === currentMode) return;
     upsertSession({ ...session, mode });
     try {
       await api.sessions.setMode(session.id, mode);
@@ -190,7 +228,11 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
         onClick={toggleOpen}
         onMouseEnter={() => setTriggerHover(true)}
         onMouseLeave={() => setTriggerHover(false)}
-        title={`${current.description} — click to change`}
+        title={
+          modeDisabledReason
+            ? `${current.description} — ${modeDisabledReason}`
+            : `${current.description} — click to change`
+        }
         aria-haspopup="menu"
         aria-expanded={open}
         style={{
@@ -217,6 +259,11 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
         }}
       >
         <span style={{ lineHeight: 1 }}>{current.label}</span>
+        {modeLocked && (
+          <span aria-hidden style={{ fontSize: 8, marginLeft: 1, opacity: 0.85 }}>
+            🔒
+          </span>
+        )}
       </button>
       {open && (
         <div
@@ -284,15 +331,35 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
                   Esc to close
                 </span>
               </div>
+              {modeDisabledReason && (
+                <div
+                  style={{
+                    margin: '0 8px 4px',
+                    padding: '5px 8px',
+                    fontSize: 10,
+                    color: 'var(--text-muted)',
+                    background: 'var(--bg-sidebar)',
+                    border: '1px dashed var(--border)',
+                    borderRadius: 'var(--radius-snug)',
+                    lineHeight: 1.4,
+                  }}
+                  role="note"
+                >
+                  🔒 {modeDisabledReason}
+                </div>
+              )}
               {visibleOptions.map((opt, idx) => {
                 const isCurrent = opt.value === currentMode;
-                const isHover = hoverIdx === idx;
+                const isHover = hoverIdx === idx && !modeDisabled;
+                const rowDisabled = modeDisabled && !isCurrent;
                 return (
                   <button
                     key={opt.value}
                     type="button"
                     role="menuitemradio"
                     aria-checked={isCurrent}
+                    aria-disabled={rowDisabled}
+                    title={rowDisabled ? modeDisabledReason ?? undefined : opt.description}
                     onClick={() => setMode(opt.value)}
                     onMouseEnter={() => setHoverIdx(idx)}
                     onMouseLeave={() => setHoverIdx(null)}
@@ -310,7 +377,8 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
                           : 'transparent',
                       border: 'none',
                       textAlign: 'left',
-                      cursor: 'pointer',
+                      cursor: rowDisabled ? 'not-allowed' : 'pointer',
+                      opacity: rowDisabled ? 0.45 : 1,
                       width: '100%',
                       fontFamily: 'inherit',
                       transition: 'background-color var(--dur-fast) var(--ease-out)',

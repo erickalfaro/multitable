@@ -158,6 +158,12 @@ export class GrokAdapter implements ProviderAdapter {
     // ACP chunk semantics are additive (each chunk is a piece).
     streamingDeltaSemantics: 'additive',
     modelSwitchScope: 'per-session',
+    // Grok mode is creation-bound: `session/load` rehydrates the agent the
+    // session was created with, so flipping the mode selector post-creation
+    // doesn't reliably change capability (plan↔editable is silently no-op'd at
+    // the wire). Plan→execute within a single session is handled by Grok's
+    // native exit_plan_mode flow, not the selector. See reference/modes.md.
+    modeSwitchScope: 'creation',
     // Mode is a SPAWN-TIME lever on `grok agent` (no per-session ACP set-mode;
     // session/new ignores permissionMode — verified 0.2.2). Only these 3 map to
     // distinct, real grok-agent flags (see buildAgentArgs); the other Claude

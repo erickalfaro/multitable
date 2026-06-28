@@ -8,7 +8,13 @@ import { useTranscripts, type TranscriptSession } from '../../hooks/useTranscrip
 import { useCodexTranscripts } from '../../hooks/useCodexTranscripts';
 import { resumePastSession, resumePastCodexThread, selectPinnedSession } from '../../lib/pastAgents';
 import { relativeTime } from '../../lib/relativeTime';
-import type { AgentProvider, DiscoveredModel } from '../../lib/types';
+import type {
+  AgentProvider,
+  DiscoveredModel,
+  ProviderCapabilities,
+  ModeOption,
+} from '../../lib/types';
+import { modeOptionTone, modeToneColor } from '../../lib/modeTone';
 import { cleanModelLabel } from '../../lib/modelName';
 
 // Modal body geometry. The body is given a fixed total height so the dialog
@@ -20,6 +26,9 @@ import { cleanModelLabel } from '../../lib/modelName';
 const BODY_HEIGHT = 620;
 const PRESETS_HEIGHT = 118;
 const MODEL_SECTION_HEIGHT = 120;
+// Mode picker sits between the model picker and past-sessions. Single row of
+// small chips + a label; only shown when the provider declares > 1 mode.
+const MODE_SECTION_HEIGHT = 58;
 const SECTION_GAP = 14;
 
 type AgentProviderOption = 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | undefined;
@@ -77,6 +86,14 @@ export function AddAgentModal({ onClose, projectId }: Props) {
   const [agentProvider, setAgentProvider] = useState<AgentProviderOption>('claude');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  // Provider capabilities for the currently-selected provider. Lazily fetched
+  // when the provider changes; kept in a small in-memory cache so re-selecting
+  // a provider doesn't re-hit the network. We need this BEFORE creation so the
+  // mode picker can render the right options (and lock the row for Grok).
+  const [capsCache, setCapsCache] = useState<
+    Partial<Record<AgentProvider, ProviderCapabilities>>
+  >({});
+  const [selectedMode, setSelectedMode] = useState<string | null>(null);
   const [selectedPastSession, setSelectedPastSession] = useState<{
     provider: AgentProvider;
     sessionId: string;
@@ -160,6 +177,46 @@ export function AddAgentModal({ onClose, projectId }: Props) {
     setSelectedModel(def?.id ?? null);
   }, [agentProvider, modelsForProvider, selectedPastSession]);
 
+  // Fetch capabilities for the active provider (cached). Only fires when we
+  // haven't seen this provider in this modal session — provider capabilities
+  // don't change at runtime, so once-per-modal is plenty.
+  useEffect(() => {
+    if (!agentProvider) return;
+    if (capsCache[agentProvider]) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await api.providers.capabilities(agentProvider);
+        if (cancelled) return;
+        setCapsCache((prev) => ({ ...prev, [agentProvider]: res.capabilities }));
+      } catch {
+        /* non-fatal — modal still works, mode picker just won't render */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentProvider, capsCache]);
+
+  // Reset the selected mode whenever provider changes; default-select the
+  // adapter's first mode (the seed) once capabilities arrive.
+  const activeCaps = agentProvider ? capsCache[agentProvider] ?? null : null;
+  useEffect(() => {
+    if (!activeCaps || activeCaps.modes.length === 0) {
+      setSelectedMode(null);
+      return;
+    }
+    // Default to the per-provider seed (matches db/store.ts initialMode).
+    const seed =
+      agentProvider === 'codex'
+        ? 'workspace-write'
+        : agentProvider === 'cursor'
+          ? 'force'
+          : 'default';
+    const fromSeed = activeCaps.modes.find((m) => m.value === seed);
+    setSelectedMode((fromSeed ?? activeCaps.modes[0]).value);
+  }, [activeCaps, agentProvider]);
+
   const handleSubmit = async () => {
     if (loading) return;
     setLoading(true);
@@ -185,6 +242,7 @@ export function AddAgentModal({ onClose, projectId }: Props) {
         command: selectedPreset.command,
         ...(agentProvider ? { agentProvider } : {}),
         model: selectedModel,
+        ...(selectedMode ? { mode: selectedMode } : {}),
       });
       store.upsertSession(session);
       store.setSelectedProcess(session.id);
@@ -215,8 +273,13 @@ export function AddAgentModal({ onClose, projectId }: Props) {
       : 'Start';
 
   const showModelSection = !selectedPastSession && !!agentProvider;
+  const showModeSection =
+    !selectedPastSession && !!activeCaps && activeCaps.modes.length > 1;
   const pastSectionHeight =
-    BODY_HEIGHT - PRESETS_HEIGHT - (showModelSection ? MODEL_SECTION_HEIGHT + SECTION_GAP : 0);
+    BODY_HEIGHT -
+    PRESETS_HEIGHT -
+    (showModelSection ? MODEL_SECTION_HEIGHT + SECTION_GAP : 0) -
+    (showModeSection ? MODE_SECTION_HEIGHT + SECTION_GAP : 0);
 
   return (
     <Modal
@@ -286,6 +349,17 @@ export function AddAgentModal({ onClose, projectId }: Props) {
                   setRefreshingProvider(undefined);
                 }
               }}
+            />
+          </div>
+        )}
+
+        {showModeSection && activeCaps && (
+          <div style={{ height: MODE_SECTION_HEIGHT, flexShrink: 0 }}>
+            <ModePicker
+              modes={activeCaps.modes}
+              scope={activeCaps.modeSwitchScope}
+              selected={selectedMode}
+              onSelect={setSelectedMode}
             />
           </div>
         )}
@@ -929,6 +1003,88 @@ function PastSessionsMerged({
               </div>
             );
           })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Mode picker ─────────────────────────────────────────────────────────────
+//
+// Creation-time mode picker. Always shown when the active provider declares
+// more than one mode. For 'creation'-scope providers (Grok), this is the user's
+// only chance to pick — the post-creation ModeBadge will be read-only. Other
+// providers can still flip later, but starting from the right mode beats
+// flipping right after creation.
+
+interface ModePickerProps {
+  modes: ModeOption[];
+  scope: 'live' | 'per-turn' | 'creation';
+  selected: string | null;
+  onSelect: (mode: string) => void;
+}
+
+function ModePicker({ modes, scope, selected, onSelect }: ModePickerProps) {
+  const isCreationOnly = scope === 'creation';
+  const label = isCreationOnly ? 'Mode · locked after creation' : 'Mode';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          color: isCreationOnly ? 'var(--accent-amber)' : 'var(--text-faint)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.18em',
+          marginBottom: 8,
+          flexShrink: 0,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        className="mt-scroll"
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          flexShrink: 0,
+          overflowX: 'auto',
+          paddingBottom: 2,
+        }}
+      >
+        {modes.map((m) => {
+          const isSelected = m.value === selected;
+          const tone = modeOptionTone(m);
+          const toneColor = modeToneColor(tone);
+          return (
+            <button
+              key={m.value}
+              type="button"
+              onClick={() => onSelect(m.value)}
+              title={m.description}
+              style={{
+                padding: '4px 10px',
+                height: 24,
+                borderRadius: 'var(--radius-snug)',
+                border: `1px solid ${isSelected ? toneColor : 'var(--border)'}`,
+                background: isSelected
+                  ? `color-mix(in srgb, ${toneColor} 16%, var(--bg-elevated))`
+                  : 'var(--bg-sidebar)',
+                color: isSelected ? toneColor : 'var(--text-secondary)',
+                fontFamily: 'inherit',
+                fontSize: 11,
+                fontWeight: isSelected ? 600 : 500,
+                letterSpacing: '0.02em',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                transition:
+                  'border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+              }}
+            >
+              {m.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

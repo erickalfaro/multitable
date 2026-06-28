@@ -57,6 +57,12 @@ export interface ProviderCapabilities {
   hooks: 'rich' | 'six' | 'none';
   streamingDeltaSemantics: 'additive' | 'cumulative';
   modelSwitchScope: 'per-turn' | 'per-thread' | 'per-session';
+  // When the operating mode can be changed.
+  //  'live'     — flip applies to the in-flight turn (Claude).
+  //  'per-turn' — flip takes effect on the NEXT turn (Codex/Cursor/Hermes).
+  //  'creation' — bound at session creation; post-creation selector is locked
+  //               (Grok). Pick at creation in AddAgentModal.
+  modeSwitchScope: 'live' | 'per-turn' | 'creation';
   modes: ModeOption[];
   // Cross-provider reasoning-effort toggle. 'native' = adapter passes the
   // value through to the SDK; 'unsupported' = UI renders the badge disabled.

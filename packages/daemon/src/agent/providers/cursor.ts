@@ -62,6 +62,10 @@ export class CursorAdapter implements ProviderAdapter {
     streamingDeltaSemantics: 'additive',
     // Each turn is a fresh spawn, so --model can change between turns.
     modelSwitchScope: 'per-turn',
+    // Same reasoning: fresh spawn per turn, so the new --mode flag applies on
+    // the next turn for free. No mid-turn flip — there's nothing running to
+    // mutate.
+    modeSwitchScope: 'per-turn',
     // Mapped to cursor-agent flags in cursor-cli/args.ts. `force` is the
     // out-of-the-box default (see db/store.ts initialMode) — the other three
     // are read-only/gated.

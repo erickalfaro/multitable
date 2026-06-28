@@ -17,6 +17,7 @@ This skill exists because MultiTable's daemon-side SDK integration has bitten us
 | Understand the `query()` call we make | [`reference/query-and-options.md`](reference/query-and-options.md) |
 | Add or fix streaming preview behavior | [`reference/streaming-and-lifecycle.md`](reference/streaming-and-lifecycle.md) + [`multitable/streaming-state-machine.md`](multitable/streaming-state-machine.md) |
 | Add a permission mode toggle (plan / acceptEdits / etc.) | [`reference/permissions-modes.md`](reference/permissions-modes.md) |
+| Flip permission mode mid-turn (live, while a turn is in flight) | [`reference/permissions-modes.md`](reference/permissions-modes.md) — `ClaudeAdapter.applyModeChangeLive` calls `Query.setPermissionMode` against the captured handle (we run in streaming-input mode for this) |
 | Intercept `AskUserQuestion` or any other interactive prompt | [`reference/canusetool-and-elicitation.md`](reference/canusetool-and-elicitation.md) + [`multitable/permission-and-elicitation-wiring.md`](multitable/permission-and-elicitation-wiring.md) |
 | Add an SDK lifecycle hook (e.g. `Notification`, `PreCompact`) | [`reference/hooks.md`](reference/hooks.md) |
 | Resume / fork / list sessions | [`reference/sessions.md`](reference/sessions.md) |
@@ -57,7 +58,8 @@ Need to RESUME a prior conversation?
 └── Branch from a prior point? ─── Options.resume + Options.forkSession: true
 
 Need PLAN mode (read-only thinking)?
-└── Options.permissionMode: 'plan'  (reset per-turn, or call Query.setPermissionMode mid-stream)
+├── Set for the next turn  ─── update `s.mode` (manager.setMode) → per-turn pickup in Options.permissionMode
+└── Flip during the live turn ─── ClaudeAdapter.applyModeChangeLive → Query.setPermissionMode (streaming-input mode required)
 ```
 
 ## Three rules that get violated most

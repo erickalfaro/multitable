@@ -19,17 +19,20 @@ The skill loading does not, by itself, authorize copying.
 
 Concept-level patterns (event reducers, approval queues, model overrides) often transfer; literal code does not.
 
-## Their Claude/Codex/Cursor strategy is not ours
+## Their Claude/Codex/Cursor strategy is *dual* — and only half of it is "not ours"
 
-`omnigent/claude_native.py`, `codex_native.py`, `cursor_native.py`, `pi_native.py` **spawn the vendor CLI as a subprocess and proxy its TTY over a WebSocket attach loop** (with reconnect, byte-offset resume, "cold resume" handling).
+omnigent runs each vendor **two ways** (see [`repo-map.md`](repo-map.md) "Two provider layers"):
 
-MultiTable deliberately moved off CLI-subprocess+TTY-bridging — see `CLAUDE.md` § "Recently retired":
+- **Headless inner harness** (`omnigent/inner/<vendor>_harness.py`) — SDK / ACP / `--print` stream-json. This **matches MultiTable's approach**: their `claude-sdk` harness ≈ our `claude.ts`, their Goose/Qwen ACP ≈ our Hermes/Grok ACP, their `kimi --print` ≈ our Cursor stream-json.
+- **Native bridge** (`omnigent/<vendor>_native.py` + `inner/<vendor>_native_harness.py`) — **spawns the vendor TUI in a runner-owned tmux terminal**, injects turns via tmux paste, and captures output by **tailing the JSONL transcript** (`<vendor>_native_forwarder.py`) with reconnect / byte-offset / "cold resume" (`--resume <sid>` + `start_at_end=True`).
+
+It's the **native** layer — not the whole product — that MultiTable deliberately moved off. See `CLAUDE.md` § "Recently retired":
 
 - `claude --resume` PTY spawn — gone
 - `/$bunfs/` zombie guards — gone
 - `transcripts/tail.ts` / `TranscriptTailerRegistry` — gone
 
-Our model is SDK-direct (Claude) or JSON-RPC (Codex `app-server`, Hermes/Grok ACP) or stream-json NDJSON (Cursor). When comparing, treat `claude_native.py` as a *different architecture*, not a template — and don't be tempted to "port it back" without re-reading the retired-feature list and asking why we moved off it.
+So when comparing, be precise: their **inner harness** is a fair peer to our adapters; their **native bridge** is the TTY-tail pattern we retired (a deliberate "terminal-first / co-drive" feature for them, a removed legacy path for us). Don't "port back" the native bridge without re-reading the retired-feature list and asking why we moved off it.
 
 ## Different multi-device model
 
@@ -44,16 +47,16 @@ Porting any of `host_registry.py` / `presence.py` would require rethinking our s
 
 ## Provider taxonomy mismatch
 
-omnigent's vendor set: **Claude, Codex, Cursor, Pi, custom.**
+omnigent's vendor set has grown well beyond the old "Claude, Codex, Cursor, Pi" list. Live harnesses (per `_HARNESS_MODULES` + `NATIVE_HARNESSES`): **Claude (`claude-sdk` + `claude-native`), Codex, Cursor, Pi, Goose (ACP), Qwen (ACP), Kimi (`--print`), Hermes, OpenCode, Kiro, OpenAI Agents (`openai-agents`), Copilot (GitHub), Antigravity (Google Gemini SDK).** Most vendors ship a headless harness *and* a `-native` terminal bridge.
 
 MultiTable's vendor set: **Claude, Codex, Cursor, Hermes (xAI/Grok), Grok Build.** (`comingSoon` in our `AddAgentModal`: Gemini CLI, GitHub Copilot, opencode, Amp, Aider, Goose, Pi.)
 
-Don't drop "Pi" references into our live code by accident; don't drop "Hermes"/"Grok Build" references into omnigent comparisons.
+So omnigent already ships several of *our* `comingSoon` targets (Goose, GitHub Copilot, opencode, Gemini-via-antigravity, Pi) — the overlap is larger than the old skill implied. **But the spellings differ:** omnigent has its own `hermes` harness (not our Hermes/xAI provider) and no "Grok Build". Don't drop "Pi"/"antigravity"/"kiro" into our live code by accident; don't drop "Hermes (xAI/Grok)"/"Grok Build" into omnigent comparisons.
 
 ## What's *missing* from omnigent vs us
 
 - No TypeScript/React web UI in their repo (only TUI under `sdks/ui/`).
-- No `Hermes` / `Grok Build` providers.
+- No **xAI/Grok** provider in our sense — they have their own `hermes` harness, and no "Grok Build".
 - No equivalent of our `~/.multitable/secrets.yml` + Telegram bridge (they solve the same problem with OIDC).
 
 ## What's *missing* from us vs omnigent

@@ -455,6 +455,12 @@ export function createSession(data: {
    */
   loaderVariant?: string;
   thinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+  // Optional caller-supplied mode. When provided it overrides the per-provider
+  // seed below — used by the AddAgentModal for providers where mode is
+  // creation-bound (Grok) or where the user otherwise picks at creation time.
+  // The agent manager validates against the adapter's capabilities.modes when
+  // the session is registered, so an invalid value would surface on first turn.
+  mode?: string | null;
 }): SessionRecord {
   const id = uuidv4();
   const now = Date.now();
@@ -485,11 +491,13 @@ export function createSession(data: {
   // reject most tools against the near-empty ~/.cursor allowlist). Others get
   // Claude's 'default'.
   const initialMode =
-    resolvedProvider === 'codex'
-      ? 'workspace-write'
-      : resolvedProvider === 'cursor'
-        ? 'force'
-        : 'default';
+    data.mode && data.mode.length > 0
+      ? data.mode
+      : resolvedProvider === 'codex'
+        ? 'workspace-write'
+        : resolvedProvider === 'cursor'
+          ? 'force'
+          : 'default';
   getDb().prepare(`
     INSERT INTO sessions (
       id, project_id, name, command, working_directory, type,

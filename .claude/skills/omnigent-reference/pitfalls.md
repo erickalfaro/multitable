@@ -6,20 +6,22 @@ Hard-won mistakes to avoid when consulting this skill.
 
 There is no omnigent adapter under `packages/daemon/src/agent/providers/` and there should not be. Don't write code that imports, references, or pretends to interop with omnigent. This skill is for comparison; everything else is out-of-scope.
 
-## 2. Don't pattern-match "they spawn `claude`, so let's spawn `claude`"
+## 2. "How does omnigent run `<vendor>`?" has *two* answers — don't assume the native one
 
-`omnigent/claude_native.py` (and `codex_native.py`, `cursor_native.py`, `pi_native.py`) spawn the vendor CLI as a subprocess and bridge its TTY over WebSocket. We deliberately *moved off that pattern* — see `CLAUDE.md` § "Recently retired" (`claude --resume` PTY spawn, `'No conversation found'` / `/$bunfs/` zombie guards, `transcripts/tail.ts`, etc.).
+Every vendor is registered twice in `_HARNESS_MODULES` (`omnigent/runtime/harnesses/__init__.py`):
 
-If a future task seems to want CLI subprocess bridging, that's a red flag — re-read the retired-feature list before doing anything.
+- **headless inner harness** — `claude-sdk`/`codex`/`goose`(ACP)/`qwen`(ACP)/`kimi`(`--print`)/`openai-agents`/`antigravity` → `omnigent/inner/<vendor>_harness.py`. This is the peer to MultiTable's adapters and is **not** something we retired.
+- **native bridge** — `claude-native`/`codex-native`/… → `omnigent/<vendor>_native.py` + `inner/<vendor>_native_harness.py`, spawning the vendor TUI in tmux and bridging its terminal. `is_native_harness()` (`omnigent/harness_aliases.py`) is the discriminator.
 
-## 3. Don't conflate `omnigent/llms/` with `omnigent/<vendor>_native.py`
+Only the **native** layer is the spawn-the-CLI-and-tail-the-TTY pattern we *moved off* — see `CLAUDE.md` § "Recently retired" (`claude --resume` PTY spawn, `/$bunfs/` zombie guards, `transcripts/tail.ts`). So "they spawn `claude`, let's spawn `claude`" is a red flag *only* about the native layer; their `claude-sdk` harness is the architecture we already use. Re-read the retired-feature list before resurrecting any TTY-tail bridging.
 
-Two completely different layers:
+## 3. Three distinct layers — don't conflate `llms/`, `inner/<vendor>_harness.py`, and `<vendor>_native.py`
 
-- `omnigent/llms/` — direct LLM **HTTP API** adapters (Anthropic, OpenAI, etc.). Mirrors `openai-python` / `@anthropic-ai/sdk` patterns.
-- `omnigent/<vendor>_native.py` — **CLI subprocess bridges** that spawn the *Claude Code / Codex / Cursor / Pi binary* and attach to its TTY.
+- `omnigent/llms/` — direct LLM **HTTP API** adapters (Anthropic, OpenAI, etc.). Mirrors `openai-python` / `@anthropic-ai/sdk`. Used for programmatic/background LLM calls inside harnesses.
+- `omnigent/inner/<vendor>_harness.py` — **headless harness subprocesses** (FastAPI/ASGI-style, addressed over the WS tunnel). The vendor's SDK/ACP/`--print` mode owns its own LLM calls.
+- `omnigent/<vendor>_native.py` — **TUI bridges** that spawn the *Claude Code / Codex / Cursor / Pi / Goose / … binary* in tmux and tail its transcript.
 
-A question like "how does omnigent talk to Claude?" has two correct answers depending on which one the user means.
+"How does omnigent talk to Claude?" therefore has three correct answers (`llms/` HTTP, `claude-sdk` harness, or `claude-native` bridge) depending on which the user means.
 
 ## 4. Cloud sandbox backends are in `deploy/`, not `omnigent/sandbox/`
 

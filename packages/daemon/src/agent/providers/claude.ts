@@ -9,6 +9,8 @@ import type {
   HookEvent,
   OnElicitation,
   PermissionMode,
+  Query,
+  SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentSession, UsageLimitWindow, UsageLimitSnapshot } from '../types.js';
 import type { Message } from '../../transcripts/parser.js';
@@ -223,6 +225,71 @@ function normalizeClaudeUsage(body: unknown): UsageLimitSnapshot | null {
   return { status: 'live', source: 'claude', windows, creditsRemaining, capturedAt: Date.now() };
 }
 
+// Writable async queue of `SDKUserMessage`s feeding the SDK's streaming-input
+// pump. The SDK internally calls `streamInput(prompt)` on whatever
+// AsyncIterable we pass to `query({ prompt })`; calling `streamInput()`
+// ourselves would close stdin to the CLI (see sdk.mjs — `endInput()` fires
+// after the iterator returns). Instead we keep ONE long-lived iterable per
+// live Claude session and push messages onto it. The SDK pulls them as it
+// processes turns, in FIFO order.
+class PromptQueue {
+  private buffer: SDKUserMessage[] = [];
+  private notify: (() => void) | null = null;
+  private closed = false;
+
+  push(text: string): void {
+    if (this.closed) return;
+    this.buffer.push({
+      type: 'user',
+      message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+    });
+    this.notify?.();
+  }
+
+  /** Close the queue. The iterator drains any remaining buffered messages then
+   *  returns, signaling the SDK to wind down the input channel. */
+  close(): void {
+    this.closed = true;
+    this.notify?.();
+  }
+
+  iter(): AsyncIterable<SDKUserMessage> {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage, void> {
+        while (true) {
+          while (self.buffer.length > 0) {
+            yield self.buffer.shift()!;
+          }
+          if (self.closed) return;
+          await new Promise<void>((r) => {
+            self.notify = r;
+          });
+          self.notify = null;
+        }
+      },
+    };
+  }
+}
+
+// Per-AgentSession live state owned by ClaudeAdapter. We hold ONE Query per
+// session and reuse it across turns (matches Claude Code TUI). Each runTurn
+// pushes a message onto the queue and registers a waiter for the next
+// `result` event; the pump shifts waiters off the FIFO as results arrive.
+interface ClaudeLiveSession {
+  queue: PromptQueue;
+  query: Query;
+  /** Session-scoped abort. Aborting this kills the Query entirely (destroy /
+   *  reset / shutdown). Per-turn aborts from the manager translate to
+   *  `query.interrupt()` instead so other queued turns survive. */
+  ctrl: AbortController;
+  /** FIFO of resolvers awaiting the next `result` SDK message. */
+  resultWaiters: Array<{ resolve: () => void; reject: (err: Error) => void }>;
+}
+
+
 export class ClaudeAdapter implements ProviderAdapter {
   readonly name = 'claude' as const;
 
@@ -234,12 +301,13 @@ export class ClaudeAdapter implements ProviderAdapter {
     userQuestion: 'tool', // AskUserQuestion built-in tool
     elicitation: true,
     subagents: 'manual',
-    midTurnInput: false, // streaming-input mode is unused today
+    midTurnInput: true, // streaming-input mode keeps the Query handle alive for setPermissionMode mid-turn
     byok: false,
     hardSandbox: false,
     hooks: 'rich',
     streamingDeltaSemantics: 'additive',
     modelSwitchScope: 'per-turn',
+    modeSwitchScope: 'live',
     modes: CLAUDE_NATIVE_MODES.map((m) => ({ ...m })),
     thinkingEffort: 'native',
   };
@@ -248,6 +316,17 @@ export class ClaudeAdapter implements ProviderAdapter {
   // Cleared at turn end via the reset() helper.
   private streamBuffers = new Map<string, StreamBuffer>();
   private streamingBlockIndex = new Map<string, number | null>();
+  // Long-lived per-session Query state. The Query is created on the FIRST
+  // runTurn for the session and survives across subsequent turns until
+  // destroy / reset / shutdown. Subsequent turns push onto the queue and
+  // await a `result` message via the FIFO `resultWaiters` registry.
+  //
+  // This shape is what unlocks Claude Code TUI behavior: a continuous
+  // streaming-input channel that the SDK pumps, with mid-turn pushes landing
+  // in the model's input stream while it's still mid-response. It's also
+  // what enables `Query.setPermissionMode()` mid-turn — those control methods
+  // are SDK-gated to streaming-input mode (sdk.d.ts:2255-2266).
+  private liveSessions = new Map<string, ClaudeLiveSession>();
   // Per-session accumulator of the latest usage-limit window keyed by
   // rateLimitType. Each rate_limit_event reports ONE window; `/usage` shows all
   // of them, so we merge (latest-wins per type) and emit the union rather than
@@ -260,10 +339,42 @@ export class ClaudeAdapter implements ProviderAdapter {
   ) {}
 
   reset(s: AgentSession): void {
+    // /clear: drop the live Query so the next turn starts fresh (no `resume:`
+    // tied to the old claudeSessionId). The pump task's finally clause will
+    // remove the entry from liveSessions; we don't need to delete it here.
+    this.closeLiveSession(s.id);
     this.streamBuffers.delete(s.id);
     this.streamingBlockIndex.delete(s.id);
     // NOTE: limitWindows is deliberately NOT cleared — usage limits are
     // account-wide, not conversation-scoped, so /clear must not blank the badge.
+  }
+
+  /** Tear down per-session adapter resources entirely. Called when the user
+   *  deletes the session. Closes the live Query and clears all per-session
+   *  caches. The pump task drains and removes itself from liveSessions. */
+  destroy(s: AgentSession): void {
+    this.closeLiveSession(s.id);
+    this.streamBuffers.delete(s.id);
+    this.streamingBlockIndex.delete(s.id);
+    this.limitWindows.delete(s.id);
+  }
+
+  /** Daemon-wide teardown: close every live Claude session. SIGTERM path. */
+  async shutdown(): Promise<void> {
+    for (const id of [...this.liveSessions.keys()]) {
+      this.closeLiveSession(id);
+    }
+  }
+
+  /** Close the live Query for a session if one exists. Aborts the session-
+   *  scoped controller (signals the SDK to wind down) AND closes the prompt
+   *  queue so the iterator returns. Either signal alone usually works; we do
+   *  both for robustness. The pump's finally clause removes the map entry. */
+  private closeLiveSession(sessionId: string): void {
+    const sess = this.liveSessions.get(sessionId);
+    if (!sess) return;
+    sess.queue.close();
+    if (!sess.ctrl.signal.aborted) sess.ctrl.abort();
   }
 
   /**
@@ -313,14 +424,73 @@ export class ClaudeAdapter implements ProviderAdapter {
   ): Promise<void> {
     if (s.userMessages.length === 1) cb.maybeRenameFromFirstPrompt(text);
 
+    // Lazy-init the per-session live query on first turn. Subsequent runTurn
+    // calls just push onto the queue and await the next `result` from the FIFO.
+    let sess = this.liveSessions.get(s.id);
+    if (!sess) sess = this.startLiveSession(s, cb);
+
+    // Per-turn AbortController from the manager. We do NOT pass it to the SDK
+    // (the SDK only has one abortController per query and it's session-scoped
+    // — see startLiveSession). Instead, on abort we send a SDK `interrupt`
+    // which signals the CLI to wrap up the current turn gracefully. The pump
+    // sees the resulting `result` event and resolves the waiter. Other queued
+    // turns survive.
+    let waiterEntry: { resolve: () => void; reject: (err: Error) => void } | null = null;
+    const waiter = new Promise<void>((resolve, reject) => {
+      waiterEntry = { resolve, reject };
+      sess!.resultWaiters.push(waiterEntry);
+    });
+
+    const onAbort = () => {
+      // Best-effort interrupt; ignore errors (e.g., already finishing).
+      sess!.query.interrupt().catch(() => {});
+    };
+    if (ctrl.signal.aborted) onAbort();
+    else ctrl.signal.addEventListener('abort', onAbort, { once: true });
+
+    sess.queue.push(text);
+
+    try {
+      await waiter;
+    } finally {
+      ctrl.signal.removeEventListener('abort', onAbort);
+      // If the waiter was never satisfied (e.g., pump rejected it on error
+      // before we resolved), make sure it's no longer in the FIFO so a future
+      // result message doesn't accidentally resolve a stale entry.
+      if (waiterEntry !== null) {
+        const idx = sess.resultWaiters.indexOf(waiterEntry);
+        if (idx !== -1) sess.resultWaiters.splice(idx, 1);
+      }
+      // Belt-and-braces: clear any lingering streaming preview the SDK left
+      // behind. handleSdkMessage normally clears at message_stop, but a
+      // network drop / abort can leave a partial buffer.
+      const buf = this.streamBuffers.get(s.id);
+      if (buf && !buf.isEmpty) {
+        cb.emitAssistantDelta('');
+        buf.reset();
+      }
+      this.streamingBlockIndex.set(s.id, null);
+    }
+  }
+
+  /**
+   * Open a long-lived streaming-input Query for this session. Called lazily
+   * from runTurn on the first turn. The pump task in here runs for the
+   * lifetime of the session, dispatching every SDK message and shifting
+   * `resultWaiters` off the FIFO as `result` events arrive.
+   */
+  private startLiveSession(s: AgentSession, cb: AdapterCallbacks): ClaudeLiveSession {
     const pathToClaudeCodeExecutable = resolveClaudeCodeExecutable();
 
-    // Initialize per-turn streaming state.
+    // Per-session streaming-preview state. Reset by handleSdkMessage at each
+    // text-block boundary; cleared on session destroy.
     this.streamBuffers.set(s.id, new StreamBuffer('additive'));
     this.streamingBlockIndex.set(s.id, null);
 
+    const queue = new PromptQueue();
+    const sessCtrl = new AbortController();
     const it = query({
-      prompt: text,
+      prompt: queue.iter(),
       options: {
         cwd: s.workingDir,
         ...(s.claudeSessionId ? { resume: s.claudeSessionId } : {}),
@@ -328,61 +498,114 @@ export class ClaudeAdapter implements ProviderAdapter {
         ...(s.model ? { model: s.model } : {}),
         ...(s.thinkingEffort ? { effort: s.thinkingEffort } : {}),
         settingSources: ['project', 'user'],
-        // Mode passthrough: `s.mode` is already a native `PermissionMode`
-        // value (validated by the API + DB migration). No translation.
+        // Mode passthrough. Mid-session flips ride applyModeChangeLive via
+        // Query.setPermissionMode against this same handle.
         permissionMode: s.mode as PermissionMode,
-        // The SDK refuses to honor `bypassPermissions` unless this confirmation
-        // flag is also set (sdk.d.ts:1455-1459). Without it the SDK silently
-        // falls back to default behavior — every tool call invokes
-        // `canUseTool`, which routes to PermissionManager and prompts the user
-        // anyway, defeating the entire point of the mode. Only set it when the
-        // mode actually requires it; keep the safety check armed otherwise.
         ...(s.mode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
         canUseTool: this.makeCanUseTool(s),
         onElicitation: this.makeOnElicitation(s, cb),
         hooks: this.makeHooks(s, cb),
         includePartialMessages: true,
-        // SDK accepts the AbortController itself — passing only `.signal`
-        // through `as any` casts results in a silent no-op (the SDK keys off
-        // identity). Pass the controller.
-        abortController: ctrl,
+        // Session-scoped abort. Per-turn cancels use query.interrupt() instead
+        // so they don't kill the whole channel.
+        abortController: sessCtrl,
       },
     });
 
-    try {
-      for await (const msg of it) {
-        try {
-          this.handleSdkMessage(s, msg, cb);
-        } catch (handlerErr) {
-          // Don't let a handler bug abort the whole turn — log it AND
-          // surface it as a low-severity alert so silent bugs in our own
-          // SDK-message dispatch don't go unnoticed (the user asked for
-          // every model/SDK failure to be visible).
-          console.error('[claude-adapter] handler error:', handlerErr);
-          const detail =
-            handlerErr instanceof Error
-              ? handlerErr.message
-              : String(handlerErr);
-          cb.emitAlert({
-            category: 'turn',
-            severity: 'warning',
-            title: 'Claude SDK handler error',
-            body: detail,
-          });
+    const sess: ClaudeLiveSession = {
+      queue,
+      query: it,
+      ctrl: sessCtrl,
+      resultWaiters: [],
+    };
+    this.liveSessions.set(s.id, sess);
+
+    // Long-running pump. Dispatches every SDK message and resolves waiters in
+    // FIFO order as `result` events arrive. On terminal error / abort, fails
+    // all pending waiters and removes the session from the map so the next
+    // runTurn rebuilds it cleanly.
+    void (async () => {
+      try {
+        for await (const msg of it) {
+          try {
+            this.handleSdkMessage(s, msg, cb);
+            if ((msg as { type?: string })?.type === 'result') {
+              const w = sess.resultWaiters.shift();
+              w?.resolve();
+            }
+          } catch (handlerErr) {
+            console.error('[claude-adapter] handler error:', handlerErr);
+            const detail =
+              handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
+            cb.emitAlert({
+              category: 'turn',
+              severity: 'warning',
+              title: 'Claude SDK handler error',
+              body: detail,
+            });
+          }
+        }
+        // Iterator returned cleanly (queue closed). Any remaining waiters
+        // were expecting more results that won't arrive — reject them.
+        const err = new Error('Claude session ended');
+        for (const w of sess.resultWaiters) w.reject(err);
+        sess.resultWaiters.length = 0;
+      } catch (err) {
+        const e = err instanceof Error ? err : new Error(String(err));
+        for (const w of sess.resultWaiters) w.reject(e);
+        sess.resultWaiters.length = 0;
+        // Surface SDK-side pump errors. The current waiter's reject already
+        // bubbles up to manager.sendTurn's error path; this is for failures
+        // that fire between turns (no waiter to reject).
+        console.error('[claude-adapter] pump error:', err);
+      } finally {
+        // Drop from the map so the next runTurn rebuilds. Don't clear
+        // streamBuffers here — destroy() / reset() own that cleanup.
+        if (this.liveSessions.get(s.id) === sess) {
+          this.liveSessions.delete(s.id);
         }
       }
-    } finally {
-      // Clear per-turn streaming state regardless of how the turn ended
-      // (success / abort / error). Belt-and-braces — handleSdkMessage
-      // normally clears at message_stop, but a network drop or abort can
-      // leave a partial buffer.
-      const buf = this.streamBuffers.get(s.id);
-      if (buf && !buf.isEmpty) {
-        cb.emitAssistantDelta('');
-      }
-      this.streamBuffers.delete(s.id);
-      this.streamingBlockIndex.delete(s.id);
-    }
+    })();
+
+    return sess;
+  }
+
+  /**
+   * Apply a mode flip to the in-flight live session via the SDK's
+   * Query.setPermissionMode (streaming-input-mode only). Returns false when
+   * no live session exists (manager falls back to per-turn pickup, which is
+   * a no-op for Claude since the next turn reuses the same Query). The session
+   * field `s.mode` has already been updated by the manager, so even if this
+   * fails the change persists across daemon restart.
+   */
+  async applyModeChangeLive(s: AgentSession, mode: string): Promise<boolean> {
+    const sess = this.liveSessions.get(s.id);
+    if (!sess) return false;
+    await sess.query.setPermissionMode(mode as PermissionMode);
+    return true;
+  }
+
+  /**
+   * Inject a user message mid-turn ("send while thinking"). Pushes onto the
+   * same PromptQueue the SDK is already pumping, so the message is picked up
+   * naturally on the SDK's next iterator pull. The agent receives it after
+   * the current turn's `result` (FIFO), or sooner if the model supports
+   * mid-stream message handling.
+   *
+   * Returns false if no live session exists yet (caller starts a fresh turn).
+   *
+   * IMPORTANT: this also pushes a no-op waiter onto the FIFO so the result
+   * event for this injected message lands on a real entry instead of
+   * mismatching the next runTurn's waiter. The injected message's lifecycle
+   * is fire-and-forget from manager.sendTurn's perspective — its turn-end
+   * arrival is observed by the WS event stream, not by an awaited Promise.
+   */
+  async enqueueMessage(s: AgentSession, text: string): Promise<boolean> {
+    const sess = this.liveSessions.get(s.id);
+    if (!sess) return false;
+    sess.resultWaiters.push({ resolve: () => {}, reject: () => {} });
+    sess.queue.push(text);
+    return true;
   }
 
   // === SDK message dispatch ===============================================
