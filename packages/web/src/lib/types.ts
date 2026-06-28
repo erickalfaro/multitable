@@ -339,7 +339,28 @@ export interface GlobalConfig {
     themeId?: string;
     chromeAutoHide?: boolean;
     wallDensity?: 'cozy' | 'compact';
+    wallLayout?: Record<string, WallLayoutItem[]>;
+    wallLayoutPresets?: WallLayoutPreset[];
+    wallLayoutLocked?: boolean;
   };
+}
+
+export interface WallLayoutItem {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  static?: boolean;
+  minW?: number;
+  minH?: number;
+}
+
+export interface WallLayoutPreset {
+  id: string;
+  name: string;
+  layouts: Record<string, WallLayoutItem[]>;
+  createdAt: number;
 }
 
 export interface TelegramIntegrationView {

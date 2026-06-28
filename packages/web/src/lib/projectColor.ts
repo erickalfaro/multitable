@@ -53,10 +53,11 @@ export interface ProjectColor {
 export function getProjectColor(id: string, dark: boolean): ProjectColor {
   const entry = RING[hashString(id) % RING.length];
   const H = entry.hue;
-  // Band-anchored L per theme (see plan §3.1–§3.4). Chroma stays inside the
-  // pastel envelope (0.10–0.12) so the hue is identifiable without screaming.
+  // Band-anchored L per theme (see plan §3.1–§3.4). Chroma bumped to a
+  // vivid envelope (was 0.10/0.12) — colors now read clearly across the
+  // wall mosaic without losing OKLCH equal-brightness guarantee.
   const L = dark ? 74 : 48;
-  const C = dark ? 0.1 : 0.12;
+  const C = dark ? 0.16 : 0.19;
   const ramp = (dl: number) => `oklch(${L + dl}% ${C} ${H})`;
   return {
     name: entry.name,

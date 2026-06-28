@@ -824,6 +824,18 @@ export class CodexAdapter implements ProviderAdapter {
         cb.setCurrentTool('WebSearch');
         buffers.activeToolMeta = { toolName: 'WebSearch', input: { query: item.query } };
         break;
+      case 'reasoning':
+        // Reasoning models (gpt-5 et al) can think silently for minutes
+        // before emitting any textDelta. Marking the slot as a tool-in-flight
+        // suppresses the manager's "quiet for 90s" watchdog warning while the
+        // model is legitimately reasoning. Cleared on item/completed below.
+        cb.setCurrentTool('Thinking');
+        break;
+      case 'agentMessage':
+        // Same reasoning for agent-message items — the model may take a while
+        // to produce the first delta after deciding to speak.
+        cb.setCurrentTool('Responding');
+        break;
       default:
         return;
     }

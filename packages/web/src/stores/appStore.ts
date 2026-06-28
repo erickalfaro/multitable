@@ -15,6 +15,8 @@ import type {
   AgentProvider,
   DiscoveredModel,
   UsageLimitSnapshot,
+  WallLayoutItem,
+  WallLayoutPreset,
 } from '../lib/types';
 import { api } from '../lib/api';
 import type { Theme, ThemeColors } from '../lib/themes';
@@ -138,6 +140,16 @@ interface AppState {
   togglePinSession: (id: string) => void;
   reorderPinnedSessions: (ids: string[]) => void;
   setFocusedPane: (id: string | null) => void;
+  // Wall layout (react-grid-layout state) — keyed by breakpoint id.
+  wallLayout: Record<string, WallLayoutItem[]>;
+  wallLayoutPresets: WallLayoutPreset[];
+  wallLayoutLocked: boolean;
+  setWallLayout: (next: Record<string, WallLayoutItem[]>) => void;
+  saveLayoutPreset: (name: string) => void;
+  applyLayoutPreset: (id: string) => void;
+  deleteLayoutPreset: (id: string) => void;
+  resetWallLayout: () => void;
+  setWallLayoutLocked: (locked: boolean) => void;
   setActiveTheme: (id: string) => void;
   addCustomTheme: (theme: Theme) => void;
   updateCustomTheme: (id: string, patch: { name?: string; colors?: Partial<ThemeColors>; isDark?: boolean }) => void;
@@ -612,6 +624,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   })(),
   focusedPaneId: null,
+  // Wall layout cold-loads from localStorage so the grid paints in the
+  // correct positions on first frame; GET /api/config reconciles after.
+  wallLayout: (() => {
+    try {
+      const raw = localStorage.getItem('mt:wallLayout');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  })(),
+  wallLayoutPresets: (() => {
+    try {
+      const raw = localStorage.getItem('mt:wallLayoutPresets');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  })(),
+  wallLayoutLocked: (() => {
+    try {
+      return localStorage.getItem('mt:wallLayoutLocked') === '1';
+    } catch {
+      return false;
+    }
+  })(),
   customThemes: loadCustomThemesFromStorage(),
   activeThemeId: (() => {
     const stored = loadActiveThemeIdFromStorage();
@@ -750,6 +791,88 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { pinnedSessionIds: ids };
     }),
   setFocusedPane: (id) => set({ focusedPaneId: id }),
+  setWallLayout: (next) =>
+    set(() => {
+      try {
+        localStorage.setItem('mt:wallLayout', JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ ui: { wallLayout: next } }).catch(() => {}),
+      );
+      return { wallLayout: next };
+    }),
+  saveLayoutPreset: (name) =>
+    set((s) => {
+      const preset: WallLayoutPreset = {
+        id: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: name.trim() || `Layout ${s.wallLayoutPresets.length + 1}`,
+        layouts: JSON.parse(JSON.stringify(s.wallLayout)),
+        createdAt: Date.now(),
+      };
+      const next = [...s.wallLayoutPresets, preset];
+      try {
+        localStorage.setItem('mt:wallLayoutPresets', JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ ui: { wallLayoutPresets: next } }).catch(() => {}),
+      );
+      return { wallLayoutPresets: next };
+    }),
+  applyLayoutPreset: (id) =>
+    set((s) => {
+      const preset = s.wallLayoutPresets.find((p) => p.id === id);
+      if (!preset) return {};
+      try {
+        localStorage.setItem('mt:wallLayout', JSON.stringify(preset.layouts));
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ ui: { wallLayout: preset.layouts } }).catch(() => {}),
+      );
+      return { wallLayout: preset.layouts };
+    }),
+  deleteLayoutPreset: (id) =>
+    set((s) => {
+      const next = s.wallLayoutPresets.filter((p) => p.id !== id);
+      try {
+        localStorage.setItem('mt:wallLayoutPresets', JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ ui: { wallLayoutPresets: next } }).catch(() => {}),
+      );
+      return { wallLayoutPresets: next };
+    }),
+  resetWallLayout: () =>
+    set(() => {
+      try {
+        localStorage.removeItem('mt:wallLayout');
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ ui: { wallLayout: {} } }).catch(() => {}),
+      );
+      return { wallLayout: {} };
+    }),
+  setWallLayoutLocked: (locked) =>
+    set(() => {
+      try {
+        localStorage.setItem('mt:wallLayoutLocked', locked ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ ui: { wallLayoutLocked: locked } }).catch(() => {}),
+      );
+      return { wallLayoutLocked: locked };
+    }),
   setActiveTheme: (id) =>
     set(() => {
       saveActiveThemeIdToStorage(id);

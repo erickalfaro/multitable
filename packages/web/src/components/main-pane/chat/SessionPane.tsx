@@ -81,6 +81,12 @@ interface Props {
 
 export function SessionPane({ sessionId, session, density = 'comfortable' }: Props) {
   const cfg = DENSITY[density];
+  // In the wall, only the focused tile gets a full composer; everyone else
+  // shows a thin clickable strip (saves vertical space when watching 12+
+  // sessions at once). Clicking the strip focuses the tile, expanding it.
+  const focusedPaneId = useAppStore((s) => s.focusedPaneId);
+  const setFocusedPane = useAppStore((s) => s.setFocusedPane);
+  const composerCollapsed = density === 'wall' && focusedPaneId !== sessionId;
   const messages = useAppStore((s) => s.messagesBySession[sessionId] ?? EMPTY_MESSAGES);
   const mergeMessages = useAppStore((s) => s.mergeMessages);
   const clearMessages = useAppStore((s) => s.clearMessages);
@@ -255,15 +261,29 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
             active={session.state === 'running'}
           />
         </ChatScroller>
-        {cfg.showComposer && (
-          <ChatInputCM
-            processId={sessionId}
-            projectId={session.projectId}
-            state={session.state}
-            attachmentKind="session"
-            active={session.state === 'running'}
-          />
-        )}
+        {cfg.showComposer &&
+          (composerCollapsed ? (
+            <button
+              type="button"
+              className="mt-composer-collapsed"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFocusedPane(sessionId);
+              }}
+              title="Click to compose"
+            >
+              <span className="mt-composer-collapsed-label">Click to type…</span>
+              <span className="mt-composer-collapsed-hint">⏎</span>
+            </button>
+          ) : (
+            <ChatInputCM
+              processId={sessionId}
+              projectId={session.projectId}
+              state={session.state}
+              attachmentKind="session"
+              active={session.state === 'running'}
+            />
+          ))}
         {cfg.showPermissionBar && <PermissionBar sessionId={sessionId} />}
       </div>
     </div>

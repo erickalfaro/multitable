@@ -161,7 +161,34 @@ export interface GlobalConfig {
     // Wall tile size preference. Cozy = larger tiles, more chat visible per
     // tile, fewer per row. Compact = denser grid.
     wallDensity?: 'cozy' | 'compact';
+    // Persisted react-grid-layout state for the wall. Keyed by breakpoint
+    // ('lg' | 'md' | 'sm'); each value is an array of `{i, x, y, w, h, static?}`
+    // entries (RGL's native Layout shape). Empty/missing means "use the
+    // count-aware Equal Grid auto-layout".
+    wallLayout?: Record<string, WallLayoutItem[]>;
+    // User-saved named layout presets ("Demo mode", "Backend triage", ...).
+    wallLayoutPresets?: WallLayoutPreset[];
+    // Lock toggle — when true every tile renders as static (drag/resize off).
+    wallLayoutLocked?: boolean;
   };
+}
+
+export interface WallLayoutItem {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  static?: boolean;
+  minW?: number;
+  minH?: number;
+}
+
+export interface WallLayoutPreset {
+  id: string;
+  name: string;
+  layouts: Record<string, WallLayoutItem[]>;
+  createdAt: number;
 }
 
 export interface ProjectConfig {
