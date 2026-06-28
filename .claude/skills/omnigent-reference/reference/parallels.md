@@ -6,23 +6,26 @@ When a column says **(no analogue)** that is itself information: a feature gap i
 
 ## Agent runtime
 
+> **Two-layer reminder** (see [`repo-map.md`](repo-map.md) "Two provider layers"): every vendor has both an `inner/<vendor>_harness.py` headless harness *and* a `<vendor>_native.py` terminal bridge. The *true* analogue to a MultiTable adapter is the **headless inner harness**, not the native bridge.
+
 | MultiTable | Omnigent | Notes |
 |---|---|---|
-| `packages/daemon/src/agent/manager.ts` (`AgentSessionManager`) | `omnigent/runner/app.py` + `omnigent/runner/routing.py` | Both are provider-agnostic orchestrators. Omnigent's `routing.py` is the cleanest single file to read for their dispatch model. |
-| `packages/daemon/src/agent/providers/claude.ts` (SDK-direct via `@anthropic-ai/claude-agent-sdk`) | `omnigent/claude_native.py` (spawns `claude` CLI + TTY-over-WS bridge) | **Fundamentally different strategy.** They wrap the CLI subprocess; we use the SDK. We retired CLI-bridging — see CLAUDE.md "Recently retired". |
-| `packages/daemon/src/agent/providers/codex.ts` (JSON-RPC to `codex app-server`) | `omnigent/codex_native.py` (CLI subprocess) | Same observation as Claude. |
-| `packages/daemon/src/agent/providers/cursor.ts` (`cursor-agent --print --output-format stream-json`) | `omnigent/cursor_native.py` (CLI subprocess) | Both wrap the same Cursor CLI; their wrapping is TTY-attach, ours is stream-json NDJSON. |
-| `packages/daemon/src/agent/providers/grok.ts` (`grok agent stdio`) and `hermes.ts` (`hermes acp`) | (no analogue — they have `pi_native.py` instead) | Omnigent's "Pi" is a different vendor; not Grok/Hermes. |
-| `packages/daemon/src/agent/providers/types.ts` (`ProviderAdapter` contract) | implicit in `omnigent/runner/routing.py` + per-vendor `*_native.py` | Omnigent doesn't appear to expose a single TS-style contract type; the seam is the runner's dispatch + each native bridge's shape. |
-| `packages/daemon/src/agent/streamBuffer.ts` (additive-delta reducer) | `omnigent/runner/transports/` (streaming transports) | Their transports also normalize streaming; depth not surveyed. |
+| `packages/daemon/src/agent/manager.ts` (`AgentSessionManager`) | `omnigent/runner/app.py` + `omnigent/runner/routing.py` | Both are provider-agnostic orchestrators. `app.py` (`_run_turn_bg` → `_stream_message_to_harness`) is the clearest turn-flow read; `routing.py` resolves runner affinity (server-bound) and the WS-tunnel httpx transport. |
+| `packages/daemon/src/agent/providers/claude.ts` (SDK-direct via `@anthropic-ai/claude-agent-sdk`) | **`claude-sdk` → `omnigent/inner/claude_sdk_harness.py`** (Agent SDK, headless) — *true analogue*; **and** `omnigent/claude_native.py` + `inner/claude_native_harness.py` (spawns `claude` TUI in tmux, transcript-tail forwarder) | Not "CLI vs SDK" — omnigent has **both** paths. Their `claude-sdk` harness mirrors our approach; their `claude-native` is the TTY-bridge mode we retired (CLAUDE.md "Recently retired"). |
+| `packages/daemon/src/agent/providers/codex.ts` (JSON-RPC to `codex app-server`) | `codex` → `inner/codex_harness.py` (headless); `codex-native` → `codex_native.py` (TUI + runner-provided app-server over UDS) | Their native path talks to a runner app-server over a Unix socket — same app-server idea, different host process. |
+| `packages/daemon/src/agent/providers/cursor.ts` (`cursor-agent --print --output-format stream-json`) | `cursor` → `inner/cursor_harness.py`; `cursor-native` → `cursor_native.py` | Both wrap the same Cursor CLI. Omnigent's `kimi` harness (`kimi --print --output-format`) is the closest match to *our* stream-json wrapping style. |
+| `packages/daemon/src/agent/providers/grok.ts` (`grok agent stdio`) and `hermes.ts` (`hermes acp`) | `hermes` → `inner/hermes_harness.py` + `hermes_native.py`; ACP also drives `goose` (`goose acp`) and `qwen` (`qwen --acp`) | Omnigent **does** use ACP — for Goose/Qwen (and has its own Hermes). So our ACP approach is not unique to us; it's one of their headless styles. |
+| `packages/daemon/src/agent/providers/types.ts` (`ProviderAdapter` contract — a typed TS interface) | `_HARNESS_MODULES` registry (`omnigent/runtime/harnesses/__init__.py`, name → module) + the server-harness REST/ASGI contract over a WS tunnel | Omnigent's seam is **protocol-level, by name** (each harness = a spawned `create_app()`-style subprocess addressed over HTTP/UDS/WS), not a typed `ProviderAdapter`. No abstract base class; capabilities advertised via `HelloFrame.harnesses` + runtime checks (`harness_supports_model_override`, `is_native_harness`). |
+| `packages/daemon/src/agent/streamBuffer.ts` (additive-delta reducer) | `omnigent/runner/transports/ws_tunnel/` (`frames.py`, `transport.py`) | Chunked `response.body` frames (additive, not snapshots) with smart per-chunk encoding (`utf-8` for text/SSE, `base64` for binary); per-request reassembly state (`head_future` / `body_queue` / `end_event`). Siblings `tcp.py`, `uds.py` for non-tunneled transports. |
 
 ## Permissions + elicitation
 
 | MultiTable | Omnigent |
 |---|---|
-| `packages/daemon/src/hooks/permissionManager.ts` | `omnigent/runner/pending_approvals.py` + `omnigent/server/permissions.py` |
+| `packages/daemon/src/hooks/permissionManager.ts` (in-process, awaited per call) | `omnigent/runner/pending_approvals.py` + `omnigent/server/permissions.py` — a global `asyncio.Future` registry (`_pending: dict[id, Future[bool]]`) + per-session counter; the runner parks `wait_for_user_approval(...)` (default timeout ~86400s → auto-deny), a server elicitation event calls `resolve(id, approved)`, `has_pending()` blocks mid-turn injection |
 | `packages/daemon/src/hooks/elicitationManager.ts` | `omnigent/server/_elicitation_registry.py` + `omnigent/tools/_elicitation_schema.py` |
-| (no analogue — single biggest **feature gap** in our codebase) | `omnigent/policies/` (`base.py`, `registry.py`, `schema.py`, `builtins/`) + `omnigent/runner/policy.py` + `omnigent/native_policy_hook.py` |
+| `PermissionManager.requestFromSdk` bridge (Claude/Hermes route through it) | **native path:** the vendor's own `PreToolUse` **command hooks** (`omnigent/claude_native_hook.py`, per-vendor `_permissions.py`) injected via `--settings`, which POST an `EvaluationRequest` to the central **policy server** (`/v1/sessions/{id}/policies/evaluate`) and return `permissionDecision` — there is no MCP-based tool gating |
+| (no analogue — single biggest **feature gap** in our codebase) | `omnigent/policies/` (`base.py`, `registry.py`, `schema.py`, `builtins/`) + `omnigent/runner/policy.py` + `omnigent/native_policy_hook.py` — declarative governance the per-call hooks resolve against |
 
 The policy engine is the most distinctive omnigent thing. There is **no MultiTable analogue today** — our governance ends at per-call approval prompts.
 

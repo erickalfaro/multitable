@@ -548,6 +548,7 @@ export function createProjectsRouter(
       fileWatchPatterns,
       agentProvider,
       model,
+      mode,
     } = req.body || {};
     if (!name || !command) {
       return res.status(400).json({ error: 'name and command are required' });
@@ -585,6 +586,7 @@ export function createProjectsRouter(
         agentProvider: provider,
         model: modelId,
         thinkingEffort: seedEffort,
+        mode: typeof mode === 'string' && mode.trim().length > 0 ? mode.trim() : undefined,
       });
       // Register in the agent manager so the next session:send doesn't race
       // the DB write, and so capabilities are available for the response.

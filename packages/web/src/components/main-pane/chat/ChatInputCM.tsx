@@ -407,12 +407,21 @@ export const ChatInputCM = memo(function ChatInputCM({
       // the error. Treat it like 'stopped' here, otherwise every follow-up
       // after a failure gets queued forever (the queue only drains out of a
       // non-running state) and the user can never recover the session.
+      //
+      // Mid-turn injection ("send while thinking"): for providers that
+      // advertise `capabilities.midTurnInput`, skip the client queue and
+      // send straight through — the daemon routes it onto the SDK's
+      // streaming-input handle (Claude's Query.streamInput). Matches Claude
+      // Code TUI's behavior. For non-capable providers, the client queue
+      // remains the right path (see CLAUDE.md mid-turn rules).
       const live = useAppStore.getState();
       const session = live.sessions[processId];
       const queueHasHead = !!live.pendingSendsBySession?.[processId]?.length;
       const st = session?.state;
       const isIdle = (st === 'stopped' || st === 'errored') && !queueHasHead;
-      if (!isIdle) {
+      const canInjectMidTurn = !!session?.capabilities?.midTurnInput;
+      const allowDirectSend = isIdle || (st === 'running' && canInjectMidTurn);
+      if (!allowDirectSend) {
         live.enqueueSend(processId, finalText);
       } else {
         // Optimistically flip the local state to 'running' so a follow-up

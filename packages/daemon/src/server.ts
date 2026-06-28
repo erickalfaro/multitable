@@ -105,7 +105,7 @@ export function createServer(
   app.use('/api/notes', createNotesRouter());
   app.use('/api/integrations', createIntegrationsRouter(tgBridge, permManager, agentManager));
   app.use('/api/projects/:projectId/git', createGitRouter());
-  app.use('/api/providers', createProvidersRouter({ catalog }));
+  app.use('/api/providers', createProvidersRouter({ catalog, agentManager }));
   app.use('/api/pending-prompts', createPromptsRouter(permManager, elicitManager, agentManager));
 
   // ─── Internal agent-turn endpoint (Phase 2) ────────────────────────────────

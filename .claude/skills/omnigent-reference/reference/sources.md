@@ -24,6 +24,9 @@ All URLs verified during this skill's creation against the `main` branch of `omn
 
 | Subsystem | URL |
 |---|---|
+| `omnigent/inner/` (per-vendor harnesses + executors) | <https://github.com/omnigent-ai/omnigent/tree/main/omnigent/inner> |
+| `omnigent/runtime/harnesses/` (`_HARNESS_MODULES` registry) | <https://github.com/omnigent-ai/omnigent/tree/main/omnigent/runtime/harnesses> |
+| `omnigent/runner/transports/ws_tunnel/` (frame protocol) | <https://github.com/omnigent-ai/omnigent/tree/main/omnigent/runner/transports/ws_tunnel> |
 | `omnigent/runner/` | <https://github.com/omnigent-ai/omnigent/tree/main/omnigent/runner> |
 | `omnigent/server/` | <https://github.com/omnigent-ai/omnigent/tree/main/omnigent/server> |
 | `omnigent/server/routes/` | <https://github.com/omnigent-ai/omnigent/tree/main/omnigent/server/routes> |
@@ -41,15 +44,31 @@ All URLs verified during this skill's creation against the `main` branch of `omn
 | `omnigent/stores/` | <https://github.com/omnigent-ai/omnigent/tree/main/omnigent/stores> |
 | `omnigent/resources/` | <https://github.com/omnigent-ai/omnigent/tree/main/omnigent/resources> |
 
-## Per-vendor CLI bridges
+## Harness registry + routing (the two-layer seam)
+
+| File | URL |
+|---|---|
+| `omnigent/runtime/harnesses/__init__.py` (`_HARNESS_MODULES`) | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/runtime/harnesses/__init__.py> |
+| `omnigent/harness_aliases.py` (`NATIVE_HARNESSES`, `is_native_harness`) | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/harness_aliases.py> |
+| `omnigent/inner/claude_sdk_harness.py` (true analogue of our `claude.ts`) | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/inner/claude_sdk_harness.py> |
+| `omnigent/inner/claude_native_harness.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/inner/claude_native_harness.py> |
+| `omnigent/runner/transports/ws_tunnel/frames.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/runner/transports/ws_tunnel/frames.py> |
+| `omnigent/runner/transports/ws_tunnel/transport.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/runner/transports/ws_tunnel/transport.py> |
+
+## Per-vendor CLI bridges (the *native* layer only — see registry above for headless harnesses)
 
 | File | URL |
 |---|---|
 | `omnigent/claude_native.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/claude_native.py> |
+| `omnigent/claude_native_bridge.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/claude_native_bridge.py> |
+| `omnigent/claude_native_forwarder.py` (transcript tail) | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/claude_native_forwarder.py> |
+| `omnigent/claude_native_state.py` (launch-cwd persistence) | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/claude_native_state.py> |
+| `omnigent/native_terminal.py` (shared bridge helpers) | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/native_terminal.py> |
 | `omnigent/codex_native.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/codex_native.py> |
 | `omnigent/cursor_native.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/cursor_native.py> |
 | `omnigent/pi_native.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/pi_native.py> |
 | `omnigent/native_policy_hook.py` | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/native_policy_hook.py> |
+| `omnigent/claude_native_hook.py` (PreToolUse → policy server) | <https://github.com/omnigent-ai/omnigent/blob/main/omnigent/claude_native_hook.py> |
 
 ## High-value individual files
 

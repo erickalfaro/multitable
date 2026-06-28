@@ -165,6 +165,11 @@ export class CodexAdapter implements ProviderAdapter {
     // accumulates these and emits cumulative text to the WS layer.
     streamingDeltaSemantics: 'additive',
     modelSwitchScope: 'per-thread',
+    // Codex options are frozen at thread/start. Flipping mode discards the
+    // cached thread; the next turn starts a fresh Codex thread (our in-memory
+    // conversation continues, but Codex's own thread state resets). UI shows
+    // a confirm dialog before applying.
+    modeSwitchScope: 'per-turn',
     // Native SandboxMode values passed straight through to thread/start.
     modes: CODEX_NATIVE_MODES.map((m) => ({ ...m })),
     thinkingEffort: 'native',

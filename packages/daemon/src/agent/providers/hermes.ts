@@ -160,6 +160,9 @@ export class HermesAdapter implements ProviderAdapter {
     // ACP agent_message_chunk semantics are additive (each chunk is a piece).
     streamingDeltaSemantics: 'additive',
     modelSwitchScope: 'per-session',
+    // Hermes per-cwd children cache by (cwd, mode); flipping mode picks a
+    // different child on the next turn. No in-flight ACP RPC for mode change.
+    modeSwitchScope: 'per-turn',
     // Hermes doesn't model modes the same way Claude/Codex do. We expose a
     // small advisory set so the UI's ModeBadge has something coherent to show.
     // These are passed through verbatim; the adapter doesn't translate them.

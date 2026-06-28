@@ -47,11 +47,13 @@ Plan mode is the right answer for "let the user review what the agent is about t
 - The user reviews the resulting plan.
 - The user flips the mode to `default` or `acceptEdits` and triggers another turn ("now do it").
 
-To toggle plan mode in MultiTable, you have two options:
+Two paths apply mode changes in MultiTable, and they cooperate:
 
-**Per-turn (today's pattern):** wrap the `permissionMode` in `Options` based on a session field. Modify [`agent/manager.ts:285`](../../../../packages/daemon/src/agent/manager.ts) to read `s.permissionMode` instead of hardcoded `'default'`. Each new `sendTurn` picks up the current mode.
+**Per-turn pickup:** [`ClaudeAdapter.runTurn`](../../../../packages/daemon/src/agent/providers/claude.ts) reads `s.mode` once when assembling SDK options. A flip to `s.mode` made between turns is honored on the next `sendTurn` automatically (the field is written by [`AgentSessionManager.setMode`](../../../../packages/daemon/src/agent/manager.ts) and persisted to the DB).
 
-**Mid-stream (streaming-input mode only):** if you switch the prompt to `AsyncIterable<SDKUserMessage>`, you can call `Query.setPermissionMode('plan')` on the in-flight `query()` (see [`sdk.d.ts:1977`](../../../../node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts)). Today our prompt is a string, so this method isn't reachable — switching to streaming input is a non-trivial refactor of `sendTurn`.
+**Mid-turn live apply:** we pump the prompt as `AsyncIterable<SDKUserMessage>` (via the `makePromptStream` helper in `claude.ts`) and capture the returned `Query` handle in `liveQueries`. `ClaudeAdapter.applyModeChangeLive(s, mode)` calls `query.setPermissionMode(mode)` against the live handle, and `setMode` in the manager fires it as a fire-and-forget side effect whenever `s.state === 'running'`. The session field is still updated synchronously, so the next turn is also covered even if the live call rejects.
+
+`Query.setModel(...)` is also exposed on the same handle (see [`sdk.d.ts:2266`](../../../../packages/daemon/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts#L2266)) — there's no manager-side `setModel` wiring today, but adding it follows the same shape as `applyModeChangeLive`.
 
 For "auto mode" semantics — i.e., "let the agent run with minimal interruption" — `acceptEdits` is closer to what most products call auto-mode. `bypassPermissions` is the truly hands-off variant; reach for it only when a hook layer or sandbox guarantees safety.
 
@@ -65,7 +67,7 @@ Worth tattooing somewhere:
 
 ## Switching modes mid-turn
 
-`Query.setPermissionMode(mode)` exists but is only available in streaming-input mode. From `sdk.d.ts:1972-1977`:
+`Query.setPermissionMode(mode)` is only available in streaming-input mode. From `sdk.d.ts:2255-2259`:
 
 ```ts
 /**
@@ -75,7 +77,7 @@ Worth tattooing somewhere:
 setPermissionMode(mode: PermissionMode): Promise<void>;
 ```
 
-In single-message mode (our current setup), each `query()` call has a fixed mode for its duration. Different turn = new `query()` = new mode pass-through.
+MultiTable runs the Claude adapter in streaming-input mode for exactly this reason — the prompt is pumped as `AsyncIterable<SDKUserMessage>` (single yield, then awaits a done-signal) and the returned `Query` handle is stashed in `ClaudeAdapter.liveQueries`. `applyModeChangeLive` calls `setPermissionMode` on the live handle; the manager fires it whenever the user flips the mode badge while `s.state === 'running'`. The per-turn pickup path remains as the fallback, so the next turn is also covered if the live call rejects (and so adapters that don't implement `applyModeChangeLive` — Codex, Hermes — still update on the next turn).
 
 ## Per-tool dynamic decisions
 

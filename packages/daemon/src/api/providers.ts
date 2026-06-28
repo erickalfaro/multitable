@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { ProviderCatalog, Provider } from '../providers/catalog.js';
+import type { AgentSessionManager } from '../agent/manager.js';
 
 // DiscoveredModel mirrors the shape ProviderCatalog produces and the
 // AddAgentModal consumes. Kept here as the wire-format type so the web client
@@ -21,6 +22,7 @@ export interface DiscoveredModel {
 
 interface ProvidersDeps {
   catalog: ProviderCatalog;
+  agentManager: AgentSessionManager;
 }
 
 const VALID_PROVIDERS: Provider[] = ['claude', 'codex', 'hermes', 'grok', 'cursor'];
@@ -50,6 +52,23 @@ export function createProvidersRouter(deps: ProvidersDeps): Router {
       lastRefreshed: entry.lastRefreshed,
       lastError: entry.lastError,
     });
+  });
+
+  // GET /api/providers/:provider/capabilities
+  //
+  // Serves the adapter's ProviderCapabilities bag without requiring a session
+  // to exist. The AddAgentModal calls this before creation so it can render
+  // the right mode picker (and gate creation-only providers like Grok).
+  router.get('/:provider/capabilities', (req: Request, res: Response) => {
+    const provider = String(req.params.provider || '').toLowerCase();
+    if (!isProvider(provider)) {
+      return res.status(404).json({ error: `unknown provider: ${provider}` });
+    }
+    const caps = deps.agentManager.getProviderCapabilities(provider);
+    if (!caps) {
+      return res.status(404).json({ error: `no adapter registered for provider: ${provider}` });
+    }
+    res.json({ provider, capabilities: caps });
   });
 
   // GET /api/providers/catalog

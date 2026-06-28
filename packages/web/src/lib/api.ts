@@ -245,6 +245,11 @@ export const api = {
         command: string;
         agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
         model?: string;
+        // Optional creation-time mode. Required UX for Grok (modeSwitchScope ===
+        // 'creation'); recommended for any provider whose mode-switch scope is
+        // non-'live' (Codex/Cursor/Hermes), so the user explicitly picks rather
+        // than relying on the per-provider seed.
+        mode?: string;
       },
     ) => post<Session>(`/api/projects/${projectId}/sessions`, data),
     update: (id: string, data: Partial<Session>) => put<Session>(`/api/sessions/${id}`, data),
@@ -343,6 +348,13 @@ export const api = {
           }
         >
       >('/api/providers/catalog'),
+    // Adapter capability bag for a provider, fetched without needing a session.
+    // Used by AddAgentModal so the creation-time mode picker can render the
+    // adapter-declared modes and gate creation-only providers (e.g. Grok).
+    capabilities: (provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor') =>
+      get<{ provider: string; capabilities: import('./types').ProviderCapabilities }>(
+        `/api/providers/${provider}/capabilities`,
+      ),
     // Trigger live discovery. Server returns 202; the actual catalog lands
     // via the `providers:catalog-updated` WS event.
     refresh: (provider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor') =>
