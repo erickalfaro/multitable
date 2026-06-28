@@ -32,7 +32,7 @@ async function failed(res: Response): Promise<never> {
 }
 
 async function logged<T>(
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   init: RequestInit,
   parse: (res: Response) => Promise<T>,
@@ -103,6 +103,19 @@ async function put<T>(path: string, body?: unknown): Promise<T> {
     path,
     {
       method: 'PUT',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    },
+    (r) => r.json(),
+  );
+}
+
+async function patch<T>(path: string, body?: unknown): Promise<T> {
+  return logged<T>(
+    'PATCH',
+    path,
+    {
+      method: 'PATCH',
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
     },
@@ -378,6 +391,10 @@ export const api = {
   config: {
     get: () => get<GlobalConfig>('/api/config'),
     update: (data: Partial<GlobalConfig>) => put<GlobalConfig>('/api/config', data),
+    /** Partial merge — only the fields you set are touched. Used by the Zen
+     *  wall to persist pinned-session ids and UI prefs without round-tripping
+     *  the full config (which can race with other tabs). */
+    patch: (data: Partial<GlobalConfig>) => patch<GlobalConfig>('/api/config', data),
   },
   integrations: {
     telegram: {

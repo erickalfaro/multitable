@@ -34,6 +34,8 @@ export function createConfigRouter(): Router {
         'host',
         'projects',
         'integrations',
+        'pinnedSessionIds',
+        'ui',
       ];
 
       const updated: GlobalConfig = { ...current };

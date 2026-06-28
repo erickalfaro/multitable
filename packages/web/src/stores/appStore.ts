@@ -21,6 +21,7 @@ import type { Theme, ThemeColors } from '../lib/themes';
 import {
   BUILTIN_THEMES,
   BUILTIN_DARK,
+  DEFAULT_THEME_ID,
   loadCustomThemesFromStorage,
   loadActiveThemeIdFromStorage,
   saveCustomThemesToStorage,
@@ -98,6 +99,13 @@ interface AppState {
   // whenever a plain (un-modified) click sets a new primary selection.
   multiSelectedSessionIds: string[];
   sidebarCollapsed: boolean;
+  // Zen Pinned Session Wall (plan §5.3) — ordered list of session ids the
+  // user has pinned to the homepage. Mirrored to localStorage for instant
+  // cold-load and to `GlobalConfig.pinnedSessionIds` for cross-browser sync.
+  pinnedSessionIds: string[];
+  // Which Wall tile owns keyboard input. Click a tile to focus; only the
+  // focused tile's composer routes the user's typing.
+  focusedPaneId: string | null;
   customThemes: Theme[];
   activeThemeId: string;
   commandPaletteOpen: boolean;
@@ -127,6 +135,9 @@ interface AppState {
   toggleMultiSelectedSession: (id: string) => void;
   clearMultiSelectedSessions: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  togglePinSession: (id: string) => void;
+  reorderPinnedSessions: (ids: string[]) => void;
+  setFocusedPane: (id: string | null) => void;
   setActiveTheme: (id: string) => void;
   addCustomTheme: (theme: Theme) => void;
   updateCustomTheme: (id: string, patch: { name?: string; colors?: Partial<ThemeColors>; isDark?: boolean }) => void;
@@ -587,13 +598,27 @@ export const useAppStore = create<AppState>((set, get) => ({
   fileViewerRefreshKey: {},
   multiSelectedSessionIds: [],
   sidebarCollapsed: false,
+  pinnedSessionIds: (() => {
+    // Read localStorage synchronously so the Wall paints on first frame
+    // without a hydration flash. The daemon GET /api/config will reconcile
+    // shortly after if any other browser updated the list out-of-band.
+    try {
+      const raw = localStorage.getItem('mt:pinnedSessionIds');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  })(),
+  focusedPaneId: null,
   customThemes: loadCustomThemesFromStorage(),
   activeThemeId: (() => {
     const stored = loadActiveThemeIdFromStorage();
     const customs = loadCustomThemesFromStorage();
     const all = [...BUILTIN_THEMES, ...customs];
     if (stored && all.some((t) => t.id === stored)) return stored;
-    return BUILTIN_DARK.id;
+    return DEFAULT_THEME_ID;
   })(),
   commandPaletteOpen: false,
   addAgentModalOpen: false,
@@ -601,7 +626,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   addProjectModalOpen: false,
   globalSettingsOpen: false,
   projectSettingsOpen: false,
-  detailPanelOpen: true,
+  // Drawer is closed by default in the Zen layout (was always-open column);
+  // user opens it via Cmd+. or SessionHeaderBar's chevron when they want
+  // session context (activity / cost / notes / info).
+  detailPanelOpen: false,
   detailPanelTab: 'activity',
   // Start optimistic. The fullscreen "Cannot connect to daemon" overlay is
   // intrusive — only show it after a real connect attempt has failed, never
@@ -691,6 +719,37 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   clearMultiSelectedSessions: () => set({ multiSelectedSessionIds: [] }),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+  togglePinSession: (id) =>
+    set((s) => {
+      const next = s.pinnedSessionIds.includes(id)
+        ? s.pinnedSessionIds.filter((x) => x !== id)
+        : [...s.pinnedSessionIds, id];
+      try {
+        localStorage.setItem('mt:pinnedSessionIds', JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      // Fire-and-forget server sync — we don't await the PATCH because the
+      // local mutation is already canonical from the user's POV; any error
+      // surfaces in DevLog but doesn't block the UI.
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ pinnedSessionIds: next }).catch(() => {}),
+      );
+      return { pinnedSessionIds: next };
+    }),
+  reorderPinnedSessions: (ids) =>
+    set(() => {
+      try {
+        localStorage.setItem('mt:pinnedSessionIds', JSON.stringify(ids));
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ pinnedSessionIds: ids }).catch(() => {}),
+      );
+      return { pinnedSessionIds: ids };
+    }),
+  setFocusedPane: (id) => set({ focusedPaneId: id }),
   setActiveTheme: (id) =>
     set(() => {
       saveActiveThemeIdToStorage(id);

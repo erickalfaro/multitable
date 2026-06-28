@@ -1,9 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-// Self-hosted JetBrains Mono. Loads woff2 weights bundled into the dev/prod
-// build (no external network fetch). The package declares the font under the
-// family name `'JetBrains Mono Variable'`, which globals.css references in
-// every monospace font-family chain.
+// Self-hosted fonts. Both packages declare variable woff2 weights bundled
+// into the dev/prod build (no external network fetch). Inter is the Zen
+// humanist sans used for UI / prose (body default); JetBrains Mono backs
+// code / terminal / composer (opt-in via .mt-mono / `<code>` / `<pre>` /
+// the `--font-mono` token).
+import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
 import App from './App';
 import './styles/globals.css';

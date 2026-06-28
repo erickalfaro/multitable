@@ -3,185 +3,211 @@
 @tailwind utilities;
 
 /* ───────────────────────────────────────────────────────────
-   OBSIDIAN / ESSENCE v0.7 — canonical dark
+   ZEN v1.0 — canonical dark (OKLCH band-anchored)
+   See plan §3 for the color discipline; lib/themes.ts is the canonical
+   source — this :root block provides the pre-JS fallback so the splash
+   isn't a flash of unstyled (or worse, white) content before useTheme
+   overwrites these via applyThemeToDocument().
    ─────────────────────────────────────────────────────────── */
 :root {
-  /* Surface — bg-0 → bg-3 mapped onto historical names */
-  --bg-primary: #08080b;     /* bg-0 — canvas */
-  --bg-sidebar: #0e0e12;     /* bg-1 — sidebar / panels */
-  --bg-statusbar: #0e0e12;   /* bg-1 */
-  --bg-elevated: #16161c;    /* bg-2 — modals, cards */
-  --bg-hover: #1f1f27;       /* bg-3 */
-  --bg-overlay: rgba(0, 0, 0, 0.7);
+  /* Surface — every value in OKLCH; canvas L=20%, lifted via L ladder. */
+  --bg-primary: oklch(20% 0.01 280);
+  --bg-sidebar: oklch(24% 0.01 280);
+  --bg-statusbar: oklch(24% 0.01 280);
+  --bg-elevated: oklch(28% 0.012 280);
+  --bg-hover: oklch(32% 0.014 280);
+  --bg-overlay: oklch(12% 0.01 280 / 0.62);
 
   /* Text ramp — text-0 (faint) → text-3 (primary) */
-  --text-primary: #e6e6ed;   /* text-3 */
-  --text-secondary: #b8b8c4; /* text-2 */
-  --text-muted: #7a7a87;     /* text-1 */
-  --text-faint: #4a4a55;     /* text-0 — used for the dimmest hints */
+  --text-primary: oklch(92% 0.005 280);
+  --text-secondary: oklch(74% 0.01 280);
+  --text-muted: oklch(55% 0.012 280);
+  --text-faint: oklch(40% 0.012 280);
 
-  /* Borders */
-  --border: #1a1a22;         /* border-0 */
-  --border-strong: #2a2a35;  /* border-1 */
-  --border-tab: #3d3d4a;     /* border-2 */
+  /* Borders — "barely there" against canvas; rgba over white so the relative
+     alpha works regardless of any nested background tint. */
+  --border: oklch(100% 0 0 / 0.06);
+  --border-strong: oklch(100% 0 0 / 0.10);
+  --border-tab: oklch(100% 0 0 / 0.16);
 
-  /* Single chromatic accent: AMBER. Historical name kept for ABI stability. */
-  --accent-blue: #ff8a00;    /* amber */
-  --accent-amber: #ff8a00;
-  --accent-amber-dim: #cc6e00;
-  --accent-glow: none;       /* no glows, ever */
+  /* Single chromatic accent: LAVENDER from the project hue ring. Historical
+     `--accent-blue` name kept for ABI stability across 70+ existing inline
+     style sites; `--accent-amber` is the legacy alias that now points to the
+     same lavender (one-release deprecation window). */
+  --accent: oklch(74% 0.10 285);
+  --accent-blue: oklch(74% 0.10 285);
+  --accent-amber: oklch(74% 0.10 285);
+  --accent-amber-dim: oklch(70% 0.10 285);
+  --accent-glow: none;
 
-  /* Signal colors — appear ONLY on glyphs and exit codes */
-  --status-running: #2ecc71; /* live */
-  --status-idle: #7a7a87;    /* dim — text-1 */
-  --status-warning: #ff8a00; /* warnings unify into amber */
-  --status-error: #ff4d4f;   /* err */
-  --status-stopped: #4a4a55; /* text-0 */
-  --status-live: #2ecc71;
-  --status-err: #ff4d4f;
+  /* Signal colors — appear ONLY on glyphs and exit codes. All sit in the
+     L=74±4 dark band so they read at the same perceptual brightness. */
+  --status-running: oklch(76% 0.11 160);  /* muted mint */
+  --status-idle: oklch(60% 0.02 280);
+  --status-warning: oklch(78% 0.11 70);   /* muted apricot */
+  --status-error: oklch(70% 0.14 25);     /* muted coral */
+  /* statusStopped intentionally below the band — quiet for "no activity". */
+  --status-stopped: oklch(45% 0.01 280);
+  --status-live: oklch(76% 0.11 160);
+  --status-err: oklch(70% 0.14 25);
 
   --selection-bg: transparent;
-  --selection-border: #ff8a00;
+  --selection-border: oklch(74% 0.10 285);
 
-  /* Timeline node colors — one hue per agent action family. Dim, low-saturation
-     so the rail reads at a glance without screaming. */
-  --node-text:       #b8b8c4;
-  --node-thinking:   #8b7fb3;
-  --node-fs-read:    #5a9bb0;
-  --node-fs-write:   #c08a4f;
-  --node-shell:      #6fa86a;
-  --node-web:        #6788c4;
-  --node-subagent:   #b07a9f;
-  --node-mcp:        #9c8a5e;
-  --node-todo:       #7a7a87;
-  --node-permission: #ff8a00;
+  /* Timeline node colors — one hue per agent action family. Anchored to the
+     band (L=74, C=0.08) with ΔH≥25° between siblings. */
+  --node-text:       oklch(74% 0.01 280);
+  --node-thinking:   oklch(74% 0.08 280);
+  --node-fs-read:    oklch(74% 0.08 215);
+  --node-fs-write:   oklch(74% 0.08 190);
+  --node-shell:      oklch(74% 0.08 160);
+  --node-web:        oklch(74% 0.08 130);
+  --node-mcp:        oklch(74% 0.08 100);
+  --node-subagent:   oklch(74% 0.08 70);
+  --node-todo:       oklch(74% 0.08 40);
+  --node-permission: oklch(74% 0.10 25);
 
-  /* Radii — manifesto: structural seams sharp, primitives snug, containers soft, circles pill.
+  /* Radii — Zen: softer surfaces, generous primitives.
      Tier semantics:
-       --radius-none : structural seams (panel borders, status bar, dividers)
-       --radius-snug : interactive primitives (buttons, inputs, kbd, chips, tooltips)
-       --radius-soft : content containers (cards, modals, tool cards)
-       --radius-pill : true circles only (status dots, loader dots, avatars)
-     Nothing > 4px except --radius-pill. */
+       --radius-none        : structural seams (status bar, panel dividers)
+       --radius-snug        : interactive primitives (buttons, inputs, badges, kbd)
+       --radius-soft        : content containers (cards, modals, tool cards)
+       --radius-comfortable : drawers, wall tiles, the composer
+       --radius-pill        : true circles (status dots, avatars) */
   --radius-none: 0;
-  --radius-snug: 2px;
-  --radius-soft: 4px;
+  --radius-snug: 4px;
+  --radius-soft: 10px;
+  --radius-comfortable: 14px;
   --radius-pill: 9999px;
+  --radius-composer: var(--radius-comfortable);
 
   /* Legacy aliases — kept so existing references resolve during migration. */
   --radius-sm: var(--radius-none);
   --radius-md: var(--radius-snug);
   --radius-lg: var(--radius-soft);
-  --radius-xl: var(--radius-soft);
+  --radius-xl: var(--radius-comfortable);
 
-  /* Shadows — manifesto: none. Kept as variables so existing references resolve. */
-  --shadow-sm: none;
-  --shadow-md: none;
-  --shadow-lg: none;
-  --shadow-xl: none;
-  --shadow-inset: none;
+  /* Shadows — Zen: restored as gentle elevation. Subtle on dark thanks to the
+     opacity stack; values intentionally low so nothing reads as "popping". */
+  --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.18);
+  --shadow-md: 0 2px 8px oklch(0% 0 0 / 0.20);
+  --shadow-lg: 0 10px 30px -8px oklch(0% 0 0 / 0.35);
+  --shadow-xl: 0 20px 60px -12px oklch(0% 0 0 / 0.45);
+  --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / 0.04);
 
-  /* Single deliberate exception: the user-prompt card uses elevation so it
-     stands apart from the recessed assistant prose / tool calls. Dark mode
-     stacks an inset top highlight + a faint outer ring + a strong drop
-     shadow because plain rgba shadows barely register on a near-black canvas. */
+  /* User-prompt card elevation — same intent as before (lift above recessed
+     assistant prose); tuned slightly softer for the Zen canvas. */
   --shadow-elevated-message:
-    inset 0 1px 0 rgba(255, 255, 255, 0.10),
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 10px 24px rgba(0, 0, 0, 0.65),
-    0 2px 6px rgba(0, 0, 0, 0.45);
+    inset 0 1px 0 oklch(100% 0 0 / 0.06),
+    0 0 0 1px oklch(100% 0 0 / 0.04),
+    0 12px 28px oklch(0% 0 0 / 0.45),
+    0 2px 6px oklch(0% 0 0 / 0.30);
 
-  /* Second deliberate exception: the chat composer reads as a floating card
-     above the chat tray. Subtle two-stop drop shadow — the close-in stop
-     pins the edge, the wider stop separates it from the surface. */
+  /* Chat composer — floating-card shadow on the soft canvas. */
   --shadow-composer:
-    0 1px 2px rgba(0, 0, 0, 0.35),
-    0 10px 28px rgba(0, 0, 0, 0.45);
+    0 1px 2px oklch(0% 0 0 / 0.28),
+    0 12px 32px oklch(0% 0 0 / 0.32);
 
-  /* Soft container radius for the composer card — sits between --radius-soft
-     (4px, content cards) and --radius-pill. Manifesto exception scoped to a
-     single component; do not reuse for general containers. */
-  --radius-composer: 10px;
-
-  /* Motion */
+  /* Motion — Zen: slower, more intentional. 80ms felt clinical; 120/200/320
+     reads as breath. prefers-reduced-motion collapses these (rule below). */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-snap: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-fast: 80ms;
-  --dur-med: 130ms;
-  --dur-slow: 180ms;
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
+  --dur-slow: 320ms;
   --dur-instant: 0ms;
 
-  /* Focus ring — 1px amber border, no halo */
-  --focus-ring: 0 0 0 1px var(--accent-amber);
+  /* Spacing scale — px ladder, lets components stop hardcoding numbers. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Typography */
+  --font-prose: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont,
+                'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'Berkeley Mono',
+               ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size-prose: 13.5px;
+  --font-size-mono: 12.5px;
+
+  /* Glass — backdrop-filter surfaces for drawers / floating chrome. */
+  --blur-glass: 14px;
+  --glass-tint: color-mix(in oklch, var(--bg-elevated) 72%, transparent);
+
+  /* Focus ring — 1px accent border, no halo. */
+  --focus-ring: 0 0 0 1px var(--accent);
 
   color-scheme: dark;
 }
 
 /* ───────────────────────────────────────────────────────────
-   OBSIDIAN — light fallback (warm cream)
+   ZEN v1.0 — light (warm paper, OKLCH band-anchored)
    ─────────────────────────────────────────────────────────── */
 [data-theme="light"] {
-  --bg-primary: #f5f1e8;
-  --bg-sidebar: #ebe6d8;
-  --bg-statusbar: #ebe6d8;
-  --bg-elevated: #fbf8ef;
-  --bg-hover: #e0d9c5;
-  --bg-overlay: rgba(40, 30, 18, 0.45);
+  --bg-primary: oklch(96% 0.005 80);
+  --bg-sidebar: oklch(93% 0.005 80);
+  --bg-statusbar: oklch(93% 0.005 80);
+  --bg-elevated: oklch(98% 0.004 80);
+  --bg-hover: oklch(89% 0.006 80);
+  --bg-overlay: oklch(18% 0.01 280 / 0.45);
 
-  --text-primary: #1a1a14;
-  --text-secondary: #4a4538;
-  --text-muted: #7a7468;
-  --text-faint: #a8a397;
+  --text-primary: oklch(18% 0.01 280);
+  --text-secondary: oklch(38% 0.012 280);
+  --text-muted: oklch(55% 0.012 280);
+  --text-faint: oklch(68% 0.01 280);
 
-  --border: #d8d2c0;
-  --border-strong: #bcb4a0;
-  --border-tab: #9c9482;
+  --border: oklch(20% 0.01 280 / 0.08);
+  --border-strong: oklch(20% 0.01 280 / 0.14);
+  --border-tab: oklch(20% 0.01 280 / 0.22);
 
-  --accent-blue: #ff8a00;
-  --accent-amber: #ff8a00;
-  --accent-amber-dim: #b35e00;
+  --accent: oklch(48% 0.13 285);
+  --accent-blue: oklch(48% 0.13 285);
+  --accent-amber: oklch(48% 0.13 285);
+  --accent-amber-dim: oklch(52% 0.13 285);
   --accent-glow: none;
 
-  --status-running: #1f9d55;
-  --status-idle: #7a7468;
-  --status-warning: #c46a00;
-  --status-error: #c92a2a;
-  --status-stopped: #a8a397;
-  --status-live: #1f9d55;
-  --status-err: #c92a2a;
+  --status-running: oklch(50% 0.14 160);
+  --status-idle: oklch(55% 0.02 280);
+  --status-warning: oklch(55% 0.14 60);
+  --status-error: oklch(52% 0.18 25);
+  --status-stopped: oklch(72% 0.01 280);
+  --status-live: oklch(50% 0.14 160);
+  --status-err: oklch(52% 0.18 25);
 
   --selection-bg: transparent;
-  --selection-border: #ff8a00;
+  --selection-border: oklch(48% 0.13 285);
 
-  /* Timeline node colors — light-theme counterparts. Saturated a touch more so
-     they read on the warm cream canvas. */
-  --node-text:       #4a4538;
-  --node-thinking:   #6e5fa0;
-  --node-fs-read:    #2f7388;
-  --node-fs-write:   #9e6a2c;
-  --node-shell:      #3f8c4a;
-  --node-web:        #3e62b0;
-  --node-subagent:   #8f5d80;
-  --node-mcp:        #7a663b;
-  --node-todo:       #7a7468;
-  --node-permission: #c46a00;
+  /* Timeline node colors — light-band counterparts (L=48, C=0.10). */
+  --node-text:       oklch(48% 0.012 280);
+  --node-thinking:   oklch(48% 0.10 280);
+  --node-fs-read:    oklch(48% 0.10 215);
+  --node-fs-write:   oklch(48% 0.10 190);
+  --node-shell:      oklch(48% 0.10 160);
+  --node-web:        oklch(48% 0.10 130);
+  --node-mcp:        oklch(48% 0.10 100);
+  --node-subagent:   oklch(48% 0.10 70);
+  --node-todo:       oklch(48% 0.10 40);
+  --node-permission: oklch(48% 0.13 25);
 
-  --shadow-sm: none;
-  --shadow-md: none;
-  --shadow-lg: none;
-  --shadow-xl: none;
-  --shadow-inset: none;
+  /* Light shadows — softer alpha; the warm canvas does most of the work. */
+  --shadow-sm: 0 1px 2px oklch(20% 0.01 280 / 0.08);
+  --shadow-md: 0 2px 8px oklch(20% 0.01 280 / 0.10);
+  --shadow-lg: 0 10px 30px -8px oklch(20% 0.01 280 / 0.16);
+  --shadow-xl: 0 20px 60px -12px oklch(20% 0.01 280 / 0.22);
+  --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / 0.40);
 
-  /* Light mode: a clean drop shadow against the cream canvas does the work
-     on its own — no inset highlight or outer ring needed. */
   --shadow-elevated-message:
-    0 6px 16px rgba(40, 30, 18, 0.18),
-    0 1px 3px rgba(40, 30, 18, 0.12);
+    0 6px 16px oklch(20% 0.01 280 / 0.14),
+    0 1px 3px oklch(20% 0.01 280 / 0.10);
 
-  /* Composer floating shadow — softer on the cream canvas. */
   --shadow-composer:
-    0 1px 2px rgba(40, 30, 18, 0.10),
-    0 8px 22px rgba(40, 30, 18, 0.14);
+    0 1px 2px oklch(20% 0.01 280 / 0.08),
+    0 10px 26px oklch(20% 0.01 280 / 0.12);
+
+  --glass-tint: color-mix(in oklch, var(--bg-elevated) 78%, transparent);
 
   color-scheme: light;
 }
@@ -215,15 +241,38 @@ html, body, #root {
 }
 
 body {
-  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'Berkeley Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Zen: humanist sans for UI / prose; code / terminal / composer opt back
+     into --font-mono explicitly. See plan §4 "Typography". */
+  font-family: var(--font-prose);
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 12.5px;
+  font-size: var(--font-size-prose);
   line-height: 1.5;
-  font-feature-settings: 'tnum' 1, 'calt' 1;
+  font-feature-settings: 'tnum' 1, 'calt' 1, 'ss01' 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* Mobile bumps prose to 14px for arm's-length legibility. */
+@media (max-width: 640px) {
+  body {
+    font-size: 14px;
+  }
+}
+
+/* Code-style content opts back into mono — chat code blocks, terminal,
+   composer, tabular numerics. Components apply this class explicitly. */
+.mt-mono,
+code, pre, kbd, samp,
+.xterm,
+.cm-editor {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+}
+/* Inputs / textareas inherit body prose by default — code editors override. */
+input, textarea, select, button {
+  font-family: inherit;
 }
 
 /* xterm.js container */
@@ -322,24 +371,31 @@ body {
   }
 }
 
-/* ---------- Custom scrollbars ---------- */
+/* ---------- Custom scrollbars ---------- *
+ * Zen: slim (6px), fade in only on hover within the scrollable region.
+ * Replaces the previous always-visible 10px gutter. */
 .mt-scroll {
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color var(--dur-med) var(--ease-out);
+}
+.mt-scroll:hover {
   scrollbar-color: var(--border-strong) transparent;
 }
 .mt-scroll::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
 }
 .mt-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 .mt-scroll::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: var(--radius-pill);
+  transition: background-color var(--dur-med) var(--ease-out);
+}
+.mt-scroll:hover::-webkit-scrollbar-thumb {
   background-color: var(--border-strong);
-  border-radius: 0;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-  transition: background-color var(--dur-fast) var(--ease-out);
 }
 .mt-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--text-muted);
@@ -363,18 +419,17 @@ body {
   overflow-anchor: none;
 }
 
+/* Global scrollbar fallback — Zen slim 6px. */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background-color: var(--border-strong);
-  border-radius: 0;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+  border-radius: var(--radius-pill);
 }
 ::-webkit-scrollbar-thumb:hover {
   background-color: var(--text-muted);
@@ -513,28 +568,31 @@ select:focus-visible,
 }
 
 /* ---------- Resizable panel handle ----------
- * react-resizable-panels renders the handle as a 0-width div by default. We
- * give it a 6px hit zone with a single visible 1px center line so it reads
- * as a panel seam, not as decoration. Hover and drag states darken slightly
- * (no glow — matches the rest of the chrome).
+ * Zen: 3px slim seam at rest (was 6px), visible only on hover. The hit zone
+ * stays generous via padding inset so users don't have to aim precisely.
  */
 .mt-resize-handle {
   position: relative;
-  flex: 0 0 6px;
+  flex: 0 0 3px;
   background: transparent;
   cursor: col-resize;
-  transition: background-color var(--dur-fast) var(--ease-out);
+  transition: flex-basis var(--dur-med) var(--ease-out),
+              background-color var(--dur-fast) var(--ease-out);
 }
 .mt-resize-handle::after {
   content: '';
   position: absolute;
-  inset: 0 2px;
-  background: var(--border);
-  transition: background-color var(--dur-fast) var(--ease-out);
+  inset: 0 1px;
+  background: transparent;
+  transition: background-color var(--dur-med) var(--ease-out);
+}
+.mt-resize-handle:hover,
+.mt-resize-handle[data-resize-handle-active] {
+  flex-basis: 5px;
 }
 .mt-resize-handle:hover::after,
 .mt-resize-handle[data-resize-handle-active]::after {
-  background: var(--border-tab);
+  background: var(--border-strong);
 }
 
 /* ---------- Edge rails (visible only when a side panel is collapsed) ----------
@@ -825,4 +883,90 @@ select:focus-visible,
 .mt-chat-assistant img {
   max-width: 100%;
   height: auto;
+}
+
+/* ───────────────────────────────────────────────────────────
+   ZEN utility classes
+   ─────────────────────────────────────────────────────────── */
+
+/* Auto-hide chrome — rests at 0.45 opacity; full on hover, focus-within, or
+ * when explicitly marked active (e.g. composer is focused, turn in flight).
+ * Mobile (no hover) keeps full opacity — chrome surfaces driven by tap.
+ * Reduced-motion users see the same fade collapsed to instant. */
+.mt-auto-hide {
+  opacity: 0.45;
+  transition: opacity var(--dur-med) var(--ease-out);
+}
+.mt-auto-hide:hover,
+.mt-auto-hide:focus-within,
+.mt-auto-hide[data-active='true'] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .mt-auto-hide {
+    opacity: 1;
+  }
+}
+
+/* Glass surface — Zen drawers / floating chrome. backdrop-filter is
+ * progressive-enhancement; the --glass-tint background is the floor. */
+.mt-glass {
+  background: var(--glass-tint);
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(1.1);
+  backdrop-filter: blur(var(--blur-glass)) saturate(1.1);
+}
+
+/* Wall tile — the soft container that wraps a SessionPane in the Wall view.
+ * Subtle border, soft radius, focus ring on the focused tile. */
+.mt-wall-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: var(--radius-comfortable);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  overflow: hidden;
+  transition: box-shadow var(--dur-med) var(--ease-out),
+              border-color var(--dur-med) var(--ease-out),
+              transform var(--dur-med) var(--ease-out);
+}
+.mt-wall-tile:hover {
+  border-color: var(--border-strong);
+}
+.mt-wall-tile[data-focused='true'] {
+  border-color: color-mix(in oklch, var(--accent) 60%, var(--border-strong));
+  box-shadow: var(--shadow-md),
+              0 0 0 1px color-mix(in oklch, var(--accent) 40%, transparent);
+}
+/* Other tiles dim slightly when one tile holds focus, to direct the eye. */
+.mt-wall[data-has-focus='true'] .mt-wall-tile:not([data-focused='true']) {
+  opacity: 0.72;
+}
+
+/* Workspace tint — applied to the surface that should wear the project hue.
+ * Resolves --workspace-from / --workspace-to from the nearest WorkspaceTint
+ * wrapper. The 7% color-mix lands at a predictable lightness (see plan §3.4
+ * Rule 2). Falls through cleanly if no workspace is in scope. */
+.mt-workspace-tinted {
+  background-color: color-mix(
+    in oklch,
+    var(--workspace-from, transparent) 7%,
+    var(--bg-elevated)
+  );
+}
+.mt-workspace-gradient {
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--workspace-from, transparent) 10%, var(--bg-elevated)),
+    color-mix(in oklch, var(--workspace-to, transparent) 6%, var(--bg-elevated))
+  );
+}
+
+/* Prose helper — opt-in humanist-sans block (default body inherits it now,
+ * but components that previously hard-coded a font-family stack can switch
+ * to this without specifying the stack). */
+.mt-prose {
+  font-family: var(--font-prose);
+  font-size: var(--font-size-prose);
 }

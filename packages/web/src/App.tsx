@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
-import { Menu, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Menu, ChevronRight } from 'lucide-react';
 import {
   Panel,
   PanelGroup,
@@ -1058,19 +1058,19 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Imperative refs to the resizable panels so keyboard shortcuts can
-  // collapse/expand them without re-rendering the whole app on a store flag.
+  // Imperative ref to the sidebar panel so Cmd+B can toggle collapse without
+  // forcing a re-render on the store flag. The context (detail) panel is no
+  // longer a PanelGroup column — it's a fixed-position drawer overlay (Zen
+  // §5.2 detail-panel-as-drawer) so it doesn't need an imperative ref.
   const sidebarRef = useRef<ImperativePanelHandle>(null);
-  const contextRef = useRef<ImperativePanelHandle>(null);
 
-  // Mirror panel collapsed state in React so we can render edge rails that
-  // give the user a click target to expand them again (Cmd+B / Cmd+. aren't
-  // discoverable on their own).
+  // Mirror sidebar collapsed state so the edge rail (click target to expand
+  // when Cmd+B isn't discoverable) can render. The detail drawer no longer
+  // needs this because its open state lives directly in the store.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [contextCollapsed, setContextCollapsed] = useState(false);
 
   // Global keybindings: Ctrl/Cmd+Shift+L → Dev Log, Ctrl/Cmd+B → sidebar,
-  // Ctrl/Cmd+. → context panel.
+  // Ctrl/Cmd+. → detail drawer.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
@@ -1089,35 +1089,46 @@ function App() {
       }
       if (!e.shiftKey && !e.altKey && e.key === '.') {
         e.preventDefault();
-        const p = contextRef.current;
-        if (p) {
-          if (p.isCollapsed()) p.expand();
-          else p.collapse();
-        }
-        // Mirror state so SessionHeaderBar's toggle stays in sync.
         const { detailPanelOpen, setDetailPanelOpen } = useAppStore.getState();
         setDetailPanelOpen(!detailPanelOpen);
+        return;
+      }
+      // Zen: Cmd+P toggles the focused session's pin (the focused session is
+      // either the selected one in main pane, or the Wall tile holding
+      // focusedPaneId). Lets the user build/tear down the Wall by keyboard.
+      if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        const s = useAppStore.getState();
+        const target = s.focusedPaneId ?? s.selectedProcessId;
+        if (target && s.sessions[target]) s.togglePinSession(target);
+        return;
+      }
+      // Cmd+1..9 — focus the Nth Wall tile (1-indexed). Only kicks in when
+      // the Wall is the active surface (no selected process).
+      if (!e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        const s = useAppStore.getState();
+        if (s.selectedProcessId) return; // Don't hijack composer-side digits.
+        const idx = parseInt(e.key, 10) - 1;
+        const id = s.pinnedSessionIds[idx];
+        if (id) {
+          e.preventDefault();
+          s.setFocusedPane(id);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Keep the context panel's collapse state in lockstep with the store's
-  // `detailPanelOpen` flag so SessionHeaderBar's chevron button still works.
+  // Detail panel is now a fixed-position drawer overlay (Zen redesign §5.2):
+  // it sits over the main pane on demand rather than consuming a column.
+  // Open/close lives in the store; SessionHeaderBar's chevron + Cmd+. + the
+  // drawer's own backdrop-click all toggle the same `detailPanelOpen` flag.
   const detailPanelOpen = useAppStore((s) => s.detailPanelOpen);
   const setDetailPanelOpen = useAppStore((s) => s.setDetailPanelOpen);
-  useEffect(() => {
-    const p = contextRef.current;
-    if (!p) return;
-    if (detailPanelOpen && p.isCollapsed()) p.expand();
-    else if (!detailPanelOpen && !p.isCollapsed()) p.collapse();
-  }, [detailPanelOpen]);
 
-  // The right "Context UI" panel renders the SessionDetailPanel for sessions;
-  // for commands/terminals it shows a thin muted placeholder. Picking the
-  // session here (rather than inside the panel) keeps the panel's mount cycle
-  // tied to selection rather than to its parent's re-renders.
+  // Picking the session here (rather than inside the panel) keeps the panel's
+  // mount cycle tied to selection rather than to its parent's re-renders.
   const selectedSession = useAppStore((s) =>
     s.selectedProcessId ? s.sessions[s.selectedProcessId] ?? null : null,
   );
@@ -1263,41 +1274,6 @@ function App() {
           >
             <MainPane />
           </Panel>
-          <PanelResizeHandle className="mt-resize-handle" />
-          <Panel
-            id="context"
-            order={3}
-            ref={contextRef}
-            defaultSize={28}
-            minSize={18}
-            maxSize={50}
-            collapsible
-            collapsedSize={0}
-            onCollapse={() => setContextCollapsed(true)}
-            onExpand={() => setContextCollapsed(false)}
-            style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-          >
-            {selectedSession ? (
-              <SessionDetailPanel key={selectedSession.id} session={selectedSession} />
-            ) : (
-              <div
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--text-faint)',
-                  fontSize: 11.5,
-                  letterSpacing: '0.06em',
-                  textTransform: 'uppercase',
-                  borderLeft: '1px solid var(--border)',
-                  backgroundColor: 'var(--bg-primary)',
-                }}
-              >
-                No agent selected
-              </div>
-            )}
-          </Panel>
         </PanelGroup>
         {sidebarCollapsed && (
           <button
@@ -1309,18 +1285,54 @@ function App() {
             <ChevronRight size={14} />
           </button>
         )}
-        {contextCollapsed && (
-          <button
-            type="button"
-            className="mt-edge-rail mt-edge-rail-right"
-            title="Open context panel (Cmd+.)"
-            onClick={() => contextRef.current?.expand()}
+        </div>
+        </div>
+      )}
+
+      {/* Desktop detail drawer — fixed-position overlay on the right, glass
+          backdrop. Replaces the always-present third PanelGroup column from
+          the pre-Zen layout (see plan §5.2). Toggled by Cmd+. or
+          SessionHeaderBar's chevron. Click-outside dismisses without
+          flipping the store flag back via setDetailPanelOpen(false). */}
+      {!isMobile && detailPanelOpen && selectedSession && (
+        <>
+          <div
+            onClick={() => setDetailPanelOpen(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'transparent',
+              zIndex: 800,
+              cursor: 'default',
+              animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
+            }}
+          />
+          <aside
+            className="mt-glass mt-scroll"
+            // Width clamps so the drawer is comfortable on a 14" laptop but
+            // doesn't dominate a 32" external display. Panel's own borderLeft
+            // does the seam — no double border here.
+            style={{
+              position: 'fixed',
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: 'clamp(360px, 32vw, 540px)',
+              zIndex: 801,
+              boxShadow: 'var(--shadow-xl)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflowY: 'auto',
+              animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
+            }}
           >
-            <ChevronLeft size={14} />
-          </button>
-        )}
-        </div>
-        </div>
+            <SessionDetailPanel
+              key={selectedSession.id}
+              session={selectedSession}
+              onClose={() => setDetailPanelOpen(false)}
+            />
+          </aside>
+        </>
       )}
 
       {/* DevLogPanel renders inline above the status bar so it pushes the

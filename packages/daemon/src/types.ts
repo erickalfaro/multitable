@@ -143,6 +143,25 @@ export interface GlobalConfig {
   // Opus session; new sessions on models that don't support them are clamped
   // to the model's max at session-create time by the UI.
   lastThinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+  // Zen redesign — Pinned Session Wall (plan §5.4). The user pins individual
+  // sessions across projects; the no-selection homepage renders them as live
+  // mini-chats in a responsive grid (desktop) or vertical feed (mobile).
+  // Server-persisted so a browser swap or fresh load preserves the wall.
+  pinnedSessionIds?: string[];
+
+  ui?: {
+    // Active theme id; mirrored to localStorage `mt:activeThemeId` for
+    // instant pre-fetch on cold load, but this is the source of truth for
+    // cross-browser sync.
+    themeId?: string;
+    // Chrome-on-intent toggle. When false, header bar / status bar render
+    // at full opacity always (accessibility / preference). Default true.
+    chromeAutoHide?: boolean;
+    // Wall tile size preference. Cozy = larger tiles, more chat visible per
+    // tile, fewer per row. Compact = denser grid.
+    wallDensity?: 'cozy' | 'compact';
+  };
 }
 
 export interface ProjectConfig {

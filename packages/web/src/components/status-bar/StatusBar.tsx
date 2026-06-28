@@ -17,6 +17,10 @@ export function StatusBar() {
 
   return (
     <div
+      className="mt-auto-hide"
+      // Zen: rests at low opacity, full on hover. Notification badge stays
+      // legible enough at 0.45 that the user can still register count-state
+      // without needing to look directly at the bar.
       style={{
         height: 28,
         backgroundColor: 'var(--bg-statusbar)',

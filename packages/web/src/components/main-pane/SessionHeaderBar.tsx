@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { PanelBottom, Pencil, Sparkles, Menu } from 'lucide-react';
 import { AttachButton } from './AttachButton';
+import { PinToggle } from './PinToggle';
 import { ModeBadge } from './ModeBadge';
 import { ModelChip } from './chat/ModelChip';
 import { UsageLimitBadge } from './UsageLimitBadge';
@@ -229,6 +230,11 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
 
   return (
     <div
+      className="mt-auto-hide"
+      // Calm-by-default: header sits at ~0.45 opacity until the user moves
+      // intent into it (hover, focus, or an explicit data-active flag set
+      // upstream by SessionPane when the composer is focused or a turn is
+      // streaming). See plan §2 "Chrome reveals on intent".
       style={{
         minHeight: 42,
         backgroundColor: 'var(--bg-sidebar)',
@@ -322,6 +328,7 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
             <Pencil size={13} />
           </IconButton>
           <AttachButton processId={session.id} kind="session" />
+          <PinToggle sessionId={session.id} size="sm" />
           <IconButton size="sm" onClick={onToggleDetailPanel} label="Toggle detail panel">
             <PanelBottom size={14} />
           </IconButton>

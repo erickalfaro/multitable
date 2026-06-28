@@ -190,8 +190,18 @@ export function ProjectSections({ project }: Props) {
       store.multiSelectedSessionIds.length >= 2 &&
       store.multiSelectedSessionIds.includes(process.id);
     const bulkIds = bulk ? store.multiSelectedSessionIds : [process.id];
+    const isPinned = store.pinnedSessionIds.includes(process.id);
 
     return [
+      ...(bulk
+        ? []
+        : [
+            {
+              label: isPinned ? 'Unpin from Wall' : 'Pin to Wall',
+              action: () => store.togglePinSession(process.id),
+              divider: true,
+            } as MenuItem,
+          ]),
       // Sessions auto-start on the first turn (sending a message IS starting),
       // so the Start path doesn't apply — only show Stop while a turn is in
       // flight. Stop here means "abort the in-flight SDK turn" via

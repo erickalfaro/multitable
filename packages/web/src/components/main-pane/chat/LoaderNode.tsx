@@ -16,7 +16,14 @@ interface Props {
 
 export function LoaderNode({ loaderVariant, projectId, active, size = 18 }: Props) {
   const Loader = getLoaderComponent(loaderVariant);
-  const projectStripe = projectId ? getProjectColor(projectId, false).stripe : '#ff8a00';
+  // Zen: theme-aware band picker (matches SessionStatusLoader). Pre-Zen
+  // hardcoded `false` was harmless against hex colors but breaks against
+  // band-anchored OKLCH where the light variant (L=48) doesn't read on the
+  // dark canvas.
+  const isDark =
+    typeof document === 'undefined' ||
+    document.documentElement.getAttribute('data-theme') !== 'light';
+  const projectStripe = projectId ? getProjectColor(projectId, isDark).stripe : 'var(--accent)';
   const color = active ? projectStripe : 'var(--text-faint)';
   const innerSize = Math.round(size * 0.78);
   return (

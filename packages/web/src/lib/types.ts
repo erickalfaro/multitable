@@ -332,6 +332,14 @@ export interface GlobalConfig {
   notifications: boolean;
   port: number;
   host: string;
+  // Zen Pinned Session Wall (plan §5.4) — server-persisted ids of sessions
+  // pinned to the homepage Wall. Mirrors localStorage `mt:pinnedSessionIds`.
+  pinnedSessionIds?: string[];
+  ui?: {
+    themeId?: string;
+    chromeAutoHide?: boolean;
+    wallDensity?: 'cozy' | 'compact';
+  };
 }
 
 export interface TelegramIntegrationView {

@@ -26,7 +26,17 @@ export function SessionStatusLoader({
   }
 
   const Loader = getLoaderComponent(loaderVariant);
-  const color = getProjectColor(projectId, false).stripe;
+  // Zen: project color resolved against the active theme's band. The legacy
+  // hardcoded `false` here gave us the light-band variant regardless of
+  // theme — fine when both themes used raw hex, broken under OKLCH band
+  // discipline because the light-band (L=48) is too dark on the Zen canvas.
+  // Picking up the document attribute set by applyThemeToDocument keeps
+  // this side-effect-free + cheap (no store subscription on a per-row
+  // sidebar loader). Falls back to dark when unset.
+  const isDark =
+    typeof document === 'undefined' ||
+    document.documentElement.getAttribute('data-theme') !== 'light';
+  const color = getProjectColor(projectId, isDark).stripe;
   const isActive = active ?? state === 'running';
 
   return (
