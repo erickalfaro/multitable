@@ -134,17 +134,16 @@ export function CommandConsole() {
         }}
       />
       <div
-        className="mt-scroll"
+        className="mt-glass-strong mt-scroll"
         style={{
           position: 'fixed',
-          top: 0,
-          right: 0,
-          bottom: 0,
+          top: 'var(--shell-inset)',
+          right: 'var(--shell-inset)',
+          bottom: 'var(--shell-inset)',
           width: 420,
           maxWidth: '94vw',
+          borderRadius: 'var(--shell-radius)',
           zIndex: 951,
-          backgroundColor: 'var(--bg-sidebar)',
-          borderLeft: '1px solid var(--border)',
           boxShadow: 'var(--shadow-xl)',
           display: 'flex',
           flexDirection: 'column',

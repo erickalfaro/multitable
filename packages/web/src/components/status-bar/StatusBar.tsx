@@ -23,8 +23,10 @@ export function StatusBar() {
       // without needing to look directly at the bar.
       style={{
         height: 28,
-        backgroundColor: 'var(--bg-statusbar)',
-        borderTop: '1px solid var(--border)',
+        // Faint frosted strip — a translucent fill (no extra blur; the shell
+        // already blurs the ambient beneath) with a hairline top seam.
+        backgroundColor: 'var(--glass-bg-soft)',
+        borderTop: '1px solid var(--glass-border)',
         display: 'flex',
         alignItems: 'center',
         padding: '0 10px',

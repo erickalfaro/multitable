@@ -7,7 +7,7 @@
     "mt-daemon": "dist/index.js"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "CHOKIDAR_USEPOLLING=true tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json && node -e \"require('fs').mkdirSync('dist/db',{recursive:true});require('fs').copyFileSync('src/db/schema.sql','dist/db/schema.sql')\"",
     "start": "node dist/index.js"
   },

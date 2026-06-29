@@ -265,13 +265,11 @@ export function CommandPalette() {
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        className="mt-glass-strong"
         style={{
-          backgroundColor: 'var(--bg-elevated)',
-          border: '1px solid var(--border-strong)',
-          borderRadius: 'var(--radius-soft)',
+          borderRadius: 'var(--radius-comfortable)',
           width: '100%',
           maxWidth: 620,
-          boxShadow: 'none',
           overflow: 'hidden',
           animation: 'mt-fade-in var(--dur-med) var(--ease-out)',
         }}

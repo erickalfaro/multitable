@@ -26,17 +26,17 @@ export function PermissionBar({ sessionId }: PermissionBarProps = {}) {
   if (filtered.length === 0) return null;
   return (
     <div
-      className="mt-scroll"
+      className="mt-scroll mt-glass-strong"
+      // Blocking action — high opacity (--glass-bg-strong), never auto-hides.
+      // An accent ring lifts it above the chat so it reads as "you must act".
       style={{
         position: 'absolute',
         left: 6,
         right: 6,
         bottom: 6,
         padding: 6,
-        borderRadius: 'var(--radius-soft)',
-        border: '1px solid var(--border-strong)',
-        backgroundColor: 'var(--bg-sidebar)',
-        boxShadow: 'none',
+        borderRadius: 'var(--radius-comfortable)',
+        boxShadow: 'var(--glass-shadow), 0 0 0 1px color-mix(in oklch, var(--accent) 35%, transparent)',
         zIndex: 10,
         maxHeight: '70%',
         overflowY: 'auto',

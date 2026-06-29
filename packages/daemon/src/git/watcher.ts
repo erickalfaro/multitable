@@ -2,6 +2,7 @@ import chokidar from 'chokidar';
 import fs from 'fs';
 import path from 'path';
 import { getStatusSummary, isGitRepo } from './index.js';
+import { watchBackendOptions, isWatchResourceError } from '../watch-options.js';
 import type { GitStatusSummary } from '../types.js';
 
 type FSWatcher = ReturnType<typeof chokidar.watch>;
@@ -10,6 +11,7 @@ interface WatchEntry {
   watcher: FSWatcher;
   timer: NodeJS.Timeout | null;
   inflight: boolean;
+  warnedResource?: boolean;
 }
 
 const DEBOUNCE_MS = 500;
@@ -63,6 +65,7 @@ export class GitWatcher {
     if (!isGitRepo(projectPath)) return;
 
     const watcher = chokidar.watch(projectPath, {
+      ...watchBackendOptions(),
       persistent: false,
       ignoreInitial: true,
       ignored: [
@@ -118,13 +121,18 @@ export class GitWatcher {
     // Swallow watcher errors (e.g. ENOSPC when inotify is exhausted) so they
     // don't surface as unhandled rejections from chokidar's internals.
     watcher.on('error', (err: unknown) => {
-      const e = err as NodeJS.ErrnoException;
-      if (e?.code === 'ENOSPC') {
-        console.warn(
-          `[git/watcher] inotify limit reached for ${projectPath}; ` +
-            'some files will not be watched. ' +
-            'Consider raising fs.inotify.max_user_watches.',
-        );
+      if (isWatchResourceError(err)) {
+        // inotify/file-descriptor budget exhausted. With polling on by default
+        // this should not happen, but on hosts forced to native inotify it can.
+        // Warn once per watcher, then go quiet — the daemon keeps running.
+        if (!entry.warnedResource) {
+          entry.warnedResource = true;
+          console.warn(
+            `[git/watcher] filesystem watch limit reached for ${projectPath}; ` +
+              'some files will not be watched. Polling is enabled by default ' +
+              '(unset MULTITABLE_WATCH_NATIVE) or raise fs.inotify.max_user_watches.',
+          );
+        }
         return;
       }
       console.warn(`[git/watcher] watcher error (${projectPath}):`, err);

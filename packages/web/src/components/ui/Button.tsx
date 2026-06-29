@@ -28,14 +28,16 @@ interface VariantStyle {
 function variantStyle(variant: ButtonVariant): VariantStyle {
   switch (variant) {
     case 'primary':
+      // The single filled brand action per view (glass-design §6). The coral
+      // fill carries the emphasis, so there is no label underline. Keep exactly
+      // one primary Button visible at a time; everything else is secondary/ghost.
       return {
         base: {
-          backgroundColor: 'transparent',
-          color: 'var(--text-primary)',
-          border: '1px solid var(--accent-amber)',
+          backgroundColor: 'var(--brand-coral)',
+          color: 'var(--brand-coral-contrast)',
+          border: '1px solid transparent',
         },
-        hover: { backgroundColor: 'color-mix(in srgb, var(--accent-amber) 10%, transparent)' },
-        labelUnderline: 'var(--accent-amber)',
+        hover: { backgroundColor: 'var(--brand-coral-hover)' },
       };
     case 'secondary':
       return {
@@ -120,7 +122,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           whiteSpace: 'nowrap',
           userSelect: 'none',
           WebkitUserSelect: 'none',
-          borderRadius: 'var(--radius-snug)',
+          borderRadius: 'var(--radius-pill)',
           fontWeight: 500,
           textTransform: 'uppercase',
           fontFamily: 'inherit',

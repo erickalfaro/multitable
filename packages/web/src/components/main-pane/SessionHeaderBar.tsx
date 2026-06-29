@@ -88,8 +88,10 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
     return (
       <div
         style={{
-          backgroundColor: 'var(--bg-sidebar)',
-          borderBottom: '1px solid var(--border)',
+          backgroundColor: 'var(--glass-bg)',
+          backdropFilter: 'blur(var(--blur)) saturate(1.3)',
+          WebkitBackdropFilter: 'blur(var(--blur)) saturate(1.3)',
+          borderBottom: '1px solid var(--glass-border)',
           padding: '6px 10px 8px',
           boxSizing: 'border-box',
           flexShrink: 0,
@@ -237,8 +239,10 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
       // streaming). See plan §2 "Chrome reveals on intent".
       style={{
         minHeight: 42,
-        backgroundColor: 'var(--bg-sidebar)',
-        borderBottom: '1px solid var(--border)',
+        backgroundColor: 'var(--glass-bg)',
+        backdropFilter: 'blur(var(--blur)) saturate(1.3)',
+        WebkitBackdropFilter: 'blur(var(--blur)) saturate(1.3)',
+        borderBottom: '1px solid var(--glass-border)',
         padding: '6px 14px',
         boxSizing: 'border-box',
         flexShrink: 0,

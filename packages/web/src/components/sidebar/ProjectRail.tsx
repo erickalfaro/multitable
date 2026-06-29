@@ -13,7 +13,6 @@ import { useIsDark } from '../../hooks/useIsDark';
 import { buildProjectMenuItems } from '../../lib/projectActions';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import { LogoArt } from './LogoArt';
-import { IconButton } from '../ui';
 import { CATEGORY_COLOR_VAR, CATEGORY_ICON } from '../../lib/alertVisuals';
 
 function projectInitials(name: string): string {
@@ -23,6 +22,13 @@ function projectInitials(name: string): string {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
+/**
+ * One project = one glass "favicon" launcher tile (glass-design: a rounded
+ * square of soft glass, NOT a circle with a stripe). Each tile wears its ring
+ * hue softly — a faint tint at rest, a soft outer glow when active. Hover lifts
+ * it 1px ("gentle motion"). No accent stripe (the skill forbids stripes/blocks;
+ * color is identity, applied softly).
+ */
 function ProjectRailItem({ project }: { project: Project }) {
   const dark = useIsDark();
   const color = getProjectColor(project.id, dark);
@@ -35,12 +41,27 @@ function ProjectRailItem({ project }: { project: Project }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const select = () => {
-    // Decision 3 — reveal only: swap the sections column to this project and
-    // make it the modal target, but leave the main pane on whatever was open.
+    // Reveal-only: swap the sections column to this project and make it the
+    // modal target, but leave the main pane on whatever was open.
     const store = useAppStore.getState();
     store.setSidebarProject(project.id);
     store.setFocusedProject(project.id);
   };
+
+  const hue = color.dot; // oklch(<L> <C> <H>) — band-anchored project hue.
+  const background = active
+    ? `color-mix(in oklch, ${hue} 16%, var(--glass-bg))`
+    : hover
+      ? `color-mix(in oklch, ${hue} 12%, var(--glass-bg))`
+      : `color-mix(in oklch, ${hue} 8%, var(--glass-bg-soft))`;
+  const borderColor = active
+    ? `color-mix(in oklch, ${hue} 55%, transparent)`
+    : hover
+      ? 'var(--border-strong)'
+      : 'var(--glass-border)';
+  const boxShadow = active
+    ? `inset 0 1px 0 var(--glass-highlight), 0 0 18px -3px color-mix(in oklch, ${hue} 50%, transparent)`
+    : 'inset 0 1px 0 var(--glass-highlight)';
 
   return (
     <>
@@ -59,98 +80,77 @@ function ProjectRailItem({ project }: { project: Project }) {
         style={{
           position: 'relative',
           width: '100%',
+          aspectRatio: '1',
           display: 'flex',
+          alignItems: 'center',
           justifyContent: 'center',
-          padding: '5px 0',
-          border: 'none',
-          background: 'transparent',
-          cursor: 'pointer',
+          fontSize: 12.5,
+          fontWeight: 700,
+          letterSpacing: '0.02em',
           fontFamily: 'inherit',
+          color: active
+            ? 'var(--text-primary)'
+            : `color-mix(in oklch, ${hue} 55%, var(--text-secondary))`,
+          background,
+          border: `1px solid ${borderColor}`,
+          borderRadius: 'var(--radius-soft)',
+          boxShadow,
+          cursor: 'pointer',
+          transform: hover && !active ? 'translateY(-1px)' : 'none',
+          transition:
+            'transform var(--dur-fast) var(--ease-out), background var(--dur-med) var(--ease-out), border-color var(--dur-med) var(--ease-out), box-shadow var(--dur-med) var(--ease-out), color var(--dur-med) var(--ease-out)',
         }}
       >
-        {/* Active accent bar (matches SidebarItem selected styling) */}
-        <span
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 4,
-            bottom: 4,
-            width: 3,
-            borderRadius: '0 2px 2px 0',
-            backgroundColor: active ? color.stripe : 'transparent',
-            transition: 'background-color var(--dur-fast) var(--ease-out)',
-          }}
-        />
-        <span
-          style={{
-            position: 'relative',
-            width: 38,
-            height: 38,
-            borderRadius: 'var(--radius-snug)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 13,
-            fontWeight: 700,
-            letterSpacing: '0.02em',
-            color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
-            backgroundColor: active
-              ? 'var(--bg-elevated)'
-              : hover
-                ? 'var(--bg-hover)'
-                : color.tint,
-            border: `1px solid ${active ? color.stripe : 'transparent'}`,
-            transition:
-              'background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
-          }}
-        >
-          {projectInitials(project.name)}
-          {total > 0 && (() => {
-            // Matches SidebarItem: only switch to a category tint when the
-            // badge is purely unread alerts. Permission-pending state keeps
-            // the amber bell so confirmations stay the universal "you must
-            // act" signal regardless of which category produced them.
-            const onlyUnread = permissionCount === 0 && unreadAttention > 0;
-            const tint =
-              onlyUnread && dominantCategory
-                ? CATEGORY_COLOR_VAR[dominantCategory]
-                : 'var(--accent-amber)';
-            const BadgeIcon =
-              onlyUnread && dominantCategory ? CATEGORY_ICON[dominantCategory] : Bell;
-            return (
-              <span
-                title={
-                  permissionCount > 0 && unreadAttention > 0
-                    ? `${permissionCount} permission${permissionCount === 1 ? '' : 's'} pending, ${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
-                    : permissionCount > 0
-                      ? `${permissionCount} confirmation${permissionCount === 1 ? '' : 's'} pending`
-                      : `${unreadAttention} unread ${dominantCategory ?? 'alert'}${unreadAttention === 1 ? '' : 's'}`
-                }
-                style={{
-                  position: 'absolute',
-                  top: -5,
-                  right: -6,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 2,
-                  padding: '1px 4px',
-                  borderRadius: 'var(--radius-snug)',
-                  background: 'var(--bg-sidebar)',
-                  color: tint,
-                  border: `1px solid ${tint}`,
-                  fontSize: 9,
-                  fontWeight: 600,
-                  lineHeight: 1,
-                  flexShrink: 0,
-                  animation: 'mt-pulse 1.6s ease-in-out infinite',
-                }}
-              >
-                <BadgeIcon size={8} />
-                {total}
-              </span>
-            );
-          })()}
-        </span>
+        {projectInitials(project.name)}
+        {total > 0 && (() => {
+          // Permission-pending keeps the amber bell (the universal "you must
+          // act" signal); pure unread alerts switch to the category tint.
+          const onlyUnread = permissionCount === 0 && unreadAttention > 0;
+          const tint =
+            onlyUnread && dominantCategory
+              ? CATEGORY_COLOR_VAR[dominantCategory]
+              : 'var(--accent-amber)';
+          const BadgeIcon =
+            onlyUnread && dominantCategory ? CATEGORY_ICON[dominantCategory] : Bell;
+          return (
+            <span
+              title={
+                permissionCount > 0 && unreadAttention > 0
+                  ? `${permissionCount} permission${permissionCount === 1 ? '' : 's'} pending, ${unreadAttention} unread alert${unreadAttention === 1 ? '' : 's'}`
+                  : permissionCount > 0
+                    ? `${permissionCount} confirmation${permissionCount === 1 ? '' : 's'} pending`
+                    : `${unreadAttention} unread ${dominantCategory ?? 'alert'}${unreadAttention === 1 ? '' : 's'}`
+              }
+              style={{
+                position: 'absolute',
+                top: -6,
+                right: -6,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 2,
+                minWidth: 15,
+                height: 15,
+                padding: '0 4px',
+                borderRadius: 'var(--radius-pill)',
+                background: 'var(--glass-bg-strong)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                color: tint,
+                border: `1px solid ${tint}`,
+                fontSize: 8.5,
+                fontWeight: 700,
+                lineHeight: 1,
+                flexShrink: 0,
+                boxShadow: 'var(--shadow-sm)',
+                animation: 'mt-pulse 1.6s ease-in-out infinite',
+              }}
+            >
+              <BadgeIcon size={8} />
+              {total}
+            </span>
+          );
+        })()}
       </button>
       {menu && (
         <ContextMenu
@@ -173,11 +173,12 @@ function ProjectRailItem({ project }: { project: Project }) {
 }
 
 /**
- * The always-visible leftmost project selector (VS Code activity-bar style).
- * Minimalist icon-only column: Home at the top, one avatar tile per project
- * with a rolled-up notification badge, and Add Project at the bottom.
- * Selecting a project reveals its sections in the adjacent column without
- * disturbing the main pane.
+ * The always-visible leftmost project switcher, reimagined as a Zen glass
+ * favicon launcher (skill: img_4 / img_7). A Home tile sits at the top, then a
+ * 2-column grid of soft-glass project tiles, then an Add tile at the bottom —
+ * all rounded-square glass with hairline borders and gentle hover lift. Picking
+ * a project reveals its sections in the adjacent column without disturbing the
+ * main pane.
  */
 export function ProjectRail() {
   const projects = useAppStore((s) => s.projects);
@@ -185,6 +186,7 @@ export function ProjectRail() {
   const projectOverviewOpen = useAppStore((s) => s.projectOverviewOpen);
   const setAddProjectModalOpen = useAppStore((s) => s.setAddProjectModalOpen);
   const [homeHover, setHomeHover] = useState(false);
+  const [addHover, setAddHover] = useState(false);
 
   const onDashboard = !selectedProcessId && !projectOverviewOpen;
 
@@ -198,72 +200,111 @@ export function ProjectRail() {
 
   return (
     <div
-      className="mt-scroll"
       style={{
-        width: 56,
+        width: 100,
         flexShrink: 0,
         height: '100%',
-        backgroundColor: 'var(--bg-sidebar)',
-        borderRight: '1px solid var(--border)',
+        // Transparent — the tiles float on the shell glass + ambient bloom.
+        background: 'transparent',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'stretch',
-        overflowY: 'auto',
-        overflowX: 'hidden',
+        padding: '10px 10px 12px',
+        gap: 10,
+        overflow: 'hidden',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0 6px' }}>
-        <button
-          type="button"
-          onClick={goToDashboard}
-          onMouseEnter={() => setHomeHover(true)}
-          onMouseLeave={() => setHomeHover(false)}
-          title="View all projects"
-          aria-label="Home — view all projects"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 40,
-            height: 40,
-            padding: 0,
-            border: `1px solid ${onDashboard ? 'var(--border)' : 'transparent'}`,
-            borderRadius: 'var(--radius-snug)',
-            backgroundColor: onDashboard || homeHover ? 'var(--bg-hover)' : 'transparent',
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-            transition: 'background-color var(--dur-fast) var(--ease-out)',
-            transform: 'scale(0.78)',
-          }}
-        >
+      {/* Home — view all projects. A glass tile; brighter when on the wall. */}
+      <button
+        type="button"
+        onClick={goToDashboard}
+        onMouseEnter={() => setHomeHover(true)}
+        onMouseLeave={() => setHomeHover(false)}
+        title="View all projects"
+        aria-label="Home — view all projects"
+        aria-current={onDashboard}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '100%',
+          height: 46,
+          padding: 0,
+          flexShrink: 0,
+          borderRadius: 'var(--radius-soft)',
+          border: `1px solid ${onDashboard ? 'var(--border-strong)' : 'var(--glass-border)'}`,
+          background: onDashboard
+            ? 'var(--glass-bg)'
+            : homeHover
+              ? 'var(--glass-bg-soft)'
+              : 'transparent',
+          boxShadow: onDashboard ? 'inset 0 1px 0 var(--glass-highlight)' : 'none',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          transform: homeHover && !onDashboard ? 'translateY(-1px)' : 'none',
+          transition:
+            'background var(--dur-med) var(--ease-out), border-color var(--dur-med) var(--ease-out), transform var(--dur-fast) var(--ease-out)',
+        }}
+      >
+        <span style={{ display: 'flex', transform: 'scale(0.82)' }}>
           <LogoArt />
-        </button>
-      </div>
+        </span>
+      </button>
 
       <div
         style={{
           height: 1,
-          backgroundColor: 'var(--border)',
-          margin: '2px 10px 6px',
+          background: 'var(--glass-border)',
           flexShrink: 0,
         }}
       />
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      {/* The favicon launcher grid — 2 columns of square glass project tiles. */}
+      <div
+        className="mt-scroll"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, 1fr)',
+          gap: 8,
+          alignContent: 'start',
+          paddingBottom: 2,
+        }}
+      >
         {projects.map((project) => (
           <ProjectRailItem key={project.id} project={project} />
         ))}
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '6px 0 10px' }}>
-        <IconButton
-          size="md"
-          label="Add a new project"
-          onClick={() => setAddProjectModalOpen(true)}
-        >
-          <Plus size={16} />
-        </IconButton>
-      </div>
+      {/* Add a project — a quiet dashed-glass tile, full width at the bottom. */}
+      <button
+        type="button"
+        onClick={() => setAddProjectModalOpen(true)}
+        onMouseEnter={() => setAddHover(true)}
+        onMouseLeave={() => setAddHover(false)}
+        title="Add a new project"
+        aria-label="Add a new project"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '100%',
+          height: 34,
+          flexShrink: 0,
+          borderRadius: 'var(--radius-soft)',
+          border: `1px dashed ${addHover ? 'var(--border-strong)' : 'var(--glass-border)'}`,
+          background: addHover ? 'var(--glass-bg-soft)' : 'transparent',
+          color: addHover ? 'var(--text-secondary)' : 'var(--text-muted)',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          transition:
+            'background var(--dur-med) var(--ease-out), border-color var(--dur-med) var(--ease-out), color var(--dur-med) var(--ease-out)',
+        }}
+      >
+        <Plus size={16} />
+      </button>
     </div>
   );
 }

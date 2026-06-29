@@ -7,6 +7,9 @@ import ReactDOM from 'react-dom/client';
 // the `--font-mono` token).
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
+// Lora — the elegant transitional serif used only for display / empty-state
+// hero microcopy (lowercase, one italic word). UI/prose stays Inter.
+import '@fontsource-variable/lora';
 import App from './App';
 import './styles/globals.css';
 import { installDevLogCapture } from './lib/devLogCapture';

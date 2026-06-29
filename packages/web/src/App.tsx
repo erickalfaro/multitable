@@ -31,7 +31,7 @@ import { playPermissionChime, playAttentionChime, playDoneChime } from './lib/so
 import { handleSessionAlert } from './lib/notify';
 import { updateTabBadge } from './lib/tabBadge';
 import { loadPrefs, subscribePrefs } from './lib/notificationPrefs';
-import { useTheme } from './hooks/useTheme';
+import { useTheme, useAmbientAccent } from './hooks/useTheme';
 import { useIsMobile } from './lib/useIsMobile';
 import { ConnectionOverlay } from './components/ConnectionOverlay';
 import { NotificationCenter } from './components/notifications/NotificationCenter';
@@ -53,6 +53,7 @@ const RUNNING_SAFETY_POLL_MS = 60_000;
 function App() {
   const store = useAppStore();
   useTheme();
+  useAmbientAccent();
 
   const isMobile = useIsMobile();
   const mobileDrawerOpen = store.mobileDrawerOpen;
@@ -1134,25 +1135,37 @@ function App() {
   );
 
   return (
+    // Ambient backdrop — opaque canvas + the per-project accent bloom. The app
+    // floats inside it as a single glass shell inset by --shell-inset. Fixed
+    // overlays (drawers, palette, modals, toasts) are SIBLINGS of the shell so
+    // they never inherit the shell's backdrop-filter containing block.
     <div
-      className="mt-app-shell"
+      className="mt-app-shell mt-ambient"
       style={{
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        backgroundColor: 'var(--bg-primary)',
+        padding: 'var(--shell-inset)',
       }}
     >
+      <div
+        className="mt-shell"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
       {/* Mobile top bar — only when no session is focused; SessionHeaderBar
           takes over as the mobile header on session views. */}
       {showAppTopBar && (
-        <div style={{
+        <div className="mt-glass" style={{
           height: 52,
           display: 'flex',
           alignItems: 'center',
           padding: '0 10px',
-          backgroundColor: 'var(--bg-sidebar)',
-          borderBottom: '1px solid var(--border)',
           flexShrink: 0,
           gap: 10,
           userSelect: 'none',
@@ -1168,67 +1181,6 @@ function App() {
           <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {focusedProject?.name || 'MultiTable'}
           </span>
-        </div>
-      )}
-
-      {/* Mobile drawer overlay */}
-      {isMobile && mobileDrawerOpen && (
-        <>
-          <div
-            onClick={() => setMobileDrawerOpen(false)}
-            style={{
-              position: 'fixed',
-              inset: 0,
-              backgroundColor: 'var(--bg-overlay)',
-              backdropFilter: 'blur(6px) saturate(1.1)',
-              WebkitBackdropFilter: 'blur(6px) saturate(1.1)',
-              zIndex: 900,
-              animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
-            }}
-          />
-          <div
-            className="mt-scroll"
-            style={{
-              position: 'fixed', top: 0, left: 0, bottom: 0, width: 300,
-              zIndex: 901, backgroundColor: 'var(--bg-sidebar)',
-              boxShadow: 'var(--shadow-xl)',
-              transform: 'translateX(0)',
-              animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
-              overflowY: 'auto',
-            }}
-          >
-            <Sidebar />
-          </div>
-        </>
-      )}
-
-      {/* Mobile detail-panel — on desktop the SessionDetailPanel lives in the
-          right PanelGroup column, but the mobile branch below renders only
-          <MainPane />. Without this, SessionHeaderBar's "Toggle detail panel"
-          button flips `detailPanelOpen` but nothing ever mounts the panel.
-          On mobile it takes over the full screen with a back button (passed
-          via isMobile/onClose) rather than a cramped side drawer. */}
-      {isMobile && detailPanelOpen && selectedSession && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 901,
-            width: '100%',
-            height: '100%',
-            backgroundColor: 'var(--bg-primary)',
-            animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          <SessionDetailPanel
-            key={selectedSession.id}
-            session={selectedSession}
-            isMobile
-            onClose={() => setDetailPanelOpen(false)}
-          />
         </div>
       )}
 
@@ -1289,6 +1241,77 @@ function App() {
         </div>
       )}
 
+      {/* DevLogPanel renders inline above the status bar so it pushes the
+          main content up rather than overlaying it. Internally returns null
+          when closed, taking zero space. */}
+      <DevLogPanel />
+
+      {!isMobile && <StatusBar />}
+      </div>
+
+      {/* ── Fixed overlays — siblings of the shell ──────────────────────── */}
+
+      {/* Mobile drawer overlay */}
+      {isMobile && mobileDrawerOpen && (
+        <>
+          <div
+            onClick={() => setMobileDrawerOpen(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'var(--bg-overlay)',
+              backdropFilter: 'blur(6px) saturate(1.1)',
+              WebkitBackdropFilter: 'blur(6px) saturate(1.1)',
+              zIndex: 900,
+              animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
+            }}
+          />
+          <div
+            className="mt-glass-strong mt-scroll"
+            style={{
+              position: 'fixed', top: 0, left: 0, bottom: 0, width: 300,
+              zIndex: 901,
+              boxShadow: 'var(--shadow-xl)',
+              transform: 'translateX(0)',
+              animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
+              overflowY: 'auto',
+            }}
+          >
+            <Sidebar />
+          </div>
+        </>
+      )}
+
+      {/* Mobile detail-panel — on desktop the SessionDetailPanel lives in the
+          right PanelGroup column, but the mobile branch below renders only
+          <MainPane />. Without this, SessionHeaderBar's "Toggle detail panel"
+          button flips `detailPanelOpen` but nothing ever mounts the panel.
+          On mobile it takes over the full screen with a back button (passed
+          via isMobile/onClose) rather than a cramped side drawer. */}
+      {isMobile && detailPanelOpen && selectedSession && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 901,
+            width: '100%',
+            height: '100%',
+            backgroundColor: 'var(--bg-primary)',
+            animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <SessionDetailPanel
+            key={selectedSession.id}
+            session={selectedSession}
+            isMobile
+            onClose={() => setDetailPanelOpen(false)}
+          />
+        </div>
+      )}
+
       {/* Desktop detail drawer — fixed-position overlay on the right, glass
           backdrop. Replaces the always-present third PanelGroup column from
           the pre-Zen layout (see plan §5.2). Toggled by Cmd+. or
@@ -1308,16 +1331,17 @@ function App() {
             }}
           />
           <aside
-            className="mt-glass mt-scroll"
-            // Width clamps so the drawer is comfortable on a 14" laptop but
-            // doesn't dominate a 32" external display. Panel's own borderLeft
-            // does the seam — no double border here.
+            className="mt-glass-strong mt-scroll"
+            // Floats as a glass card inset by --shell-inset to match the shell,
+            // with the shell's own corner radius. Width clamps so it's
+            // comfortable on a 14" laptop but doesn't dominate a 32" display.
             style={{
               position: 'fixed',
-              top: 0,
-              right: 0,
-              bottom: 0,
+              top: 'var(--shell-inset)',
+              right: 'var(--shell-inset)',
+              bottom: 'var(--shell-inset)',
               width: 'clamp(360px, 32vw, 540px)',
+              borderRadius: 'var(--shell-radius)',
               zIndex: 801,
               boxShadow: 'var(--shadow-xl)',
               display: 'flex',
@@ -1335,13 +1359,7 @@ function App() {
         </>
       )}
 
-      {/* DevLogPanel renders inline above the status bar so it pushes the
-          main content up rather than overlaying it. Internally returns null
-          when closed, taking zero space. */}
-      <DevLogPanel />
-
       <OptionSelector />
-      {!isMobile && <StatusBar />}
       <CommandPalette />
       <NotificationCenter />
       <ElicitationModalHost />
@@ -1350,12 +1368,14 @@ function App() {
         position="top-right"
         toastOptions={{
           style: {
-            background: 'var(--bg-elevated)',
+            background: 'var(--glass-bg-strong)',
+            backdropFilter: 'blur(var(--blur)) saturate(1.3)',
+            WebkitBackdropFilter: 'blur(var(--blur)) saturate(1.3)',
             color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--glass-border)',
+            borderRadius: 'var(--radius-comfortable)',
             fontSize: 13,
-            boxShadow: 'var(--shadow-lg)',
+            boxShadow: 'var(--glass-shadow)',
           },
           success: {
             iconTheme: {

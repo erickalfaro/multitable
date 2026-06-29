@@ -133,9 +133,48 @@
   --font-size-prose: 13.5px;
   --font-size-mono: 12.5px;
 
-  /* Glass — backdrop-filter surfaces for drawers / floating chrome. */
-  --blur-glass: 14px;
-  --glass-tint: color-mix(in oklch, var(--bg-elevated) 72%, transparent);
+  /* ── Glass material tier (glass-design) ──────────────────────────────
+     Translucent frosted surfaces over the ambient backdrop. The opacity
+     ladder is load-bearing: each layer is MORE opaque than the one behind
+     it so text stays legible. blur is reserved for floating overlays —
+     repeated/content-heavy surfaces use the *-flat (no-blur) recipe. */
+  --glass-bg:        oklch(22% 0.012 280 / 0.55);   /* default chrome panels   */
+  --glass-bg-strong: oklch(24% 0.012 280 / 0.72);   /* modals/palette/dense text */
+  --glass-bg-soft:   oklch(22% 0.012 280 / 0.38);   /* shell/large areas/inputs */
+  --glass-border:    oklch(100% 0 0 / 0.10);
+  --glass-highlight: oklch(100% 0 0 / 0.06);         /* inset top-lit hairline  */
+  --blur: 18px;
+  --blur-strong: 26px;
+  --glass-shadow:
+    0 18px 50px -12px oklch(0% 0 0 / 0.55),
+    inset 0 1px 0 var(--glass-highlight);
+
+  /* Back-compat: the prior minimal seed mapped here. Existing .mt-glass /
+     var(--glass-tint) / var(--blur-glass) call sites pick up the new look. */
+  --glass-tint: var(--glass-bg);
+  --blur-glass: var(--blur);
+
+  /* ── Floating shell — the app window inset from the viewport edge. ───── */
+  --shell-inset: 10px;
+  --shell-radius: 20px;
+  --shell-bg: oklch(22% 0.012 280 / 0.40);
+
+  /* ── Ambient backdrop — opaque canvas + corner blooms. --space-accent is
+     overwritten at runtime per active project (useAmbientAccent); the
+     fallback is the lavender ring accent so first paint isn't gray. ────── */
+  --ambient-base: oklch(16% 0.012 280);
+  --space-accent: oklch(74% 0.10 285);
+  --bloom:   color-mix(in oklch, var(--space-accent) 22%, transparent);
+  --bloom-2: color-mix(in oklch, var(--space-accent) 10%, transparent);
+
+  /* ── Brand coral — the single filled primary action. Deliberate off-band
+     exception (not registered with assertBandDiscipline). ─────────────── */
+  --brand-coral: oklch(64% 0.18 32);
+  --brand-coral-hover: oklch(68% 0.18 32);
+  --brand-coral-contrast: oklch(98% 0.01 80);
+
+  /* ── Display serif — hero / empty-state microcopy (Lora). ───────────── */
+  --font-display: 'Lora Variable', 'Lora', Georgia, 'Times New Roman', serif;
 
   /* Focus ring — 1px accent border, no halo. */
   --focus-ring: 0 0 0 1px var(--accent);
@@ -207,7 +246,33 @@
     0 1px 2px oklch(20% 0.01 280 / 0.08),
     0 10px 26px oklch(20% 0.01 280 / 0.12);
 
-  --glass-tint: color-mix(in oklch, var(--bg-elevated) 78%, transparent);
+  /* Glass over a light bloom must be a *light* panel (higher alpha, bright
+     inset highlight) or text turns muddy. */
+  --glass-bg:        oklch(99% 0.004 80 / 0.62);
+  --glass-bg-strong: oklch(99% 0.004 80 / 0.80);
+  --glass-bg-soft:   oklch(98% 0.004 80 / 0.45);
+  --glass-border:    oklch(20% 0.01 280 / 0.10);
+  --glass-highlight: oklch(100% 0 0 / 0.60);
+  --blur: 18px;
+  --blur-strong: 26px;
+  --glass-shadow:
+    0 18px 50px -12px oklch(20% 0.01 280 / 0.18),
+    inset 0 1px 0 var(--glass-highlight);
+  --glass-tint: var(--glass-bg);
+  --blur-glass: var(--blur);
+
+  --shell-inset: 10px;
+  --shell-radius: 20px;
+  --shell-bg: oklch(98% 0.004 80 / 0.50);
+
+  --ambient-base: oklch(94% 0.008 80);
+  --space-accent: oklch(48% 0.12 285);
+  --bloom:   color-mix(in oklch, var(--space-accent) 16%, transparent);
+  --bloom-2: color-mix(in oklch, var(--space-accent) 8%, transparent);
+
+  --brand-coral: oklch(58% 0.19 32);
+  --brand-coral-hover: oklch(54% 0.19 32);
+  --brand-coral-contrast: oklch(99% 0.005 80);
 
   color-scheme: light;
 }
@@ -238,6 +303,17 @@ html, body, #root {
 .mt-app-shell {
   height: 100vh;
   height: 100dvh;
+}
+
+/* Phones: the floating shell goes full-bleed — glass insets waste the limited
+   width. Collapsing the tokens makes the inline `padding: var(--shell-inset)`
+   and `.mt-shell` radius go to zero with no JS branch. */
+@media (max-width: 640px) {
+  :root,
+  [data-theme='light'] {
+    --shell-inset: 0px;
+    --shell-radius: 0px;
+  }
 }
 
 body {
@@ -544,6 +620,9 @@ select:focus-visible,
  */
 .mt-sidebar-item {
   contain: layout style;
+  /* Soft corners so hover/selection reads as a rounded pill-row, not a full
+     edge-to-edge band — matches the glass-design soft geometry. */
+  border-radius: var(--radius-soft);
   /* No bg/border transitions on the row itself — selection should SNAP
      instantly; hover changes feel quicker without easing through. */
 }
@@ -908,12 +987,92 @@ select:focus-visible,
   }
 }
 
-/* Glass surface — Zen drawers / floating chrome. backdrop-filter is
- * progressive-enhancement; the --glass-tint background is the floor. */
+/* ── Glass material system (glass-design) ──────────────────────────────────
+ * Layer order: ambient backdrop → floating shell → glass panels → pills, each
+ * slightly more opaque so text stays legible. Rule: at most ONE blur layer
+ * between any pixel and the ambient backdrop. The shell blurs once; chrome
+ * over the shell uses the no-blur *-flat recipe; only floating overlays that
+ * escape the shell (modals/palette/drawer/toasts) get their own blur.
+ * The inset top highlight is baked into --glass-shadow so every glass surface
+ * reads "lit from above" automatically. */
+
+/* Ambient root — opaque canvas + two corner blooms that follow --space-accent
+ * (re-tinted per active project at runtime). The radial blooms never read as a
+ * solid fill; the transition cross-fades the hue on project switch. */
+.mt-ambient {
+  background-color: var(--ambient-base);
+  background-image:
+    radial-gradient(120vh 120vh at 100% 0%, var(--bloom) 0%, transparent 60%),
+    radial-gradient(90vh 90vh at 0% 100%, var(--bloom-2) 0%, transparent 55%);
+  transition: background-image var(--dur-slow) var(--ease-out);
+}
+
+/* Floating app window — inset from the edge, big radius, faint accent edge-glow. */
+.mt-shell {
+  background: var(--shell-bg);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.2);
+  backdrop-filter: blur(var(--blur)) saturate(1.2);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--shell-radius);
+  box-shadow:
+    var(--glass-shadow),
+    0 0 0 1px color-mix(in oklch, var(--space-accent) 14%, transparent),
+    0 0 60px -20px var(--bloom);
+  overflow: hidden;
+}
+
+/* Default chrome panel — translucent + blurred + hairline border + top sheen. */
 .mt-glass {
-  background: var(--glass-tint);
-  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(1.1);
-  backdrop-filter: blur(var(--blur-glass)) saturate(1.1);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.3);
+  backdrop-filter: blur(var(--blur)) saturate(1.3);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+/* Stronger, more opaque, heavier blur — modals, palette, dense text. */
+.mt-glass-strong {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--blur-strong)) saturate(1.3);
+  backdrop-filter: blur(var(--blur-strong)) saturate(1.3);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+/* Cheap translucent tint — NO backdrop-filter. For surfaces that repeat many
+ * times (wall tiles, sidebar rows) where stacked blur would tank FPS. */
+.mt-glass-flat {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+/* Content container — one blur layer, soft corner, dense-text-friendly fill. */
+.mt-glass-card {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--blur));
+  backdrop-filter: blur(var(--blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-comfortable);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-md);
+}
+
+/* Pill — nav items, tabs, chips, buttons. */
+.mt-pill {
+  border-radius: var(--radius-pill);
+}
+
+/* Display serif — hero / empty-state headlines (lowercase, one italic word). */
+.mt-display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-transform: lowercase;
+  color: var(--text-secondary);
+}
+.mt-display em {
+  font-style: italic;
+  color: var(--text-primary);
 }
 
 /* Wall tile — the soft container that wraps a SessionPane in the Wall view.
@@ -926,8 +1085,12 @@ select:focus-visible,
   height: 100%;
   min-height: 0;
   border-radius: var(--radius-comfortable);
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  /* Translucent tint, NO backdrop-filter: a wall can hold 10+ tiles and
+     stacked blur is the #1 jank risk. The shell already blurs the ambient
+     beneath; the tile just floats a frosted pane over it. */
+  background: var(--glass-bg);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   overflow: hidden;
   transition: box-shadow var(--dur-med) var(--ease-out),
               border-color var(--dur-med) var(--ease-out),

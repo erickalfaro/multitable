@@ -53,10 +53,10 @@ export const UserMessage = memo(function UserMessage({
         gap: 8,
         margin: '4px -14px',
         padding: '4px 14px',
-        backgroundColor: 'var(--bg-elevated)',
+        backgroundColor: 'var(--glass-bg)',
         color: 'var(--text-primary)',
-        borderTop: '1px solid var(--border)',
-        borderBottom: '1px solid var(--border)',
+        borderTop: '1px solid var(--glass-border)',
+        borderBottom: '1px solid var(--glass-border)',
         fontSize: 12.5,
         lineHeight: 1.45,
       }}

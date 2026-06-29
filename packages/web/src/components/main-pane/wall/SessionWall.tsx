@@ -105,15 +105,8 @@ function EmptyWall() {
         gap: 'var(--space-3)',
       }}
     >
-      <div
-        style={{
-          fontSize: 18,
-          color: 'var(--text-secondary)',
-          fontWeight: 500,
-          letterSpacing: '-0.01em',
-        }}
-      >
-        Your wall is empty
+      <div className="mt-display" style={{ fontSize: 34 }}>
+        your wall is <em>empty</em>
       </div>
       <div style={{ fontSize: 13.5, maxWidth: 460, lineHeight: 1.5 }}>
         Right-click any session in the sidebar and choose{' '}

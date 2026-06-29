@@ -41,8 +41,8 @@ export function Modal({
         inset: 0,
         zIndex: 1200,
         backgroundColor: 'var(--bg-overlay)',
-        backdropFilter: 'blur(6px)',
-        WebkitBackdropFilter: 'blur(6px)',
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -54,14 +54,12 @@ export function Modal({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        className="mt-glass-strong"
         style={{
           width,
           maxWidth: '100%',
           maxHeight: 'calc(100vh - 32px)',
-          backgroundColor: 'var(--bg-elevated)',
-          border: '1px solid var(--border-strong)',
-          borderRadius: 'var(--radius-soft)',
-          boxShadow: 'none',
+          borderRadius: 'var(--radius-comfortable)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -114,8 +112,8 @@ export function Modal({
               justifyContent: 'flex-end',
               gap: 8,
               padding: '10px 16px',
-              borderTop: '1px solid var(--border)',
-              backgroundColor: 'var(--bg-sidebar)',
+              borderTop: '1px solid var(--glass-border)',
+              backgroundColor: 'var(--glass-bg-soft)',
             }}
           >
             {footer}

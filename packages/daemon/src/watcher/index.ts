@@ -1,6 +1,7 @@
 import chokidar from 'chokidar';
 import fs from 'fs';
 import path from 'path';
+import { watchBackendOptions } from '../watch-options.js';
 
 type FSWatcher = ReturnType<typeof chokidar.watch>;
 
@@ -33,6 +34,7 @@ export class FileWatcher {
     if (!fs.existsSync(mtYmlPath)) return;
 
     const watcher = chokidar.watch(mtYmlPath, {
+      ...watchBackendOptions(),
       persistent: false,
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
@@ -66,6 +68,7 @@ export class FileWatcher {
     );
 
     const watcher = chokidar.watch(globPatterns, {
+      ...watchBackendOptions(),
       persistent: false,
       ignoreInitial: true,
       cwd,

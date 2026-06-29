@@ -8,6 +8,19 @@ export default defineConfig({
   server: {
     host: true,
     allowedHosts: ['.ts.net'],
+    // On Linux, Node's fs.watch (which chokidar uses) allocates one inotify
+    // instance per directory, and `fs.inotify.max_user_instances` is small
+    // (often 128). A busy machine — several dev servers, editors, plus the
+    // MultiTable daemon — exhausts that budget and Vite crashes at startup with
+    // `EMFILE: too many open files`. Polling sidesteps inotify entirely. Default
+    // on; opt back into native inotify with MULTITABLE_WATCH_NATIVE=1.
+    watch:
+      process.env.MULTITABLE_WATCH_NATIVE === '1'
+        ? undefined
+        : {
+            usePolling: true,
+            interval: Number(process.env.MULTITABLE_WATCH_INTERVAL) || 1000,
+          },
     proxy: {
       '/api': {
         target: 'http://localhost:3000',
