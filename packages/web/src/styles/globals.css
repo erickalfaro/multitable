@@ -960,8 +960,7 @@ select:focus-visible,
   cursor: grab;
   touch-action: none;
 }
-.mt-tile-drag-handle:active,
-.react-draggable-dragging .mt-tile-drag-handle {
+.mt-tile-drag-handle:active {
   cursor: grabbing;
 }
 
@@ -1015,49 +1014,111 @@ select:focus-visible,
   font-family: var(--font-mono, monospace);
 }
 
-/* gridstack — Zen theme overrides on top of gridstack/dist/gridstack.min.css.
- * The wall is the only place gridstack mounts; these rules are scoped under
- * .grid-stack so we don't accidentally style anything else. */
-.grid-stack {
-  background: transparent;
-}
-.grid-stack-item > .grid-stack-item-content {
-  inset: 0;
-  border-radius: var(--radius-comfortable);
-  overflow: hidden;
+/* ── Region-aware wall (state-driven; no gridstack) ─────────────────────────
+ * The wall is a vertical stack of regions separated by section dividers. Each
+ * region is a free-float grid; tiles are absolutely positioned by JS from the
+ * store. These rules style the containers, the section dividers, the drag
+ * ghost, the drop placeholder, and the resize handle. */
+.mt-wall-stack {
   display: flex;
   flex-direction: column;
+  padding: var(--space-2) var(--space-2) var(--space-4);
 }
-/* Drop placeholder while dragging — accent-tinted ghost. */
-.grid-stack > .grid-stack-placeholder > .placeholder-content {
-  background: color-mix(in oklch, var(--accent) 22%, transparent);
-  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+.mt-wall-region {
+  width: 100%;
+}
+/* Each tile sits in an absolutely-positioned wrapper that the engine sizes. */
+.mt-wall-tile-wrap {
+  display: flex;
+  will-change: transform;
+  transition:
+    transform var(--dur-med) var(--ease-out),
+    width var(--dur-med) var(--ease-out),
+    height var(--dur-med) var(--ease-out);
+}
+/* The dragged tile dims in place while its ghost floats with the cursor. */
+.mt-wall-tile-wrap[data-dragging='true'] {
+  opacity: 0.32;
+  transition: none;
+}
+.mt-wall-region[data-empty='true'] {
+  border: 1px dashed var(--border);
   border-radius: var(--radius-comfortable);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mt-wall-region-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* Drop placeholder — accent-tinted ghost showing where a tile will land. */
+.mt-wall-placeholder {
+  pointer-events: none;
+  border-radius: var(--radius-comfortable);
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+  z-index: 1;
+}
+
+/* Floating drag ghost — follows the cursor (positioned by JS via transform). */
+.mt-wall-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 1000;
+  opacity: 0;
+}
+.mt-wall-ghost:has(.mt-wall-ghost-body) {
   opacity: 1;
 }
-/* Tile being dragged/resized — accent ring + lift. */
-.grid-stack > .grid-stack-item.ui-draggable-dragging,
-.grid-stack > .grid-stack-item.ui-resizable-resizing,
-.grid-stack > .grid-stack-item.gs-resizing {
-  z-index: 20;
-  box-shadow: var(--shadow-lg),
-              0 0 0 1px color-mix(in oklch, var(--accent) 55%, transparent);
-  opacity: 1;
+.mt-wall-ghost-body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 100%;
+  padding: 0 10px;
+  border-radius: var(--radius-comfortable);
+  background: color-mix(in oklch, var(--workspace-from, var(--accent)) 14%, var(--bg-elevated));
+  box-shadow:
+    var(--shadow-lg),
+    0 0 0 1px color-mix(in oklch, var(--accent) 55%, transparent);
 }
-/* SE resize handle — Zen chevron, hidden until tile hover. Gridstack
- * renders a 20px square at bottom-right; we strip its default styles
- * and paint our own. */
-.grid-stack-item > .ui-resizable-se {
-  width: 16px !important;
-  height: 16px !important;
-  bottom: 2px !important;
-  right: 2px !important;
-  background: none !important;
+.mt-wall-ghost-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mt-wall-ghost-project {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* Tile resize grip — SE chevron, hidden until tile hover. */
+.mt-tile-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
   opacity: 0;
   transition: opacity var(--dur-med) var(--ease-out);
-  transform: none !important;
+  touch-action: none;
+  z-index: 6;
 }
-.grid-stack-item > .ui-resizable-se::after {
+.mt-tile-resize::after {
   content: '';
   position: absolute;
   right: 3px;
@@ -1068,12 +1129,100 @@ select:focus-visible,
   border-bottom: 2px solid var(--text-muted);
   border-radius: 0 0 3px 0;
 }
-.grid-stack-item:hover > .ui-resizable-se {
+.mt-wall-tile:hover .mt-tile-resize {
   opacity: 0.6;
 }
-.grid-stack-item > .ui-resizable-se:hover,
-.grid-stack-item > .ui-resizable-se:active {
+.mt-tile-resize:hover,
+.mt-tile-resize:active {
   opacity: 1;
+}
+
+/* ── Section divider ────────────────────────────────────────────────────────
+ * The friendly band between regions: a hairline at rest, hover affordances
+ * (+ Split / Delete), and a prominent drop zone during a drag. */
+.mt-wall-divider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 16px;
+  margin: 2px 0;
+}
+.mt-wall-divider-line {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 1px;
+  background: var(--border);
+  transition: background var(--dur-med) var(--ease-out);
+}
+.mt-wall-divider-actions {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.mt-wall-divider-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.mt-wall-divider-btn:hover {
+  background: color-mix(in oklch, var(--accent) 12%, var(--bg-elevated));
+  color: var(--text-primary);
+}
+.mt-wall-divider-del:hover {
+  background: color-mix(in oklch, var(--danger, oklch(0.6 0.2 25)) 16%, var(--bg-elevated));
+  color: var(--danger, oklch(0.62 0.21 25));
+}
+/* While a drag is in progress every divider becomes a visible drop target. */
+.mt-wall-divider[data-dragging='true'] {
+  min-height: 34px;
+}
+.mt-wall-divider[data-dragging='true'] .mt-wall-divider-line {
+  height: 2px;
+  background: color-mix(in oklch, var(--accent) 40%, var(--border));
+}
+.mt-wall-divider-hint {
+  position: relative;
+  z-index: 2;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 2px 10px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.mt-wall-divider[data-drop='true'] {
+  min-height: 44px;
+}
+.mt-wall-divider[data-drop='true'] .mt-wall-divider-line {
+  left: 0;
+  right: 0;
+  height: 100%;
+  border-radius: var(--radius-comfortable);
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 55%, transparent);
+}
+.mt-wall-divider[data-drop='true'] .mt-wall-divider-hint {
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--accent) 24%, var(--bg-elevated));
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--accent) 50%, transparent);
 }
 
 /* Wall toolbar lives absolute-top-right of the wall scroller. */

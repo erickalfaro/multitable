@@ -15,9 +15,20 @@ import type {
   AgentProvider,
   DiscoveredModel,
   UsageLimitSnapshot,
-  WallLayoutItem,
-  WallLayoutPreset,
+  WallLayout,
 } from '../lib/types';
+import {
+  WALL_COLS,
+  autoPack,
+  makeRegionId,
+  migrateWallLayout,
+  normalizeWallLayout,
+  moveTileToRegion,
+  splitWithTile,
+  addEmptyRegion,
+  mergeAtBoundary,
+  resizeTile,
+} from '../components/main-pane/wall/grid';
 import { api } from '../lib/api';
 import type { Theme, ThemeColors } from '../lib/themes';
 import {
@@ -32,6 +43,24 @@ import {
 import { loadSnapshot, saveSnapshot } from '../lib/persistedStore';
 import { dominantAlertForSessions } from '../lib/alertVisuals';
 import type { AlertCategory } from '../lib/types';
+
+// Wall layout persistence — write localStorage synchronously (keeps cold-load
+// correct and instant) but debounce the server PATCH, since drag/resize commit
+// continuously. The triple-write of the old design is funnelled through here.
+let _wallPatchTimer: ReturnType<typeof setTimeout> | null = null;
+function persistWallLayout(tree: WallLayout) {
+  try {
+    localStorage.setItem('mt:wallLayout', JSON.stringify(tree));
+  } catch {
+    /* ignore */
+  }
+  if (_wallPatchTimer) clearTimeout(_wallPatchTimer);
+  _wallPatchTimer = setTimeout(() => {
+    void import('../lib/api').then(({ api }) =>
+      api.config.patch({ ui: { wallLayout: tree } }).catch(() => {}),
+    );
+  }, 400);
+}
 
 interface AppState {
   // Projects
@@ -140,14 +169,23 @@ interface AppState {
   togglePinSession: (id: string) => void;
   reorderPinnedSessions: (ids: string[]) => void;
   setFocusedPane: (id: string | null) => void;
-  // Wall layout (react-grid-layout state) — keyed by breakpoint id.
-  wallLayout: Record<string, WallLayoutItem[]>;
-  wallLayoutPresets: WallLayoutPreset[];
+  // Region-aware wall layout (v2) — single source of truth; DOM = f(state).
+  wallLayout: WallLayout;
   wallLayoutLocked: boolean;
-  setWallLayout: (next: Record<string, WallLayoutItem[]>) => void;
-  saveLayoutPreset: (name: string) => void;
-  applyLayoutPreset: (id: string) => void;
-  deleteLayoutPreset: (id: string) => void;
+  setWallLayout: (next: WallLayout) => void;
+  // Drag a tile into an existing region at a snapped (x,y), or onto a divider
+  // to spin off a new region at that boundary.
+  moveTileTo: (
+    sessionId: string,
+    target:
+      | { kind: 'region'; regionId: string; x: number; y: number }
+      | { kind: 'divider'; boundaryIndex: number },
+  ) => void;
+  resizeWallTile: (sessionId: string, w: number, h: number) => void;
+  addWallRegion: (boundaryIndex: number) => void;
+  // Delete the divider above region `belowIndex`, rolling its chats up.
+  deleteWallRegion: (belowIndex: number) => void;
+  pruneWallLayout: (liveIds: string[]) => void;
   resetWallLayout: () => void;
   setWallLayoutLocked: (locked: boolean) => void;
   setActiveTheme: (id: string) => void;
@@ -624,26 +662,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   })(),
   focusedPaneId: null,
-  // Wall layout cold-loads from localStorage so the grid paints in the
-  // correct positions on first frame; GET /api/config reconciles after.
+  // Wall layout cold-loads from localStorage so the grid paints in the correct
+  // positions on first frame. We only migrate here (legacy v1 → v2); the live
+  // normalize/ghost-prune against loaded sessions happens in SessionWall once
+  // the sessions map is populated (avoids dropping not-yet-loaded sessions).
   wallLayout: (() => {
     try {
       const raw = localStorage.getItem('mt:wallLayout');
-      if (!raw) return {};
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
+      return migrateWallLayout(raw ? JSON.parse(raw) : null);
     } catch {
-      return {};
-    }
-  })(),
-  wallLayoutPresets: (() => {
-    try {
-      const raw = localStorage.getItem('mt:wallLayoutPresets');
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
+      return { version: 2, regions: [] };
     }
   })(),
   wallLayoutLocked: (() => {
@@ -792,74 +820,76 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   setFocusedPane: (id) => set({ focusedPaneId: id }),
   setWallLayout: (next) =>
-    set(() => {
-      try {
-        localStorage.setItem('mt:wallLayout', JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
-      void import('../lib/api').then(({ api }) =>
-        api.config.patch({ ui: { wallLayout: next } }).catch(() => {}),
+    set((s) => {
+      const norm = normalizeWallLayout(next, s.pinnedSessionIds, null);
+      persistWallLayout(norm);
+      return { wallLayout: norm };
+    }),
+  moveTileTo: (sessionId, target) =>
+    set((s) => {
+      const moved =
+        target.kind === 'divider'
+          ? splitWithTile(s.wallLayout, target.boundaryIndex, sessionId)
+          : moveTileToRegion(s.wallLayout, sessionId, target.regionId, target.x, target.y);
+      const norm = normalizeWallLayout(moved, s.pinnedSessionIds, null);
+      persistWallLayout(norm);
+      return { wallLayout: norm };
+    }),
+  resizeWallTile: (sessionId, w, h) =>
+    set((s) => {
+      const region = s.wallLayout.regions.find((r) =>
+        r.tiles.some((t) => t.sessionId === sessionId),
       );
+      if (!region) return {};
+      const tiles = resizeTile(region.tiles, sessionId, w, h, region.cols);
+      const next: WallLayout = {
+        version: 2,
+        regions: s.wallLayout.regions.map((r) => (r.id === region.id ? { ...r, tiles } : r)),
+      };
+      persistWallLayout(next);
       return { wallLayout: next };
     }),
-  saveLayoutPreset: (name) =>
+  addWallRegion: (boundaryIndex) =>
     set((s) => {
-      const preset: WallLayoutPreset = {
-        id: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        name: name.trim() || `Layout ${s.wallLayoutPresets.length + 1}`,
-        layouts: JSON.parse(JSON.stringify(s.wallLayout)),
-        createdAt: Date.now(),
-      };
-      const next = [...s.wallLayoutPresets, preset];
-      try {
-        localStorage.setItem('mt:wallLayoutPresets', JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
-      void import('../lib/api').then(({ api }) =>
-        api.config.patch({ ui: { wallLayoutPresets: next } }).catch(() => {}),
-      );
-      return { wallLayoutPresets: next };
+      const next = addEmptyRegion(s.wallLayout, boundaryIndex);
+      persistWallLayout(next);
+      return { wallLayout: next };
     }),
-  applyLayoutPreset: (id) =>
+  deleteWallRegion: (belowIndex) =>
     set((s) => {
-      const preset = s.wallLayoutPresets.find((p) => p.id === id);
-      if (!preset) return {};
-      try {
-        localStorage.setItem('mt:wallLayout', JSON.stringify(preset.layouts));
-      } catch {
-        /* ignore */
-      }
-      void import('../lib/api').then(({ api }) =>
-        api.config.patch({ ui: { wallLayout: preset.layouts } }).catch(() => {}),
-      );
-      return { wallLayout: preset.layouts };
+      const next = mergeAtBoundary(s.wallLayout, belowIndex);
+      persistWallLayout(next);
+      return { wallLayout: next };
     }),
-  deleteLayoutPreset: (id) =>
+  pruneWallLayout: (liveIds) =>
     set((s) => {
-      const next = s.wallLayoutPresets.filter((p) => p.id !== id);
-      try {
-        localStorage.setItem('mt:wallLayoutPresets', JSON.stringify(next));
-      } catch {
-        /* ignore */
+      const live = new Set(liveIds);
+      const norm = normalizeWallLayout(s.wallLayout, s.pinnedSessionIds, live);
+      const cleanedPins = s.pinnedSessionIds.filter((id) => live.has(id));
+      if (cleanedPins.length !== s.pinnedSessionIds.length) {
+        try {
+          localStorage.setItem('mt:pinnedSessionIds', JSON.stringify(cleanedPins));
+        } catch {
+          /* ignore */
+        }
+        void import('../lib/api').then(({ api }) =>
+          api.config.patch({ pinnedSessionIds: cleanedPins }).catch(() => {}),
+        );
       }
-      void import('../lib/api').then(({ api }) =>
-        api.config.patch({ ui: { wallLayoutPresets: next } }).catch(() => {}),
-      );
-      return { wallLayoutPresets: next };
+      persistWallLayout(norm);
+      return { wallLayout: norm, pinnedSessionIds: cleanedPins };
     }),
   resetWallLayout: () =>
-    set(() => {
-      try {
-        localStorage.removeItem('mt:wallLayout');
-      } catch {
-        /* ignore */
-      }
-      void import('../lib/api').then(({ api }) =>
-        api.config.patch({ ui: { wallLayout: {} } }).catch(() => {}),
-      );
-      return { wallLayout: {} };
+    set((s) => {
+      const ids = s.pinnedSessionIds.filter((id) => s.sessions[id]);
+      const next: WallLayout = {
+        version: 2,
+        regions: ids.length
+          ? [{ id: makeRegionId(), cols: WALL_COLS, tiles: autoPack(ids) }]
+          : [],
+      };
+      persistWallLayout(next);
+      return { wallLayout: next };
     }),
   setWallLayoutLocked: (locked) =>
     set(() => {

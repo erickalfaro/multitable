@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { Maximize2, Sparkles, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { Session } from '../../../lib/types';
@@ -10,13 +18,12 @@ import { IconButton, AgentBadge, Spinner } from '../../ui';
 import { getProjectColor } from '../../../lib/projectColor';
 import { BUILTIN_THEMES } from '../../../lib/themes';
 
-// NOTE: focus-on-click on the wall tile is intentionally dropped during the
-// gridstack rewrite — the old article-level onClick conflicted with drag
-// detection. Will reintroduce via gridstack's dragstart guard in a follow-up.
-
 interface Props {
   sessionId: string;
   session: Session;
+  locked: boolean;
+  onDragStart: (sessionId: string, e: ReactPointerEvent) => void;
+  onResizeStart: (sessionId: string, e: ReactPointerEvent) => void;
 }
 
 type Tier = 'roomy' | 'mid' | 'tiny';
@@ -29,20 +36,17 @@ function tierFor(width: number): Tier {
 
 /**
  * Wall tile. The chrome flexes through three tiers based on observed tile
- * width: roomy (full 32px header + composer-friendly SessionPane density),
- * mid (compact 24px header), tiny (no header — 2px project-color stripe
- * is the only ID; pane drops to read-only `card` density).
+ * width: roomy (full 32px header), mid (compact 24px header), tiny (no header —
+ * a 2px project-color stripe is the only ID; pane drops to read-only `card`).
  *
- * Tier switches happen automatically as the user drags the SE resize handle
- * — there's no setting; the tile reads its own ResizeObserver.
- *
- * `.mt-tile-drag-handle` on the header is the RGL drag grip; resizing
- * happens from the SE corner handle RGL renders.
+ * The header / stripe is the drag grip (pointer-down anywhere on it that isn't
+ * a button begins a move); the SE corner handle begins a resize. Both delegate
+ * to the wall's drag controller — the tile never touches layout state itself.
  */
-export function SessionTile({ sessionId, session }: Props) {
-  const focusedPaneId = useAppStore((s) => s.focusedPaneId);
+function SessionTileImpl({ sessionId, session, locked, onDragStart, onResizeStart }: Props) {
   const setSelectedProcess = useAppStore((s) => s.setSelectedProcess);
   const togglePinSession = useAppStore((s) => s.togglePinSession);
+  const focusedPaneId = useAppStore((s) => s.focusedPaneId);
   const projectName = useAppStore(
     (s) => s.projects.find((p) => p.id === session.projectId)?.name,
   );
@@ -59,8 +63,8 @@ export function SessionTile({ sessionId, session }: Props) {
   );
   const workspaceVars = useMemo<CSSProperties>(
     () => ({
-      ['--workspace-from' as any]: projectColor.from,
-      ['--workspace-to' as any]: projectColor.to,
+      ['--workspace-from' as string]: projectColor.from,
+      ['--workspace-to' as string]: projectColor.to,
     }),
     [projectColor],
   );
@@ -69,15 +73,14 @@ export function SessionTile({ sessionId, session }: Props) {
   const [tier, setTier] = useState<Tier>('roomy');
   const [aiLoading, setAiLoading] = useState(false);
 
-  const handleAiRename = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleAiRename = async () => {
     if (aiLoading) return;
     setAiLoading(true);
     try {
       const result = await api.sessions.renameAi(sessionId);
       toast.success(`Renamed to "${result.name}"`, { duration: 2200 });
-    } catch (err: any) {
-      const msg = err?.message || 'AI rename failed';
+    } catch (err) {
+      const msg = (err as { message?: string })?.message || 'AI rename failed';
       toast.error(`AI rename: ${msg}`, { duration: 5000, style: { maxWidth: 480 } });
     } finally {
       setAiLoading(false);
@@ -96,9 +99,16 @@ export function SessionTile({ sessionId, session }: Props) {
     return () => ro.disconnect();
   }, []);
 
+  // Pointer-down on the grip starts a move — unless it landed on a button.
+  const onGripPointerDown = (e: ReactPointerEvent) => {
+    if ((e.target as HTMLElement).closest('button, a, input')) return;
+    onDragStart(sessionId, e);
+  };
+
   const density = tier === 'tiny' ? 'card' : 'wall';
   const headerH = tier === 'roomy' ? 32 : 24;
   const headerPad = tier === 'roomy' ? '6px 10px' : '3px 6px';
+  const iconSize = tier === 'roomy' ? 12 : 11;
 
   return (
     <article
@@ -109,38 +119,28 @@ export function SessionTile({ sessionId, session }: Props) {
       data-focused={isFocused ? 'true' : undefined}
       style={workspaceVars}
     >
-      {/* Tiny tier: no header bar — a 2px project-color stripe carries the
-          identity instead. Hovering the tile still reveals action buttons
-          in the top-right corner via .mt-tile-tiny-actions. */}
       {tier === 'tiny' ? (
         <>
           <div
             className="mt-tile-drag-handle"
+            onPointerDown={onGripPointerDown}
             style={{
               height: 8,
               flexShrink: 0,
               background: `linear-gradient(90deg, ${projectColor.from}, ${projectColor.to})`,
-              cursor: 'grab',
+              cursor: locked ? 'default' : 'grab',
               userSelect: 'none',
               WebkitUserSelect: 'none',
               touchAction: 'none',
             }}
-            title={`${projectName ?? ''} · ${session.name} — drag to move`}
+            title={`${projectName ?? ''} · ${session.name}${locked ? '' : ' — drag to move'}`}
           />
           <div className="mt-tile-tiny-actions mt-auto-hide" style={tinyActionsStyle}>
             <AgentBadge provider={session.agentProvider} size="glyph" />
             <span style={tinyNameStyle} title={session.name}>
               {session.name}
             </span>
-            <IconButton
-              size="sm"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleAiRename(e);
-              }}
-              label="Rename with AI"
-              disabled={aiLoading}
-            >
+            <IconButton size="sm" onClick={handleAiRename} label="Rename with AI" disabled={aiLoading}>
               {aiLoading ? <Spinner size="sm" /> : <Sparkles size={11} />}
             </IconButton>
             <IconButton
@@ -168,6 +168,7 @@ export function SessionTile({ sessionId, session }: Props) {
       ) : (
         <header
           className="mt-auto-hide mt-tile-drag-handle"
+          onPointerDown={onGripPointerDown}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -178,7 +179,7 @@ export function SessionTile({ sessionId, session }: Props) {
             background: `linear-gradient(90deg, color-mix(in oklch, ${projectColor.from} 16%, var(--bg-elevated)), color-mix(in oklch, ${projectColor.to} 8%, var(--bg-elevated)))`,
             flexShrink: 0,
             minHeight: headerH,
-            cursor: 'grab',
+            cursor: locked ? 'default' : 'grab',
             userSelect: 'none',
             WebkitUserSelect: 'none',
             touchAction: 'none',
@@ -218,18 +219,8 @@ export function SessionTile({ sessionId, session }: Props) {
             </span>
           )}
           {tier === 'roomy' && <ModelChip session={session} />}
-          <IconButton
-            size="sm"
-            // mousedown so the global blur handler doesn't run first and
-            // collapse the focused composer underneath us.
-            onMouseDown={(e) => {
-              e.preventDefault();
-              handleAiRename(e);
-            }}
-            label="Rename with AI"
-            disabled={aiLoading}
-          >
-            {aiLoading ? <Spinner size="sm" /> : <Sparkles size={tier === 'roomy' ? 12 : 11} />}
+          <IconButton size="sm" onClick={handleAiRename} label="Rename with AI" disabled={aiLoading}>
+            {aiLoading ? <Spinner size="sm" /> : <Sparkles size={iconSize} />}
           </IconButton>
           <IconButton
             size="sm"
@@ -239,7 +230,7 @@ export function SessionTile({ sessionId, session }: Props) {
             }}
             label="Open in full pane"
           >
-            <Maximize2 size={tier === 'roomy' ? 12 : 11} />
+            <Maximize2 size={iconSize} />
           </IconButton>
           <IconButton
             size="sm"
@@ -249,7 +240,7 @@ export function SessionTile({ sessionId, session }: Props) {
             }}
             label="Unpin from Wall"
           >
-            <X size={tier === 'roomy' ? 12 : 11} />
+            <X size={iconSize} />
           </IconButton>
         </header>
       )}
@@ -257,9 +248,20 @@ export function SessionTile({ sessionId, session }: Props) {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <SessionPane sessionId={sessionId} session={session} density={density} />
       </div>
+
+      {!locked && (
+        <div
+          className="mt-tile-resize"
+          onPointerDown={(e) => onResizeStart(sessionId, e)}
+          title="Drag to resize"
+          aria-hidden="true"
+        />
+      )}
     </article>
   );
 }
+
+export const SessionTile = memo(SessionTileImpl);
 
 const tinyActionsStyle: CSSProperties = {
   position: 'absolute',

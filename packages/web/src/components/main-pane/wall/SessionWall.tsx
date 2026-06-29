@@ -1,231 +1,126 @@
-import { useEffect, useRef, type RefObject } from 'react';
-import { GridStack, type GridStackOptions, type GridStackNode } from 'gridstack';
-import 'gridstack/dist/gridstack.min.css';
+import { Fragment, useCallback, useEffect, useMemo, type PointerEvent as ReactPointerEvent } from 'react';
 import { useAppStore } from '../../../stores/appStore';
-import { SessionTile } from './SessionTile';
+import { WallRegion } from './WallRegion';
+import { SectionDivider } from './SectionDivider';
 import { WallToolbar } from './WallToolbar';
-import { reconcileLayout } from './layoutPresets';
-import type { WallLayoutItem } from '../../../lib/types';
+import { WallDragProvider } from './WallDragContext';
+import { layoutTileIds, normalizeWallLayout } from './grid';
 
-const GS_OPTS: GridStackOptions = {
-  column: 12,
-  cellHeight: 32,
-  margin: 4,
-  float: false,
-  animate: true,
-  handle: '.mt-tile-drag-handle',
-  resizable: { handles: 'se' },
-  acceptWidgets: false,
-  minRow: 1,
-  // No columnOpts → gridstack stays at 12 cols regardless of viewport width.
-  // The wall is desktop-only (mobile uses PinnedFeed), so we don't need
-  // gridstack's responsive column collapse.
-};
-
-interface SavedNode {
-  id?: string;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-}
-
-// React-renders the DOM, gridstack owns positioning. The store is the source
-// of truth for what's pinned + where; gridstack writes back via `change`.
+/**
+ * The Pinned Session Wall — a vertical stack of regions, each a free-float
+ * grid of session tiles. The Zustand store holds the layout tree as the single
+ * source of truth; this component renders it (DOM = f(state)) and dispatches
+ * store actions from drag/resize/divider gestures. No second layout engine.
+ */
 export function SessionWall() {
   const pinnedIds = useAppStore((s) => s.pinnedSessionIds);
+  const wallLayout = useAppStore((s) => s.wallLayout);
   const sessions = useAppStore((s) => s.sessions);
-  const storedLayout = useAppStore((s) => s.wallLayout);
   const locked = useAppStore((s) => s.wallLayoutLocked);
   const focusedPaneId = useAppStore((s) => s.focusedPaneId);
   const setWallLayout = useAppStore((s) => s.setWallLayout);
-
-  const containerRef = useRef<HTMLDivElement>(null);
-  const gridRef = useRef<GridStack | null>(null);
-  const persistedLockedRef = useRef(locked);
-
-  // Seed layout for first paint — every pinned id gets {x,y,w,h} from
-  // the store or an auto-placed slot.
-  const seededLayout = reconcileLayout(storedLayout.lg, pinnedIds, 'lg');
-
-  // 1. Init gridstack once.
-  useEffect(() => {
-    if (!containerRef.current || gridRef.current) return;
-    const grid = GridStack.init(
-      { ...GS_OPTS, disableDrag: persistedLockedRef.current, disableResize: persistedLockedRef.current },
-      containerRef.current,
-    );
-    grid.on('change', () => {
-      // Read gridstack's current state and mirror to the store.
-      const saved = (grid.save(false) as SavedNode[]) || [];
-      const items: WallLayoutItem[] = saved
-        .filter((n): n is SavedNode & { id: string } => typeof n.id === 'string')
-        .map((n) => ({
-          i: n.id,
-          x: n.x ?? 0,
-          y: n.y ?? 0,
-          w: n.w ?? 4,
-          h: n.h ?? 6,
-        }));
-      const current = useAppStore.getState().wallLayout;
-      setWallLayout({ ...current, lg: items });
-    });
-    gridRef.current = grid;
-    return () => {
-      grid.destroy(false);
-      gridRef.current = null;
-    };
-    // Mount once — subsequent state changes are handled by the effects below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 2. Reconcile widgets when pinnedIds changes (add new, remove unpinned).
-  useEffect(() => {
-    const grid = gridRef.current;
-    const container = containerRef.current;
-    if (!grid || !container) return;
-    grid.batchUpdate(true);
-    try {
-      const existingIds = new Set(
-        grid.engine.nodes
-          .map((n: GridStackNode) => (typeof n.id === 'string' ? n.id : null))
-          .filter((x): x is string => x !== null),
-      );
-      // Add: any pinned id not yet a gridstack widget. React has already
-      // rendered the DOM for it; makeWidget tells gridstack to adopt it.
-      // makeWidget alone wires up resize but NOT drag in v12 — we must
-      // explicitly re-enable movable on the adopted element. Without this,
-      // newly-pinned tiles could be resized but not dragged until the wall
-      // remounted and gridstack re-init scanned the DOM from scratch.
-      for (const id of pinnedIds) {
-        if (!existingIds.has(id)) {
-          const el = container.querySelector<HTMLElement>(`.grid-stack-item[gs-id="${id}"]`);
-          if (el) {
-            grid.makeWidget(el);
-            if (!locked) {
-              grid.movable(el, true);
-              grid.resizable(el, true);
-            }
-          }
-        }
-      }
-      // Remove: any widget whose id is no longer pinned.
-      for (const node of [...grid.engine.nodes]) {
-        const nid = typeof node.id === 'string' ? node.id : null;
-        if (nid && !pinnedIds.includes(nid) && node.el) {
-          grid.removeWidget(node.el, false); // false = leave DOM; React owns it
-        }
-      }
-    } finally {
-      grid.batchUpdate(false);
-    }
-  }, [pinnedIds]);
-
-  // 3. Lock toggle.
-  useEffect(() => {
-    const grid = gridRef.current;
-    if (!grid) return;
-    grid.enableMove(!locked);
-    grid.enableResize(!locked);
-    persistedLockedRef.current = locked;
-  }, [locked]);
-
-  // 4. Click-outside-to-blur — when a tile owns focus, any mousedown that
-  // lands outside its DOM clears the focus, which re-collapses its composer.
-  // Clicks on a different tile's collapsed-composer button blur first
-  // (mousedown) then re-focus (onClick), so focus shifts cleanly.
   const setFocusedPane = useAppStore((s) => s.setFocusedPane);
+  const pruneWallLayout = useAppStore((s) => s.pruneWallLayout);
+
+  // Render-time reconcile: append newly-pinned ids, drop unpinned, re-pack.
+  // liveIds = null so not-yet-loaded sessions are NOT dropped here (the
+  // ghost-prune effect below handles truly-deleted sessions once loaded).
+  const normalized = useMemo(
+    () => normalizeWallLayout(wallLayout, pinnedIds, null),
+    [wallLayout, pinnedIds],
+  );
+
+  // Persist the reconcile when it actually changed the tree (new pin appended,
+  // unpinned tile removed). Deterministic normalize → converges in one pass.
   useEffect(() => {
-    if (!focusedPaneId) return;
-    const onDocDown = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      const insideFocused = target.closest(`.grid-stack-item[gs-id="${focusedPaneId}"]`);
-      if (!insideFocused) setFocusedPane(null);
-    };
-    document.addEventListener('mousedown', onDocDown);
-    return () => document.removeEventListener('mousedown', onDocDown);
-  }, [focusedPaneId, setFocusedPane]);
+    if (JSON.stringify(normalized) !== JSON.stringify(wallLayout)) {
+      setWallLayout(normalized);
+    }
+  }, [normalized, wallLayout, setWallLayout]);
 
-  if (pinnedIds.length === 0) {
-    return (
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 'var(--space-6)',
-          color: 'var(--text-muted)',
-          textAlign: 'center',
-          flexDirection: 'column',
-          gap: 'var(--space-3)',
-        }}
-      >
-        <div
-          style={{
-            fontSize: 18,
-            color: 'var(--text-secondary)',
-            fontWeight: 500,
-            letterSpacing: '-0.01em',
-          }}
-        >
-          Your wall is empty
-        </div>
-        <div style={{ fontSize: 13.5, maxWidth: 460, lineHeight: 1.5 }}>
-          Right-click any session in the sidebar and choose{' '}
-          <span style={{ color: 'var(--text-primary)' }}>Pin to Wall</span> to see it
-          here. Pin up to a dozen sessions across projects to monitor them all from one
-          screen.
-        </div>
-      </div>
-    );
-  }
+  // Ghost prune — only after sessions are loaded, permanently drop tiles/pins
+  // whose session is gone (deleted server-side), cleaning the sidebar too.
+  useEffect(() => {
+    const liveIds = Object.keys(sessions);
+    if (liveIds.length === 0) return;
+    const ghostPin = pinnedIds.some((id) => !sessions[id]);
+    const ghostTile = layoutTileIds(wallLayout).some((id) => !sessions[id]);
+    if (ghostPin || ghostTile) pruneWallLayout(liveIds);
+  }, [sessions, pinnedIds, wallLayout, pruneWallLayout]);
 
+  // Background press clears tile focus (re-collapses composers). One handler on
+  // the wall root — not a document listener — so it's deterministic.
+  const onBackgroundPointerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest('[data-tile-id]') || t.closest('.mt-wall-toolbar')) return;
+      if (focusedPaneId) setFocusedPane(null);
+    },
+    [focusedPaneId, setFocusedPane],
+  );
+
+  if (pinnedIds.length === 0) return <EmptyWall />;
+
+  const regions = normalized.regions;
   return (
     <div
       className="mt-scroll mt-wall"
       data-has-focus={focusedPaneId !== null ? 'true' : undefined}
-      style={{
-        flex: 1,
-        minHeight: 0,
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        position: 'relative',
-      }}
+      onPointerDown={onBackgroundPointerDown}
+      style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}
     >
-      <WallToolbar pinnedIds={pinnedIds} gridRef={gridRef} />
-      <div ref={containerRef} className="grid-stack">
-        {pinnedIds.map((id) => {
-          const session = sessions[id];
-          if (!session) return null;
-          const item = seededLayout.find((it) => it.i === id);
-          const x = item?.x ?? 0;
-          const y = item?.y ?? 0;
-          const w = item?.w ?? 4;
-          const h = item?.h ?? 6;
-          return (
-            <div
-              key={id}
-              className="grid-stack-item"
-              gs-id={id}
-              gs-x={x}
-              gs-y={y}
-              gs-w={w}
-              gs-h={h}
-              gs-min-w={2}
-              gs-min-h={3}
-            >
-              <div className="grid-stack-item-content">
-                <SessionTile sessionId={id} session={session} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <WallToolbar />
+      <WallDragProvider locked={locked}>
+        <div className="mt-wall-stack">
+          <SectionDivider boundaryIndex={0} variant="top" />
+          {regions.map((region, i) => (
+            <Fragment key={region.id}>
+              <WallRegion region={region} index={i} />
+              <SectionDivider
+                boundaryIndex={i + 1}
+                variant={i === regions.length - 1 ? 'bottom' : 'between'}
+                deleteBelowIndex={i + 1}
+              />
+            </Fragment>
+          ))}
+        </div>
+      </WallDragProvider>
     </div>
   );
 }
 
-export type SessionWallGridRef = RefObject<GridStack | null>;
+function EmptyWall() {
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 'var(--space-6)',
+        color: 'var(--text-muted)',
+        textAlign: 'center',
+        flexDirection: 'column',
+        gap: 'var(--space-3)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 18,
+          color: 'var(--text-secondary)',
+          fontWeight: 500,
+          letterSpacing: '-0.01em',
+        }}
+      >
+        Your wall is empty
+      </div>
+      <div style={{ fontSize: 13.5, maxWidth: 460, lineHeight: 1.5 }}>
+        Right-click any session in the sidebar and choose{' '}
+        <span style={{ color: 'var(--text-primary)' }}>Pin to Wall</span> to see it here. Pin
+        sessions across projects, then drag, resize, and split them into sections to monitor
+        them all from one screen.
+      </div>
+    </div>
+  );
+}

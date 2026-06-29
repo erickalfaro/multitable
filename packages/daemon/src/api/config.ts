@@ -71,7 +71,14 @@ export function createConfigRouter(): Router {
   router.patch('/', (req: Request, res: Response) => {
     try {
       const current = loadGlobalConfig();
-      const updated = { ...current, ...req.body };
+      const body = (req.body ?? {}) as Partial<GlobalConfig>;
+      const updated: GlobalConfig = { ...current, ...body };
+      // Deep-merge `ui` one level — clients PATCH a single ui.* field at a time
+      // (e.g. the wall writes ui.wallLayout on every drag/resize). A shallow
+      // spread would clobber sibling ui fields like themeId / chromeAutoHide.
+      if (body.ui) {
+        updated.ui = { ...current.ui, ...body.ui };
+      }
       saveGlobalConfig(updated);
       res.json(updated);
     } catch (err) {
