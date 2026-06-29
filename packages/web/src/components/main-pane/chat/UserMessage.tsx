@@ -49,16 +49,16 @@ export const UserMessage = memo(function UserMessage({
     <div
       style={{
         display: 'flex',
-        alignItems: 'flex-start',
-        gap: 10,
-        margin: '12px -14px',
-        padding: '10px 16px',
+        alignItems: 'center',
+        gap: 8,
+        margin: '4px -14px',
+        padding: '4px 14px',
         backgroundColor: 'var(--bg-elevated)',
         color: 'var(--text-primary)',
         borderTop: '1px solid var(--border)',
         borderBottom: '1px solid var(--border)',
         fontSize: 12.5,
-        lineHeight: 1.5,
+        lineHeight: 1.45,
       }}
       {...(isMobile ? longPress : null)}
     >
@@ -72,7 +72,7 @@ export const UserMessage = memo(function UserMessage({
       >
         {text}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 0 }}>
         <NavButton
           disabled={!hasPrev}
           onClick={jumpTo(index - 1)}
@@ -87,7 +87,7 @@ export const UserMessage = memo(function UserMessage({
         />
         {/* Desktop only — mobile copies via long-press on the bar. */}
         {!isMobile && (
-          <CopyButton getText={text} title="Copy prompt" size={11} style={{ border: '1px solid var(--border)' }} />
+          <CopyButton getText={text} title="Copy prompt" size={11} />
         )}
       </div>
     </div>
@@ -115,11 +115,11 @@ function NavButton({
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 22,
-        height: 22,
+        width: 20,
+        height: 20,
         borderRadius: 'var(--radius-snug)',
         background: 'transparent',
-        border: '1px solid var(--border)',
+        border: 'none',
         color: disabled ? 'var(--text-muted)' : 'var(--text-secondary)',
         cursor: disabled ? 'default' : 'pointer',
         opacity: disabled ? 0.35 : 1,

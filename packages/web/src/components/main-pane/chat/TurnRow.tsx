@@ -11,9 +11,9 @@ import { getNodeColorVar, getNodeLabel } from '../../../lib/nodeColor';
 const GUTTER       = 18; // left padding the card content sits at
 const RAIL_X       = 5;  // x of the dot/line center within the gutter
 const DOT_SIZE     = 7;  // dot diameter
-const DOT_TOP      = 9;  // y center of dot from row top — aligns with cards' first text line
-const ROW_GAP      = 8;  // breathing room between rows (padding-bottom)
-export const TURN_GAP_END = 14; // gap below the entire turn before the next user prompt
+const DOT_TOP      = 8;  // y center of dot from row top — aligns with cards' first text line
+const ROW_GAP      = 4;  // breathing room between rows (padding-bottom)
+export const TURN_GAP_END = 6; // gap below the entire turn before the next user prompt
 const LOADER_PX    = 18; // loader avatar diameter — circular node housing the loader
 
 interface DotProps {

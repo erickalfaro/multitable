@@ -1,5 +1,13 @@
 # Zen Design Reference
 
+> **Superseded (2026):** the frontend is being redesigned around matte-frosted
+> glassmorphism. The authoritative design language is now the **`glass-design`**
+> skill (`.claude/skills/glass-design/`), which **absorbs** the Zen principles
+> below (OKLCH bands, hue ring, motion/radii, the Wall) and adds the glass
+> material layer on top. This document remains the historical *narrative* for the
+> Zen color/density rationale — read it for the *why*; read `glass-design` for
+> what to build today.
+
 The design language MultiTable's frontend was rebuilt around in June 2026
 (branch `feat/zen-redesign-pinned-wall`, commit `503e9dd`). Inspired by
 [Zen Browser](https://zen-browser.app)'s calm-by-default philosophy and
