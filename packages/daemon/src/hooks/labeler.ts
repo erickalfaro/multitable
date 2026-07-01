@@ -98,7 +98,10 @@ export async function generateSessionLabel(
           '--system-prompt', SYSTEM_PROMPT,
           '--print', prompt,
         ],
-        { cwd: os.tmpdir() }
+        // stdin: 'ignore' = `< /dev/null`. Without it, `claude --print` blocks
+        // ~3s waiting on stdin it'll never get ("no stdin data received in 3s")
+        // and the call goes slow/flaky — the prompt is fully in argv.
+        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] }
       );
     } catch (err: any) {
       clearTimeout(timeout);
@@ -231,7 +234,8 @@ export async function generateCommitMessage(
           '--system-prompt', COMMIT_MESSAGE_SYSTEM_PROMPT,
           '--print', prompt,
         ],
-        { cwd: os.tmpdir() }
+        // stdin: 'ignore' = `< /dev/null` — see generateSessionLabel.
+        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] }
       );
     } catch (err: any) {
       clearTimeout(timeout);
@@ -313,7 +317,8 @@ export async function generateSessionTags(
           '--system-prompt', TAGS_SYSTEM_PROMPT,
           '--print', prompt,
         ],
-        { cwd: os.tmpdir() }
+        // stdin: 'ignore' = `< /dev/null` — see generateSessionLabel.
+        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] }
       );
     } catch (err: any) {
       clearTimeout(timeout);

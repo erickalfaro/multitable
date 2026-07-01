@@ -22,12 +22,18 @@ export default defineConfig({
             interval: Number(process.env.MULTITABLE_WATCH_INTERVAL) || 1000,
           },
     proxy: {
+      // Pin to 127.0.0.1, NOT localhost. The daemon binds IPv4 (host
+      // 127.0.0.1), but Node resolves `localhost` to IPv6 `::1` first — so a
+      // `localhost` target silently lands on whatever else is squatting on
+      // that port (e.g. a Next.js dev server), which 404s every /api call.
+      // Port 3117 (not the ubiquitous 3000) also keeps us off the default
+      // dev-server collision path. Keep in sync with config/loader.ts default.
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://127.0.0.1:3117',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:3000',
+        target: 'ws://127.0.0.1:3117',
         ws: true,
       },
     },

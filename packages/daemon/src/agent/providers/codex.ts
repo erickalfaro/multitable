@@ -285,7 +285,13 @@ export class CodexAdapter implements ProviderAdapter {
       // the usage-limits indicator is live from the first turn.
       this.ensureAccountListener();
     } catch (err) {
-      console.error('[codex] warmup failed', err);
+      // Missing binary (codex not installed / not on PATH) is an expected,
+      // benign state for an optional provider — one concise line, no stack.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        console.warn('[codex] warmup skipped: codex CLI not found on PATH');
+      } else {
+        console.error('[codex] warmup failed', err);
+      }
     }
   }
 

@@ -86,9 +86,9 @@ export function ConnectionOverlay() {
           Cannot connect to daemon
         </span>
         <span style={{ fontSize: 13, color: 'var(--text-muted)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-          localhost:3000
+          localhost:3117
         </span>
-        <Button variant="primary" onClick={() => wsClient.connect()}>
+        <Button variant="primary" onClick={() => wsClient.reconnect()}>
           Retry
         </Button>
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>

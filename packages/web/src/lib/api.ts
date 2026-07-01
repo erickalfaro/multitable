@@ -28,7 +28,14 @@ async function failed(res: Response): Promise<never> {
     const body = await res.json();
     if (body && typeof body.error === 'string') detail = body.error;
   } catch {}
-  throw new Error(detail || `${res.status} ${res.statusText}`);
+  // Attach the HTTP status so callers can distinguish a definitive response
+  // (e.g. 404 "gone") from a transient network failure (which throws a raw
+  // fetch error with no `.status`). See the syncSession 404 handler.
+  const err = new Error(detail || `${res.status} ${res.statusText}`) as Error & {
+    status?: number;
+  };
+  err.status = res.status;
+  throw err;
 }
 
 async function logged<T>(

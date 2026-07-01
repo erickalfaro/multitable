@@ -451,7 +451,25 @@ function App() {
           if (sessionRes.status === 'fulfilled') {
             upsertCanonicalSession(sessionRes.value);
           } else {
-            console.warn(`[sessions] failed to sync state for ${sessionId} (${reason})`, sessionRes.reason);
+            // A definitive 404 means the daemon no longer has this session (it
+            // was restarted/reset and the turn is long over, or the row is
+            // gone). Leaving local state at 'running' spins the loader forever
+            // since no WS turn-end event will ever arrive. Clear the stuck
+            // indicators — same cleanup the session:turn-complete handler does.
+            const status = (sessionRes.reason as { status?: number } | undefined)?.status;
+            if (status === 404) {
+              const live = useAppStore.getState();
+              live.updateProcessState(sessionId, 'stopped');
+              live.setToolProgress(sessionId, null);
+              live.setSessionStatus(sessionId, { status: null });
+              live.setToolStreaming(sessionId, null);
+              live.setReasoningStreaming(sessionId, '');
+              live.setStreamingText(sessionId, '');
+            } else {
+              // Transient (network drop, daemon mid-restart) — keep state as-is
+              // so a still-running turn isn't prematurely marked stopped.
+              console.warn(`[sessions] failed to sync state for ${sessionId} (${reason})`, sessionRes.reason);
+            }
           }
           if (messagesRes.status === 'fulfilled') {
             useAppStore.getState().mergeMessages(sessionId, messagesRes.value.messages);
@@ -955,6 +973,11 @@ function App() {
         // duplicate sync here when a resume is what brought us back.
         if (wsClient.isSuspended()) {
           wsClient.resume();
+        } else if (!wsClient.isConnected()) {
+          // Socket died while backgrounded (laptop sleep / network drop) and
+          // the auto-retry budget may be exhausted. Force a fresh reconnect —
+          // the daemon is almost always back by the time the user returns.
+          wsClient.reconnect();
         } else {
           syncActiveSessions('visible');
         }
@@ -963,6 +986,8 @@ function App() {
     const syncOnFocus = () => {
       if (wsClient.isSuspended()) {
         wsClient.resume();
+      } else if (!wsClient.isConnected()) {
+        wsClient.reconnect();
       } else {
         syncActiveSessions('focus');
       }
