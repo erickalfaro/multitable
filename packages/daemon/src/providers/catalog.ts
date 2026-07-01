@@ -47,6 +47,9 @@ interface PersistedCatalog {
 
 const CACHE_SCHEMA_VERSION = 1 as const;
 
+// Monotonic sequence for unique temp filenames during concurrent persist().
+let persistSeq = 0;
+
 interface CatalogOptions {
   getDaemonEnv: () => NodeJS.ProcessEnv;
   resolveClaudeExecutable: () => string | undefined;
@@ -228,8 +231,10 @@ export class ProviderCatalog extends EventEmitter {
       }
     }
     // Atomic write — same trick as secrets.ts. Avoids torn reads if the daemon
-    // exits mid-write.
-    const tmp = `${this.cachePath}.tmp`;
+    // exits mid-write. The tmp name must be unique per call: refreshAll() fans
+    // out discovery concurrently, so multiple persist()s can overlap — a shared
+    // `.tmp` path means the second rename finds the file already moved (ENOENT).
+    const tmp = `${this.cachePath}.${process.pid}.${persistSeq++}.tmp`;
     await fsp.writeFile(tmp, JSON.stringify(payload, null, 2), { mode: 0o644 });
     await fsp.rename(tmp, this.cachePath);
   }
