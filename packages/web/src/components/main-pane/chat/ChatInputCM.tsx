@@ -230,6 +230,11 @@ export const ChatInputCM = memo(function ChatInputCM({
   // On mobile, the model chip + mode/effort controls move up to the
   // SessionHeaderBar (below the title) to free vertical space in the composer.
   const isMobile = useIsMobile();
+  // The editor (and its keymap closures) mounts once per [processId,
+  // attachmentKind], so the Enter binding reads mobile-ness through a ref —
+  // same fresh-read pattern as the Shift-Tab binding below.
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
 
   // Keep project id reachable by the file-mention completion source — it
   // reads it lazily so we don't have to re-create extensions when the user
@@ -505,8 +510,11 @@ export const ChatInputCM = memo(function ChatInputCM({
 
     const composerKeymap = keymap.of([
       {
+        // On mobile soft keyboards Shift-Enter is unreachable, so Enter inserts
+        // a newline (returning false falls through to defaultKeymap's
+        // insertNewlineAndIndent) and the Send button is the submit path.
         key: 'Enter',
-        run: () => doSend(),
+        run: () => (isMobileRef.current ? false : doSend()),
       },
       {
         key: 'Mod-Enter',
@@ -1110,6 +1118,7 @@ export const ChatInputCM = memo(function ChatInputCM({
                 flexShrink: 0,
                 transition: 'background-color var(--dur-fast) var(--ease-out)',
               }}
+              className="mt-touch-target"
             >
               <Paperclip size={13} />
             </button>
@@ -1120,6 +1129,7 @@ export const ChatInputCM = memo(function ChatInputCM({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               type="button"
+              className="mt-touch-target"
               onClick={() => onSaveRef.current()}
               disabled={!canSave}
               onMouseEnter={() => setSaveHover(true)}
@@ -1153,6 +1163,7 @@ export const ChatInputCM = memo(function ChatInputCM({
             // system note (NOT an error) and the session goes back to stopped.
             <button
               type="button"
+              className="mt-touch-target"
               onClick={() => {
                 api.sessions.stop(processId).catch((err) => {
                   console.error('[chat-input] stop failed:', err);
@@ -1184,6 +1195,7 @@ export const ChatInputCM = memo(function ChatInputCM({
           ) : (
             <button
               type="button"
+              className="mt-touch-target"
               onClick={() => onSendRef.current()}
               disabled={!canSend}
               onMouseEnter={() => setSendHover(true)}

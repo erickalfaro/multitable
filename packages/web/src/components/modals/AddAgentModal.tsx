@@ -17,6 +17,7 @@ import type {
 import { modeOptionTone, modeToneColor } from '../../lib/modeTone';
 import { cleanModelLabel } from '../../lib/modelName';
 import { emphasisFill } from '../../lib/emphasis';
+import { useIsMobile } from '../../lib/useIsMobile';
 
 // Modal body geometry. The body is given a fixed total height so the dialog
 // frame never resizes after opening — every internal state transition (model
@@ -411,12 +412,14 @@ function AgentPresetsRow({
   onPick,
   height,
 }: AgentPresetsRowProps) {
+  // 4 columns is ~75px per tile inside a full-width phone modal — unreadable.
+  const isMobile = useIsMobile();
   return (
     <div
       className="mt-scroll"
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
+        gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
         gap: 6,
         flexShrink: 0,
         height,

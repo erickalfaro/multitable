@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GitCommit } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useAppStore } from '../../../stores/appStore';
+import { useIsMobile } from '../../../lib/useIsMobile';
 import type { GitFileEntry, GitStatusSummary } from '../../../lib/types';
 import { GitPanelHeader } from './GitPanelHeader';
 import { GitCommitBox } from './GitCommitBox';
@@ -32,6 +33,12 @@ export function GitPanel({ projectId }: Props) {
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedBucket, setSelectedBucket] = useState<'staged' | 'unstaged' | null>(null);
+  // On phones the two-pane split leaves neither pane usable, so the body
+  // becomes a single column: change list, tap a file → full-width diff with a
+  // back arrow. Deriving the diff view from `selectedPath` too means discard
+  // (which nulls the selection) automatically pops back to the list.
+  const isMobile = useIsMobile();
+  const [mobileDiffOpen, setMobileDiffOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
@@ -105,7 +112,10 @@ export function GitPanel({ projectId }: Props) {
   const handleSelect = (file: GitFileEntry, bucket: 'staged' | 'unstaged') => {
     setSelectedPath(file.path);
     setSelectedBucket(bucket);
+    setMobileDiffOpen(true);
   };
+
+  const showMobileDiff = isMobile && mobileDiffOpen && selectedPath !== null;
 
   const handleStage = async (files: string[]) => {
     if (files.length === 0) return;
@@ -288,6 +298,9 @@ export function GitPanel({ projectId }: Props) {
         selectedPath={selectedPath}
         selectedBucket={selectedBucket}
         refreshKey={refreshKey}
+        isMobile={isMobile}
+        showMobileDiff={showMobileDiff}
+        onBack={() => setMobileDiffOpen(false)}
         onSelect={handleSelect}
         onStage={handleStage}
         onUnstage={handleUnstage}
@@ -373,6 +386,9 @@ interface ProjectBodyProps {
   selectedPath: string | null;
   selectedBucket: 'staged' | 'unstaged' | null;
   refreshKey: number;
+  isMobile: boolean;
+  showMobileDiff: boolean;
+  onBack: () => void;
   onSelect: (file: GitFileEntry, bucket: 'staged' | 'unstaged') => void;
   onStage: (files: string[]) => void;
   onUnstage: (files: string[]) => void;
@@ -390,6 +406,9 @@ function ProjectBody({
   selectedPath,
   selectedBucket,
   refreshKey,
+  isMobile,
+  showMobileDiff,
+  onBack,
   onSelect,
   onStage,
   onUnstage,
@@ -399,51 +418,68 @@ function ProjectBody({
   onGenerateMessage,
   onDiffError,
 }: ProjectBodyProps) {
+  const listRail = (
+    <div
+      style={{
+        ...(isMobile
+          ? { width: '100%' }
+          : {
+              width: 320,
+              minWidth: 240,
+              maxWidth: '40%',
+              borderRight: '1px solid var(--border)',
+            }),
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
+      <GitCommitBox
+        stagedCount={stagedCount}
+        onCommit={onCommit}
+        onGenerateMessage={onGenerateMessage}
+      />
+      <div className="mt-scroll" style={{ flex: 1, overflow: 'auto' }}>
+        <GitChangeList
+          staged={status.staged}
+          unstaged={status.unstaged}
+          untracked={status.untracked}
+          conflicted={status.conflicted}
+          selectedPath={selectedPath}
+          selectedBucket={selectedBucket}
+          onSelect={onSelect}
+          onStage={onStage}
+          onUnstage={onUnstage}
+          onDiscard={onDiscard}
+          onDiscardAll={onDiscardAll}
+        />
+      </div>
+    </div>
+  );
+
+  const diffPane = (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <GitDiffEditor
+        projectId={projectId}
+        filePath={selectedPath}
+        staged={selectedBucket === 'staged'}
+        refreshKey={refreshKey}
+        onError={onDiffError}
+        onBack={isMobile ? onBack : undefined}
+      />
+    </div>
+  );
+
+  // Mobile: single column — the change list, or the selected file's diff.
+  // Desktop: list rail + diff pane side by side.
   return (
     <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
-      {/* Left rail: commit box pinned to top + scrollable change list */}
-      <div
-        style={{
-          width: 320,
-          minWidth: 240,
-          maxWidth: '40%',
-          display: 'flex',
-          flexDirection: 'column',
-          borderRight: '1px solid var(--border)',
-          overflow: 'hidden',
-        }}
-      >
-        <GitCommitBox
-          stagedCount={stagedCount}
-          onCommit={onCommit}
-          onGenerateMessage={onGenerateMessage}
-        />
-        <div className="mt-scroll" style={{ flex: 1, overflow: 'auto' }}>
-          <GitChangeList
-            staged={status.staged}
-            unstaged={status.unstaged}
-            untracked={status.untracked}
-            conflicted={status.conflicted}
-            selectedPath={selectedPath}
-            selectedBucket={selectedBucket}
-            onSelect={onSelect}
-            onStage={onStage}
-            onUnstage={onUnstage}
-            onDiscard={onDiscard}
-            onDiscardAll={onDiscardAll}
-          />
-        </div>
-      </div>
-      {/* Right pane: selected file diff */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <GitDiffEditor
-          projectId={projectId}
-          filePath={selectedPath}
-          staged={selectedBucket === 'staged'}
-          refreshKey={refreshKey}
-          onError={onDiffError}
-        />
-      </div>
+      {isMobile ? (showMobileDiff ? diffPane : listRail) : (
+        <>
+          {listRail}
+          {diffPane}
+        </>
+      )}
     </div>
   );
 }

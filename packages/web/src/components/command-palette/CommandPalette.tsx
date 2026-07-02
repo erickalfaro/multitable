@@ -6,6 +6,7 @@ import { api } from '../../lib/api';
 import toast from 'react-hot-toast';
 import { BUILTIN_THEMES } from '../../lib/themes';
 import { Kbd } from '../ui';
+import { useIsMobile } from '../../lib/useIsMobile';
 
 interface CommandItem {
   id: string;
@@ -244,6 +245,10 @@ export function CommandPalette() {
     return map;
   }, [items]);
 
+  // Near-top placement + capped list height on mobile so the soft keyboard
+  // doesn't cover the results.
+  const isMobile = useIsMobile();
+
   if (!commandPaletteOpen) return null;
 
   return (
@@ -255,7 +260,7 @@ export function CommandPalette() {
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'center',
-        paddingTop: 80,
+        padding: isMobile ? '12px 10px 0' : '80px 0 0',
         backgroundColor: 'var(--bg-overlay)',
         backdropFilter: 'blur(12px) saturate(1.1)',
         WebkitBackdropFilter: 'blur(12px) saturate(1.1)',
@@ -317,7 +322,7 @@ export function CommandPalette() {
           </div>
           <Command.List
             className="mt-scroll"
-            style={{ maxHeight: 420, overflowY: 'auto', padding: 4 }}
+            style={{ maxHeight: isMobile ? '60dvh' : 420, overflowY: 'auto', padding: 4 }}
           >
             <Command.Empty
               style={{

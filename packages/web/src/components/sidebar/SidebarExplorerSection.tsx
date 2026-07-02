@@ -302,7 +302,6 @@ export function SidebarExplorerSection({ projectId }: Props) {
 
       <FileTree
         projectId={projectId}
-        variant="sidebar"
         selectedPath={openPath}
         refreshKey={refreshKey}
         gitStatusByPath={gitStatusByPath}

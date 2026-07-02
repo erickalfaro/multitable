@@ -988,6 +988,20 @@ select:focus-visible,
   }
 }
 
+/* Touch-target expansion — small icon/text buttons keep their visual box but
+ * gain an invisible ≥44px hit area on coarse pointers. The inset math centers
+ * the pseudo-element; when the button is already ≥44px it becomes a no-op. */
+@media (pointer: coarse) {
+  .mt-touch-target {
+    position: relative;
+  }
+  .mt-touch-target::after {
+    content: '';
+    position: absolute;
+    inset: min(calc(50% - 22px), 0px);
+  }
+}
+
 /* ── Glass material system (glass-design) ──────────────────────────────────
  * Layer order: ambient backdrop → floating shell → glass panels → pills, each
  * slightly more opaque so text stays legible. Rule: at most ONE blur layer

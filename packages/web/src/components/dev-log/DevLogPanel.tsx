@@ -280,21 +280,24 @@ export function DevLogPanel() {
     }
   }, [filtered.length, open, paused]);
 
-  // Drag-to-resize from the top edge of the panel.
-  const startResize = useCallback((e: React.MouseEvent) => {
+  // Drag-to-resize from the top edge of the panel. Pointer events so the
+  // drag works with touch as well as mouse.
+  const startResize = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     const startY = e.clientY;
     const startH = height;
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       const next = Math.max(140, Math.min(window.innerHeight - 80, startH + (startY - ev.clientY)));
       setHeight(next);
     };
     const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   }, [height]);
 
   const copyAll = useCallback(() => {
@@ -336,7 +339,7 @@ export function DevLogPanel() {
       {/* Resize handle — sits at the very top of the panel so dragging
           upward grows it and pushes the rest of the app up. */}
       <div
-        onMouseDown={startResize}
+        onPointerDown={startResize}
         style={{
           position: 'absolute',
           top: -3,
@@ -345,6 +348,7 @@ export function DevLogPanel() {
           height: 6,
           cursor: 'row-resize',
           zIndex: 1,
+          touchAction: 'none',
         }}
       />
 

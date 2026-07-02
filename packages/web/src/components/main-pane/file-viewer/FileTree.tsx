@@ -28,9 +28,6 @@ interface Props {
   // path relative to the project root. Files (non-directories) never trigger
   // this — uploading to a file would be ambiguous.
   onUploadHere?: (targetDir: string) => void;
-  // 'panel' = legacy fixed-width bordered column (center File Viewer host);
-  // 'sidebar' = full-width, transparent, no own scroll (host scrolls).
-  variant?: 'panel' | 'sidebar';
   // Optional git decorations: project-relative path -> status. Changed files'
   // names tint by status (VS Code-style); directories are never decorated.
   gitStatusByPath?: ReadonlyMap<string, GitFileStatus>;
@@ -65,7 +62,6 @@ export function FileTree({
   refreshKey,
   fileActions,
   onUploadHere,
-  variant = 'panel',
   gitStatusByPath,
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -318,26 +314,8 @@ export function FileTree({
       />
     ) : null;
 
-  if (variant === 'sidebar') {
-    return (
-      <div style={{ padding: '2px 0' }}>
-        {renderLevel(ROOT, 0)}
-        {folderContextMenu}
-      </div>
-    );
-  }
-
   return (
-    <div
-      style={{
-        width: 260,
-        flexShrink: 0,
-        overflow: 'auto',
-        borderRight: '1px solid var(--border)',
-        backgroundColor: 'var(--bg-sidebar)',
-        padding: '6px 0',
-      }}
-    >
+    <div style={{ padding: '2px 0' }}>
       {renderLevel(ROOT, 0)}
       {folderContextMenu}
     </div>

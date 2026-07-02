@@ -13,7 +13,7 @@ const BOX: Record<IconButtonSize, number> = { sm: 22, md: 26, lg: 32 };
 
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
   function IconButton(
-    { size = 'md', variant = 'ghost', label, children, style, onMouseEnter, onMouseLeave, disabled, title, ...rest },
+    { size = 'md', variant = 'ghost', label, children, style, onMouseEnter, onMouseLeave, disabled, title, className, ...rest },
     ref,
   ) {
     const [hover, setHover] = React.useState(false);
@@ -31,6 +31,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
       <button
         ref={ref}
         disabled={disabled}
+        className={className ? `mt-touch-target ${className}` : 'mt-touch-target'}
         title={title ?? label}
         aria-label={label ?? title}
         onMouseEnter={(e) => { setHover(true); onMouseEnter?.(e); }}

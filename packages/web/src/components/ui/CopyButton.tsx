@@ -55,6 +55,7 @@ export function CopyButton({
   return (
     <button
       type="button"
+      className="mt-touch-target"
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}

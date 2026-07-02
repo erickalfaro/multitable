@@ -86,6 +86,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       onMouseLeave,
       onMouseDown,
       onMouseUp,
+      className,
       ...rest
     },
     ref,
@@ -111,6 +112,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         disabled={isDisabled}
+        className={className ? `mt-touch-target ${className}` : 'mt-touch-target'}
         onMouseEnter={(e) => { setHover(true); onMouseEnter?.(e); }}
         onMouseLeave={(e) => { setHover(false); setActive(false); onMouseLeave?.(e); }}
         onMouseDown={(e) => { setActive(true); onMouseDown?.(e); }}
