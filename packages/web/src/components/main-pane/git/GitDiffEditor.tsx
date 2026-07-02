@@ -13,9 +13,11 @@ interface Props {
   refreshKey: number;
   /** Called when the underlying fetch fails so the parent can surface it. */
   onError?: (message: string) => void;
+  /** Mobile single-column mode: renders a back arrow that returns to the change list. */
+  onBack?: () => void;
 }
 
-export function GitDiffEditor({ projectId, filePath, staged, refreshKey, onError }: Props) {
+export function GitDiffEditor({ projectId, filePath, staged, refreshKey, onError, onBack }: Props) {
   const [raw, setRaw] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [currentHunk, setCurrentHunk] = useState(0);
@@ -91,6 +93,7 @@ export function GitDiffEditor({ projectId, filePath, staged, refreshKey, onError
         currentHunk={currentHunk}
         onPrev={onPrev}
         onNext={onNext}
+        onBack={onBack}
       />
       <div ref={scrollRef} className="mt-scroll" style={{ flex: 1, overflow: 'auto' }}>
         {loading && !file && <Empty>Loading diff…</Empty>}

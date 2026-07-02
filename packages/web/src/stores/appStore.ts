@@ -695,11 +695,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   addProjectModalOpen: false,
   globalSettingsOpen: false,
   projectSettingsOpen: false,
-  // Drawer is closed by default in the Zen layout (was always-open column);
-  // user opens it via Cmd+. or SessionHeaderBar's chevron when they want
-  // session context (activity / cost / notes / info).
-  detailPanelOpen: false,
-  detailPanelTab: 'activity',
+  // In-flow right column, toggled via Cmd+. or SessionHeaderBar's chevron.
+  // Open state + active tab survive reloads (same pattern as devLogOpen).
+  detailPanelOpen: (() => {
+    try {
+      return localStorage.getItem('mt:detailPanelOpen') === '1';
+    } catch {
+      return false;
+    }
+  })(),
+  detailPanelTab: (() => {
+    try {
+      const t = localStorage.getItem('mt:detailPanelTab');
+      return t === 'activity' || t === 'cost' || t === 'notes' || t === 'info' ? t : 'activity';
+    } catch {
+      return 'activity';
+    }
+  })(),
   // Start optimistic. The fullscreen "Cannot connect to daemon" overlay is
   // intrusive — only show it after a real connect attempt has failed, never
   // during the initial mount window. ws.connect() flips this to 'reconnecting'
@@ -943,8 +955,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAddProjectModalOpen: (open) => set({ addProjectModalOpen: open }),
   setGlobalSettingsOpen: (open) => set({ globalSettingsOpen: open }),
   setProjectSettingsOpen: (open) => set({ projectSettingsOpen: open }),
-  setDetailPanelOpen: (open) => set({ detailPanelOpen: open }),
-  setDetailPanelTab: (tab) => set({ detailPanelTab: tab }),
+  setDetailPanelOpen: (open) => {
+    try {
+      localStorage.setItem('mt:detailPanelOpen', open ? '1' : '0');
+    } catch {
+      // ignore
+    }
+    set({ detailPanelOpen: open });
+  },
+  setDetailPanelTab: (tab) => {
+    try {
+      localStorage.setItem('mt:detailPanelTab', tab);
+    } catch {
+      // ignore
+    }
+    set({ detailPanelTab: tab });
+  },
 
   // Attention Stream slice — live feed of agent actions per session.
   attentionBySession: {},

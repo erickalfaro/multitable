@@ -1,4 +1,5 @@
-import { ArrowUp, ArrowDown } from 'lucide-react';
+import { ArrowUp, ArrowDown, ArrowLeft } from 'lucide-react';
+import { IconButton } from '../../ui';
 
 interface Props {
   filePath: string;
@@ -6,9 +7,11 @@ interface Props {
   currentHunk: number;
   onPrev: () => void;
   onNext: () => void;
+  /** Mobile single-column mode: back to the change list. */
+  onBack?: () => void;
 }
 
-export function GitDiffHeader({ filePath, hunkCount, currentHunk, onPrev, onNext }: Props) {
+export function GitDiffHeader({ filePath, hunkCount, currentHunk, onPrev, onNext, onBack }: Props) {
   const hasPrev = hunkCount > 0 && currentHunk > 0;
   const hasNext = hunkCount > 0 && currentHunk < hunkCount - 1;
 
@@ -27,6 +30,11 @@ export function GitDiffHeader({ filePath, hunkCount, currentHunk, onPrev, onNext
         minHeight: 32,
       }}
     >
+      {onBack && (
+        <IconButton size="md" label="Back to changes" onClick={onBack}>
+          <ArrowLeft size={14} />
+        </IconButton>
+      )}
       <FileLabel path={filePath} />
       {hunkCount > 1 && (
         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>

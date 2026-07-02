@@ -19,6 +19,11 @@ interface Props {
   lang?: string;
 }
 
+// Touch devices have no hover, so the copy overlay must be always-visible
+// there. Pointer coarseness doesn't change at runtime — module-level is fine.
+const COARSE_POINTER =
+  typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+
 // Renders a code block with shiki. Falls back to a plain <pre> until the
 // highlighter has initialized (async WASM load on first use). Memoized so
 // unrelated parent re-renders don't re-invoke shiki and re-apply innerHTML.
@@ -118,7 +123,7 @@ export const CodeBlock = memo(function CodeBlock({ code, lang }: Props) {
       />
       <CopyButton
         variant="overlay"
-        visible={hover}
+        visible={COARSE_POINTER ? undefined : hover}
         getText={code}
         title="Copy code"
         size={11}

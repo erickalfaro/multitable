@@ -244,10 +244,19 @@ function ProjectRailItem({
  * sections column, revealing labels. It collapses back when the pointer
  * leaves. Rows: Home, Add-project, then one glass tab-pill per project.
  * Picking a project reveals its sections in the adjacent column without
- * disturbing the main pane. `alwaysExpanded` (mobile drawer) renders the
- * static full-width column with no hover behavior.
+ * disturbing the main pane. `alwaysExpanded` renders the static full-width
+ * column with no hover behavior; `compact` (mobile drawer) renders the static
+ * icon-only strip — no hover/focus expansion, so the narrow drawer keeps its
+ * width for the sections column and identity is carried by the tinted
+ * initials alone.
  */
-export function ProjectRail({ alwaysExpanded = false }: { alwaysExpanded?: boolean }) {
+export function ProjectRail({
+  alwaysExpanded = false,
+  compact = false,
+}: {
+  alwaysExpanded?: boolean;
+  compact?: boolean;
+}) {
   const projects = useAppStore((s) => s.projects);
   const selectedProcessId = useAppStore((s) => s.selectedProcessId);
   const projectOverviewOpen = useAppStore((s) => s.projectOverviewOpen);
@@ -269,7 +278,7 @@ export function ProjectRail({ alwaysExpanded = false }: { alwaysExpanded?: boole
     [],
   );
 
-  const open = alwaysExpanded || expanded || menuPinned;
+  const open = !compact && (alwaysExpanded || expanded || menuPinned);
 
   const onEnter = () => {
     window.clearTimeout(leaveTimer.current);
@@ -408,11 +417,11 @@ export function ProjectRail({ alwaysExpanded = false }: { alwaysExpanded?: boole
     </>
   );
 
-  if (alwaysExpanded) {
+  if (alwaysExpanded || compact) {
     return (
       <div
         style={{
-          width: RAIL_EXPANDED,
+          width: compact ? RAIL_COLLAPSED : RAIL_EXPANDED,
           flexShrink: 0,
           height: '100%',
           // Transparent — the pills float on the shell glass + ambient bloom.
@@ -422,6 +431,7 @@ export function ProjectRail({ alwaysExpanded = false }: { alwaysExpanded?: boole
           padding: '10px 8px 12px',
           gap: 6,
           overflow: 'hidden',
+          borderRight: compact ? '1px solid var(--glass-border)' : undefined,
         }}
       >
         {body}

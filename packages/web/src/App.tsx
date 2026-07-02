@@ -59,10 +59,18 @@ function App() {
   const mobileDrawerOpen = store.mobileDrawerOpen;
   const setMobileDrawerOpen = store.setMobileDrawerOpen;
 
-  // Close drawer when a process is selected on mobile
+  // Close drawer when a process, file-viewer, or git surface is selected on
+  // mobile. File-viewer/git selection sets selectedProcessId to null — a no-op
+  // for this effect when it was already null — so those ids must be deps too.
   useEffect(() => {
     if (isMobile) setMobileDrawerOpen(false);
-  }, [store.selectedProcessId, isMobile, setMobileDrawerOpen]);
+  }, [
+    store.selectedProcessId,
+    store.selectedFileViewerProjectId,
+    store.selectedGitProjectId,
+    isMobile,
+    setMobileDrawerOpen,
+  ]);
 
   // Hash-based deep links from external pagers (e.g. Telegram "Open in
   // dashboard" buttons). Supported:
@@ -1146,10 +1154,11 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Detail panel is now a fixed-position drawer overlay (Zen redesign §5.2):
-  // it sits over the main pane on demand rather than consuming a column.
-  // Open/close lives in the store; SessionHeaderBar's chevron + Cmd+. + the
-  // drawer's own backdrop-click all toggle the same `detailPanelOpen` flag.
+  // Detail panel — desktop renders it as an in-flow third PanelGroup column,
+  // mobile as a full-screen takeover. Open/close lives in the store (persisted
+  // to localStorage); SessionHeaderBar's chevron, Cmd+. and the panel's own X
+  // all toggle the same `detailPanelOpen` flag. No click-outside dismissal —
+  // the panel persists until the user explicitly closes it.
   const detailPanelOpen = useAppStore((s) => s.detailPanelOpen);
   const setDetailPanelOpen = useAppStore((s) => s.setDetailPanelOpen);
 
@@ -1251,6 +1260,30 @@ function App() {
           >
             <MainPane />
           </Panel>
+          {/* Detail panel — an in-flow, resizable third column (not an overlay):
+              it stays open across clicks elsewhere and reloads until the user
+              closes it via Cmd+., the header chevron, or the panel's X. The
+              flag survives non-session selections, so the panel unmounts for
+              terminals/wall and reappears with the next session. */}
+          {detailPanelOpen && selectedSession && (
+            <>
+              <PanelResizeHandle className="mt-resize-handle" />
+              <Panel
+                id="details"
+                order={3}
+                defaultSize={28}
+                minSize={18}
+                maxSize={45}
+                style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+              >
+                <SessionDetailPanel
+                  key={selectedSession.id}
+                  session={selectedSession}
+                  onClose={() => setDetailPanelOpen(false)}
+                />
+              </Panel>
+            </>
+          )}
         </PanelGroup>
         {sidebarCollapsed && (
           <button
@@ -1294,7 +1327,10 @@ function App() {
           <div
             className="mt-glass-strong mt-scroll"
             style={{
-              position: 'fixed', top: 0, left: 0, bottom: 0, width: 300,
+              position: 'fixed', top: 0, left: 0, bottom: 0,
+              // Icon rail (56px) + sections column. Capped so a sliver of the
+              // dimmed main pane stays visible as the tap-to-close affordance.
+              width: 'min(88vw, 400px)',
               zIndex: 901,
               boxShadow: 'var(--shadow-xl)',
               transform: 'translateX(0)',
@@ -1308,7 +1344,7 @@ function App() {
       )}
 
       {/* Mobile detail-panel — on desktop the SessionDetailPanel lives in the
-          right PanelGroup column, but the mobile branch below renders only
+          right PanelGroup column, but the mobile branch above renders only
           <MainPane />. Without this, SessionHeaderBar's "Toggle detail panel"
           button flips `detailPanelOpen` but nothing ever mounts the panel.
           On mobile it takes over the full screen with a back button (passed
@@ -1335,53 +1371,6 @@ function App() {
             onClose={() => setDetailPanelOpen(false)}
           />
         </div>
-      )}
-
-      {/* Desktop detail drawer — fixed-position overlay on the right, glass
-          backdrop. Replaces the always-present third PanelGroup column from
-          the pre-Zen layout (see plan §5.2). Toggled by Cmd+. or
-          SessionHeaderBar's chevron. Click-outside dismisses without
-          flipping the store flag back via setDetailPanelOpen(false). */}
-      {!isMobile && detailPanelOpen && selectedSession && (
-        <>
-          <div
-            onClick={() => setDetailPanelOpen(false)}
-            style={{
-              position: 'fixed',
-              inset: 0,
-              backgroundColor: 'transparent',
-              zIndex: 800,
-              cursor: 'default',
-              animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
-            }}
-          />
-          <aside
-            className="mt-glass-strong mt-scroll"
-            // Floats as a glass card inset by --shell-inset to match the shell,
-            // with the shell's own corner radius. Width clamps so it's
-            // comfortable on a 14" laptop but doesn't dominate a 32" display.
-            style={{
-              position: 'fixed',
-              top: 'var(--shell-inset)',
-              right: 'var(--shell-inset)',
-              bottom: 'var(--shell-inset)',
-              width: 'clamp(360px, 32vw, 540px)',
-              borderRadius: 'var(--shell-radius)',
-              zIndex: 801,
-              boxShadow: 'var(--shadow-xl)',
-              display: 'flex',
-              flexDirection: 'column',
-              overflowY: 'auto',
-              animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
-            }}
-          >
-            <SessionDetailPanel
-              key={selectedSession.id}
-              session={selectedSession}
-              onClose={() => setDetailPanelOpen(false)}
-            />
-          </aside>
-        </>
       )}
 
       <OptionSelector />
