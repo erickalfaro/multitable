@@ -128,10 +128,10 @@ Startup sequence in `index.ts` is **load-bearing — read it before changing boo
 4. Create `PtyManager`, `PermissionManager`, `ElicitationManager`, `AgentSessionManager` (registers Claude + Codex + Hermes adapters).
 5. Init `TelegramBridge`.
 6. Create `FileWatcher` + `GitWatcher`.
-7. Build Express + WS server (`server.ts`); wire the broadcast hook; start the bridge.
+7. Build Express + WS server (`server.ts`); wire the broadcast hook.
 8. Load DB sessions, `agentManager.register(...)` each (no PTY spawn); attach git watchers; autostart commands.
-9. Listen on `host:port`.
-10. SIGTERM/SIGINT: `agentManager.shutdown()` (each adapter's `shutdown()` exits its child cleanly), `TelegramBridge.stop()`.
+9. Listen on `host:port` — EADDRINUSE gets a bounded retry (10×1s, absorbs the tsx-watch restart race), then fail-fast teardown + exit(1). On successful bind: start the Telegram bridge (never before — a daemon that can't bind must not contend for the bot's single getUpdates slot), catalog refresh, adapter warmup.
+10. SIGTERM/SIGINT (and `uncaughtException`, which exits rather than lingering as a zombie): `agentManager.shutdown()` (each adapter's `shutdown()` exits its child cleanly), `TelegramBridge.stop()`.
 
 Key modules (one line each — see code for detail):
 

@@ -175,6 +175,12 @@ export function createServer(
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
+  // ws re-emits the HTTP server's 'error' events on wss. Without a listener
+  // here, a bind failure (EADDRINUSE) throws from INSIDE the http server's
+  // own 'error' emission — killing the process before index.ts's listen
+  // retry/fail-fast handler (registered after this one) ever runs. index.ts
+  // owns bind-error policy; this only stops the re-emit from being fatal.
+  wss.on('error', () => {});
 
   wss.on('connection', (ws: WebSocket) => {
     const state: WsClientState = {
