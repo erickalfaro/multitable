@@ -277,10 +277,10 @@ function App() {
             if (!liveTerminalIds.has(id)) live.removeTerminal(id);
           }
 
-          // Seed git status for every project so the sidebar's SOURCE CONTROL
-          // section knows which projects are git repos and what their badge
+          // Seed git status for every project so the sidebar's EXPLORER
+          // branch row knows which projects are git repos and what their badge
           // counts are. The daemon's GitWatcher only emits on change, so
-          // without this seed the section would be invisible until the first
+          // without this seed the row would be invisible until the first
           // working-tree mutation. Failures are silent (non-git or missing).
           for (const p of projects) {
             api.git
@@ -379,7 +379,7 @@ function App() {
 
     // Whenever a new project appears in the store (e.g. user added one via
     // AddProjectModal, or one was imported by the past-agents flow), seed its
-    // git status so the sidebar SOURCE CONTROL section can render immediately.
+    // git status so the sidebar EXPLORER branch row can render immediately.
     const unsubSeedGit = useAppStore.subscribe((state, prev) => {
       if (state.projects === prev.projects) return;
       const known = new Set(prev.projects.map((p) => p.id));

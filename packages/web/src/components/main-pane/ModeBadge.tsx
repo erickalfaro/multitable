@@ -10,6 +10,7 @@ import type {
 import { api } from '../../lib/api';
 import { modeOptionTone, modeToneColor } from '../../lib/modeTone';
 import { useAppStore } from '../../stores/appStore';
+import { emphasisFill } from '../../lib/emphasis';
 import { useIsMobile } from '../../lib/useIsMobile';
 
 interface Props {
@@ -370,11 +371,16 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
                       gap: 10,
                       padding: '8px 10px 8px 12px',
                       borderRadius: 'var(--radius-snug)',
-                      background: isHover
-                        ? 'var(--bg-hover)'
+                      // Current mode = tone-tinted fill; hover stays neutral.
+                      ...(isHover
+                        ? { background: 'var(--bg-hover)' }
                         : isCurrent
-                          ? 'color-mix(in srgb, var(--bg-hover) 55%, transparent)'
-                          : 'transparent',
+                          ? emphasisFill(modeToneColor(modeOptionTone(opt)), {
+                              fill: 10,
+                              ring: 30,
+                              on: 'transparent',
+                            })
+                          : { background: 'transparent' }),
                       border: 'none',
                       textAlign: 'left',
                       cursor: rowDisabled ? 'not-allowed' : 'pointer',
@@ -384,19 +390,6 @@ export function ModeBadge({ session, placement = 'top' }: Props) {
                       transition: 'background-color var(--dur-fast) var(--ease-out)',
                     }}
                   >
-                    {isCurrent && (
-                      <span
-                        aria-hidden
-                        style={{
-                          position: 'absolute',
-                          left: 4,
-                          top: 8,
-                          bottom: 8,
-                          width: 2,
-                          background: modeToneColor(modeOptionTone(opt)),
-                        }}
-                      />
-                    )}
                     {/* Risk-tier dot — marks every behavior by its tone so the
                         list is self-explanatory (safe / ask-first / elevated /
                         danger), not just labelled. */}

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import type { DetailPanelTab } from '../../stores/appStore';
+import { emphasisFill } from '../../lib/emphasis';
 import { api } from '../../lib/api';
 import { copyToClipboard } from '../../lib/clipboard';
 import { relativeTime } from '../../lib/relativeTime';
@@ -716,31 +717,27 @@ export function SessionDetailPanel({ session, isMobile, onClose }: Props) {
               className="mt-toolbar-button"
               style={{
                 position: 'relative',
-                background: 'transparent',
                 border: 'none',
+                borderRadius: 'var(--radius-pill)',
+                // Active tab = filled glass pill (segmented-control style);
+                // the background transition replaces the old underline motion.
+                ...(active
+                  ? emphasisFill('var(--accent-amber)', { fill: 12, ring: 40 })
+                  : { background: 'transparent' }),
                 color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
                 fontSize: isMobile ? 13 : 11.5,
                 fontWeight: active ? 600 : 500,
                 padding: isMobile ? '0 14px' : '0 10px',
-                height: '100%',
+                height: isMobile ? 30 : 22,
+                alignSelf: 'center',
+                margin: '0 2px',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
+                transition:
+                  'color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out)',
               }}
             >
               {tab.label}
-              <span
-                style={{
-                  position: 'absolute',
-                  left: 10,
-                  right: 10,
-                  bottom: 0,
-                  height: 2,
-                  backgroundColor: 'var(--accent-amber)',
-                  transform: active ? 'scaleX(1)' : 'scaleX(0)',
-                  transformOrigin: 'center',
-                  transition: 'transform var(--dur-fast) var(--ease-snap)',
-                }}
-              />
             </button>
           );
         })}

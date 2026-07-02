@@ -9,6 +9,7 @@ import type {
 import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
 import { cleanModelLabel } from '../../lib/modelName';
+import { emphasisFill } from '../../lib/emphasis';
 
 interface Props {
   session: Session;
@@ -277,7 +278,12 @@ export function ThinkingEffortBadge({ session, placement = 'top' }: Props) {
                   gap: 2,
                   padding: '8px 10px 8px 12px',
                   borderRadius: 'var(--radius-snug)',
-                  background: isHover ? 'var(--bg-hover)' : 'transparent',
+                  // Current level = tone-tinted fill; hover stays neutral.
+                  ...(isHover
+                    ? { background: 'var(--bg-hover)' }
+                    : isCurrent
+                      ? emphasisFill(tone.accent, { fill: 10, ring: 30, on: 'transparent' })
+                      : { background: 'transparent' }),
                   border: 'none',
                   textAlign: 'left',
                   cursor: 'pointer',
@@ -286,19 +292,6 @@ export function ThinkingEffortBadge({ session, placement = 'top' }: Props) {
                   transition: 'background-color var(--dur-fast) var(--ease-out)',
                 }}
               >
-                {isCurrent && (
-                  <span
-                    aria-hidden
-                    style={{
-                      position: 'absolute',
-                      left: 4,
-                      top: 8,
-                      bottom: 8,
-                      width: 2,
-                      background: tone.accent,
-                    }}
-                  />
-                )}
                 <span
                   style={{
                     color: 'var(--text-primary)',

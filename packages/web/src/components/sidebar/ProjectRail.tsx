@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Plus, Bell } from 'lucide-react';
 import {
   useAppStore,
@@ -15,6 +15,13 @@ import { ContextMenu } from '../context-menu/ContextMenu';
 import { LogoArt } from './LogoArt';
 import { CATEGORY_COLOR_VAR, CATEGORY_ICON } from '../../lib/alertVisuals';
 
+const RAIL_COLLAPSED = 56;
+const RAIL_EXPANDED = 184;
+/** Ignore quick pointer pass-throughs before floating the rail open. */
+const EXPAND_DELAY_MS = 180;
+/** Grace period after the pointer leaves before collapsing back. */
+const COLLAPSE_DELAY_MS = 140;
+
 function projectInitials(name: string): string {
   const words = name.trim().split(/[\s_\-/]+/).filter(Boolean);
   if (words.length === 0) return '?';
@@ -23,13 +30,51 @@ function projectInitials(name: string): string {
 }
 
 /**
- * One project = one Zen tab-pill row (glass-design): a full-width rounded glass
- * pill in a single vertical column. A soft hue-tinted acronym chip sits on the
- * left, the project name reads beside it. The pill wears its ring hue softly —
- * transparent at rest, soft glass on hover, brighter glass with a gentle outer
- * glow when active. No pop-up motion (color is identity, applied softly).
+ * Label text next to a row's identity glyph. Clipped by the row's
+ * overflow while the rail width animates; fades in only after the width has
+ * mostly landed, and drops out immediately on collapse.
  */
-function ProjectRailItem({ project }: { project: Project }) {
+function railLabelStyle(open: boolean): React.CSSProperties {
+  return {
+    flex: 1,
+    minWidth: 0,
+    textAlign: 'left',
+    fontSize: 12.5,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    opacity: open ? 1 : 0,
+    transition: open
+      ? 'opacity var(--dur-fast) var(--ease-out) 110ms, color var(--dur-med) var(--ease-out)'
+      : 'opacity 80ms var(--ease-out), color var(--dur-med) var(--ease-out)',
+  };
+}
+
+/** The fixed 26px slot that keeps glyphs centered in the collapsed rail. */
+const identitySlot: React.CSSProperties = {
+  flexShrink: 0,
+  width: 26,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+/**
+ * One project = one Zen tab-pill row: a full-width rounded glass pill in a
+ * single vertical column. Identity is carried by bare hue-tinted initials on
+ * the left (no chip box) with the project name beside them. Transparent at
+ * rest, soft glass on hover, hue-tinted glass fill + hue hairline when active
+ * — no outer glow. No pop-up motion (color is identity, applied softly).
+ */
+function ProjectRailItem({
+  project,
+  open,
+  onMenuOpenChange,
+}: {
+  project: Project;
+  open: boolean;
+  onMenuOpenChange?: (open: boolean) => void;
+}) {
   const dark = useIsDark();
   const color = getProjectColor(project.id, dark);
   const active = useAppStore((s) => s.sidebarProjectId === project.id);
@@ -38,7 +83,12 @@ function ProjectRailItem({ project }: { project: Project }) {
   const unreadAttention = useProjectUnreadCount(project.id);
   const dominantCategory = useProjectDominantCategory(project.id);
   const [hover, setHover] = useState(false);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenuState] = useState<{ x: number; y: number } | null>(null);
+
+  const setMenu = (m: { x: number; y: number } | null) => {
+    setMenuState(m);
+    onMenuOpenChange?.(m !== null);
+  };
 
   const select = () => {
     // Reveal-only: swap the sections column to this project and make it the
@@ -49,7 +99,7 @@ function ProjectRailItem({ project }: { project: Project }) {
   };
 
   const hue = color.dot; // oklch(<L> <C> <H>) — band-anchored project hue.
-  // Whole-pill glass material states.
+  // Whole-pill glass material states (tinted glass fill, no glow).
   const background = active
     ? `color-mix(in oklch, ${hue} 14%, var(--glass-bg))`
     : hover
@@ -60,13 +110,7 @@ function ProjectRailItem({ project }: { project: Project }) {
     : hover
       ? 'var(--border-strong)'
       : 'var(--glass-border)';
-  const boxShadow = active
-    ? `inset 0 1px 0 var(--glass-highlight), 0 0 18px -3px color-mix(in oklch, ${hue} 50%, transparent)`
-    : 'none';
-  // The acronym chip carries the hue more assertively than the pill body.
-  const chipBg = active
-    ? `color-mix(in oklch, ${hue} 22%, var(--glass-bg))`
-    : `color-mix(in oklch, ${hue} 14%, var(--glass-bg-soft))`;
+  const boxShadow = active ? 'inset 0 1px 0 var(--glass-highlight)' : 'none';
 
   return (
     <>
@@ -89,12 +133,13 @@ function ProjectRailItem({ project }: { project: Project }) {
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          padding: '0 8px',
+          padding: '0 7px',
           fontFamily: 'inherit',
           background,
           border: `1px solid ${borderColor}`,
           borderRadius: 'var(--radius-soft)',
           boxShadow,
+          overflow: 'hidden',
           cursor: 'pointer',
           transition:
             'background var(--dur-med) var(--ease-out), border-color var(--dur-med) var(--ease-out), box-shadow var(--dur-med) var(--ease-out)',
@@ -103,39 +148,21 @@ function ProjectRailItem({ project }: { project: Project }) {
         <span
           aria-hidden
           style={{
-            flexShrink: 0,
-            width: 26,
-            height: 26,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 11,
-            fontWeight: 700,
+            ...identitySlot,
+            fontSize: 12,
+            fontWeight: 600,
             letterSpacing: '0.02em',
-            color: active
-              ? 'var(--text-primary)'
-              : `color-mix(in oklch, ${hue} 55%, var(--text-secondary))`,
-            background: chipBg,
-            border: `1px solid ${active ? `color-mix(in oklch, ${hue} 45%, transparent)` : 'var(--glass-border)'}`,
-            borderRadius: 'var(--radius-snug)',
-            boxShadow: 'inset 0 1px 0 var(--glass-highlight)',
-            transition: 'background var(--dur-med) var(--ease-out), color var(--dur-med) var(--ease-out)',
+            color: hue,
+            transition: 'color var(--dur-med) var(--ease-out)',
           }}
         >
           {projectInitials(project.name)}
         </span>
         <span
           style={{
-            flex: 1,
-            minWidth: 0,
-            textAlign: 'left',
-            fontSize: 12.5,
+            ...railLabelStyle(open),
             fontWeight: active ? 600 : 500,
             color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            transition: 'color var(--dur-med) var(--ease-out)',
           }}
         >
           {project.name}
@@ -161,8 +188,8 @@ function ProjectRailItem({ project }: { project: Project }) {
               }
               style={{
                 position: 'absolute',
-                top: -5,
-                right: -5,
+                top: 2,
+                right: 2,
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -211,20 +238,47 @@ function ProjectRailItem({ project }: { project: Project }) {
 }
 
 /**
- * The always-visible leftmost project switcher, reimagined as Zen's vertical tab
- * list (skill: img_1 / img_7). A Home row sits at the top, then an Add-project
- * row, then a single column of soft-glass project pills — each a full-width
- * rounded glass row with a hue-tinted acronym chip + the project name, hairline
- * borders, and gentle (motionless) hover. Picking a project reveals its sections
- * in the adjacent column without disturbing the main pane.
+ * The always-visible leftmost project switcher — Zen browser compact mode.
+ * At rest it is a slim icon-only strip (bare hue-tinted initials per project);
+ * hovering (or keyboard-focusing) it floats a full-width glass sheet OVER the
+ * sections column, revealing labels. It collapses back when the pointer
+ * leaves. Rows: Home, Add-project, then one glass tab-pill per project.
+ * Picking a project reveals its sections in the adjacent column without
+ * disturbing the main pane. `alwaysExpanded` (mobile drawer) renders the
+ * static full-width column with no hover behavior.
  */
-export function ProjectRail() {
+export function ProjectRail({ alwaysExpanded = false }: { alwaysExpanded?: boolean }) {
   const projects = useAppStore((s) => s.projects);
   const selectedProcessId = useAppStore((s) => s.selectedProcessId);
   const projectOverviewOpen = useAppStore((s) => s.projectOverviewOpen);
   const setAddProjectModalOpen = useAppStore((s) => s.setAddProjectModalOpen);
   const [homeHover, setHomeHover] = useState(false);
   const [addHover, setAddHover] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  // An open right-click menu portals outside the rail, so pointer-leave must
+  // not collapse the rail underneath it.
+  const [menuPinned, setMenuPinned] = useState(false);
+  const enterTimer = useRef<number | undefined>(undefined);
+  const leaveTimer = useRef<number | undefined>(undefined);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(enterTimer.current);
+      window.clearTimeout(leaveTimer.current);
+    },
+    [],
+  );
+
+  const open = alwaysExpanded || expanded || menuPinned;
+
+  const onEnter = () => {
+    window.clearTimeout(leaveTimer.current);
+    enterTimer.current = window.setTimeout(() => setExpanded(true), EXPAND_DELAY_MS);
+  };
+  const onLeave = () => {
+    window.clearTimeout(enterTimer.current);
+    leaveTimer.current = window.setTimeout(() => setExpanded(false), COLLAPSE_DELAY_MS);
+  };
 
   const onDashboard = !selectedProcessId && !projectOverviewOpen;
 
@@ -236,33 +290,8 @@ export function ProjectRail() {
     store.setSidebarProject(null);
   };
 
-  // Shared chip box for the Home logo + Add glyph so they align with the
-  // project pills' acronym chips.
-  const chipStyle: React.CSSProperties = {
-    flexShrink: 0,
-    width: 26,
-    height: 26,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 'var(--radius-snug)',
-  };
-
-  return (
-    <div
-      style={{
-        width: 184,
-        flexShrink: 0,
-        height: '100%',
-        // Transparent — the pills float on the shell glass + ambient bloom.
-        background: 'transparent',
-        display: 'flex',
-        flexDirection: 'column',
-        padding: '10px 10px 12px',
-        gap: 6,
-        overflow: 'hidden',
-      }}
-    >
+  const body = (
+    <>
       {/* Home — view all projects. A glass pill; brighter when on the wall. */}
       <button
         type="button"
@@ -278,7 +307,7 @@ export function ProjectRail() {
           gap: 8,
           width: '100%',
           height: 40,
-          padding: '0 8px',
+          padding: '0 7px',
           flexShrink: 0,
           borderRadius: 'var(--radius-soft)',
           border: `1px solid ${onDashboard ? 'var(--border-strong)' : 'var(--glass-border)'}`,
@@ -288,35 +317,30 @@ export function ProjectRail() {
               ? 'var(--glass-bg-soft)'
               : 'transparent',
           boxShadow: onDashboard ? 'inset 0 1px 0 var(--glass-highlight)' : 'none',
+          overflow: 'hidden',
           cursor: 'pointer',
           fontFamily: 'inherit',
           transition:
             'background var(--dur-med) var(--ease-out), border-color var(--dur-med) var(--ease-out)',
         }}
       >
-        <span style={{ ...chipStyle }}>
+        <span style={identitySlot}>
           <span style={{ display: 'flex', transform: 'scale(0.62)' }}>
             <LogoArt />
           </span>
         </span>
         <span
           style={{
-            flex: 1,
-            minWidth: 0,
-            textAlign: 'left',
-            fontSize: 12.5,
+            ...railLabelStyle(open),
             fontWeight: onDashboard ? 600 : 500,
             color: onDashboard ? 'var(--text-primary)' : 'var(--text-secondary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
           }}
         >
           All projects
         </span>
       </button>
 
-      {/* Add a project — a quiet ghost-glass row, moved to the top. */}
+      {/* Add a project — a quiet ghost-glass row. */}
       <button
         type="button"
         onClick={() => setAddProjectModalOpen(true)}
@@ -330,35 +354,23 @@ export function ProjectRail() {
           gap: 8,
           width: '100%',
           height: 36,
-          padding: '0 8px',
+          padding: '0 7px',
           flexShrink: 0,
           borderRadius: 'var(--radius-soft)',
           border: `1px dashed ${addHover ? 'var(--border-strong)' : 'var(--glass-border)'}`,
           background: addHover ? 'var(--glass-bg-soft)' : 'transparent',
           color: addHover ? 'var(--text-secondary)' : 'var(--text-muted)',
+          overflow: 'hidden',
           cursor: 'pointer',
           fontFamily: 'inherit',
           transition:
             'background var(--dur-med) var(--ease-out), border-color var(--dur-med) var(--ease-out), color var(--dur-med) var(--ease-out)',
         }}
       >
-        <span style={{ ...chipStyle }}>
+        <span style={identitySlot}>
           <Plus size={15} />
         </span>
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            textAlign: 'left',
-            fontSize: 12.5,
-            fontWeight: 500,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Add project
-        </span>
+        <span style={{ ...railLabelStyle(open), fontWeight: 500 }}>Add project</span>
       </button>
 
       <div
@@ -385,8 +397,82 @@ export function ProjectRail() {
         }}
       >
         {projects.map((project) => (
-          <ProjectRailItem key={project.id} project={project} />
+          <ProjectRailItem
+            key={project.id}
+            project={project}
+            open={open}
+            onMenuOpenChange={setMenuPinned}
+          />
         ))}
+      </div>
+    </>
+  );
+
+  if (alwaysExpanded) {
+    return (
+      <div
+        style={{
+          width: RAIL_EXPANDED,
+          flexShrink: 0,
+          height: '100%',
+          // Transparent — the pills float on the shell glass + ambient bloom.
+          background: 'transparent',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: '10px 8px 12px',
+          gap: 6,
+          overflow: 'hidden',
+        }}
+      >
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    // Fixed-width layout slot; the expanding panel floats out of it, over the
+    // sections column, so the PanelGroup behind never re-lays-out.
+    <div
+      style={{
+        width: RAIL_COLLAPSED,
+        flexShrink: 0,
+        height: '100%',
+        position: 'relative',
+        zIndex: 30,
+      }}
+    >
+      <div
+        onMouseEnter={onEnter}
+        onMouseLeave={onLeave}
+        onFocusCapture={() => {
+          window.clearTimeout(leaveTimer.current);
+          setExpanded(true);
+        }}
+        onBlurCapture={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) onLeave();
+        }}
+        style={{
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: open ? RAIL_EXPANDED : RAIL_COLLAPSED,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          padding: '10px 8px 12px',
+          overflow: 'hidden',
+          // Transparent at rest (floats on shell glass + ambient bloom);
+          // a fully opaque sheet while expanded over the sections column —
+          // nothing bleeds through, so no backdrop blur is needed.
+          background: open ? 'var(--glass-bg-opaque)' : 'transparent',
+          borderRight: `1px solid ${open ? 'var(--glass-border)' : 'transparent'}`,
+          boxShadow: open ? 'var(--shadow-md)' : 'none',
+          transition:
+            'width var(--dur-med) var(--ease-out), background var(--dur-med) var(--ease-out), box-shadow var(--dur-med) var(--ease-out), border-color var(--dur-med) var(--ease-out)',
+        }}
+      >
+        {body}
       </div>
     </div>
   );

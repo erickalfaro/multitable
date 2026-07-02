@@ -222,15 +222,17 @@ export function AttentionStream({ sessionId }: Props) {
                     gap: 8,
                     padding: '6px 10px 6px 0',
                     minHeight: 28,
-                    borderLeft: `3px solid ${stripe}`,
-                    paddingLeft: 10,
+                    // Soft provider tint replaces the old 3px stripe; the
+                    // timestamp below carries the saturated provider anchor.
+                    background: `color-mix(in oklch, ${stripe} 7%, transparent)`,
+                    paddingLeft: 13,
                   }}
                 >
                   <span
                     className="mt-mono-tabular"
                     style={{
                       fontSize: 10,
-                      color: 'var(--text-faint)',
+                      color: `color-mix(in oklch, ${stripe} 60%, var(--text-faint))`,
                       flexShrink: 0,
                     }}
                   >

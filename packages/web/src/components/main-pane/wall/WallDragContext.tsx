@@ -334,7 +334,6 @@ function GhostBody({ sessionId }: { sessionId: string }) {
       style={{
         ['--workspace-from' as string]: color.from,
         ['--workspace-to' as string]: color.to,
-        borderTop: `3px solid ${color.from}`,
       }}
     >
       <AgentBadge provider={session.agentProvider} size="glyph" />

@@ -10,7 +10,7 @@ interface Props {
   projectId: string;
 }
 
-// The file tree now lives in the left sidebar (SidebarFileViewerSection); this
+// The file tree now lives in the left sidebar (SidebarExplorerSection); this
 // component is the center editor host. The currently-open path comes from the
 // store (set by the sidebar tree) so the two surfaces stay in sync; draft /
 // load / save state stays local here.

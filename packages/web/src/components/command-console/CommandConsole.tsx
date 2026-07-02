@@ -4,6 +4,7 @@ import { useAppStore } from '../../stores/appStore';
 import { IconButton } from '../ui';
 import { PendingActionsTab, usePendingCount } from './PendingActionsTab';
 import { AlertsTab } from './AlertsTab';
+import { emphasisFill } from '../../lib/emphasis';
 
 type TabKey = 'pending' | 'alerts';
 
@@ -32,15 +33,20 @@ function TabButton({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 6,
-        padding: '8px 10px',
-        background: 'transparent',
+        height: 26,
+        margin: '5px 4px',
+        padding: '0 10px',
         border: 'none',
-        borderBottom: `2px solid ${active ? 'var(--accent-amber)' : 'transparent'}`,
+        borderRadius: 'var(--radius-pill)',
+        // Active tab = filled glass pill (segmented-control style).
+        ...(active
+          ? emphasisFill('var(--accent-amber)', { fill: 12, ring: 40 })
+          : { background: 'transparent' }),
         color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
         fontSize: 12,
         fontWeight: active ? 600 : 500,
         cursor: 'pointer',
-        transition: 'color 0.12s, border-color 0.12s',
+        transition: 'color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out)',
       }}
     >
       {config.icon}

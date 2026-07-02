@@ -10,7 +10,7 @@ import {
 } from './sound';
 import { showOsNotificationIfHidden } from './browserNotifications';
 import { isCategoryMuted, isSeverityChimeMuted, loadPrefs } from './notificationPrefs';
-import { SEVERITY_BORDER_VAR } from './alertVisuals';
+import { severityEmphasis } from './alertVisuals';
 
 function chimeFor(severity: AlertSeverity): (() => void) | null {
   switch (severity) {
@@ -68,10 +68,16 @@ export function handleSessionAlert(alert: SessionAlert): void {
     const message = body ? `${headline}\n${body}` : headline;
     const opts = {
       duration: alert.ttlMs ?? (alert.severity === 'attention' ? Infinity : undefined),
-      // Severity drives the toast border so the existing red/amber/green
+      // Severity drives the toast tint so the existing red/amber/green
       // urgency vocabulary is preserved. Category visuals (icon, tint) live
       // in NotificationCenter rows where there's room to encode both signals.
-      style: { borderLeft: `3px solid ${SEVERITY_BORDER_VAR[alert.severity]}`, maxWidth: 480 },
+      // The transparent border neutralizes sonner's own default border, which
+      // would otherwise double up against the emphasis ring.
+      style: {
+        ...severityEmphasis(alert.severity),
+        border: '1px solid transparent',
+        maxWidth: 480,
+      },
     };
     if (alert.severity === 'error') toast.error(message, opts);
     else if (alert.severity === 'success') toast.success(message, opts);

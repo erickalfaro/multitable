@@ -3,8 +3,7 @@ import { useAppStore } from '../../stores/appStore';
 import { ProjectHeader } from './ProjectHeader';
 import { SidebarSection } from './SidebarSection';
 import { SidebarItem } from './SidebarItem';
-import { SidebarGitSection } from './SidebarGitSection';
-import { SidebarFileViewerSection } from './SidebarFileViewerSection';
+import { SidebarExplorerSection } from './SidebarExplorerSection';
 import { AddProcessModal } from '../modals/AddProcessModal';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuItem } from '../context-menu/ContextMenu';
@@ -27,8 +26,8 @@ interface Props {
 }
 
 /**
- * The sections for a SINGLE project (AGENTS / TERMINALS / COMMANDS / SOURCE
- * CONTROL / FILE VIEWER). Extracted from the old `ProjectSidebarItem` — the
+ * The sections for a SINGLE project (AGENTS / TERMINALS / COMMANDS, plus the
+ * detached EXPLORER card). Extracted from the old `ProjectSidebarItem` — the
  * always-visible `ProjectRail` now picks the one active project, so the
  * accordion (`expandedProjectIds`) and per-project header chevron are gone;
  * the 5 sections always render and the header is a slim title bar.
@@ -322,16 +321,16 @@ export function ProjectSections({ project }: Props) {
         margin: '10px 0 2px',
       }}
     >
-      {/* Project card body — structural group container; stays at radius-none so the
-          top accent rule runs edge-to-edge. */}
+      {/* Project card body — a soft hue-tinted glass card that carries the
+          project's identity (replaces the old edge-to-edge top accent rule). */}
       <div
         style={{
           position: 'relative',
-          borderRadius: 'var(--radius-none)',
+          borderRadius: 'var(--radius-soft)',
           overflow: 'hidden',
-          backgroundColor: 'transparent',
-          borderTop: `1px solid ${color.stripe}`,
-          transition: 'border-color var(--dur-med) var(--ease-out)',
+          backgroundColor: `color-mix(in oklch, ${color.stripe} 5%, transparent)`,
+          border: `1px solid color-mix(in oklch, ${color.stripe} 30%, var(--glass-border))`,
+          transition: 'border-color var(--dur-med) var(--ease-out), background-color var(--dur-med) var(--ease-out)',
         }}
       >
       <ProjectHeader
@@ -351,6 +350,8 @@ export function ProjectSections({ project }: Props) {
 
       <SidebarSection
         title="AGENTS"
+        // ~10 most-recent rows visible; older sessions reached by scrolling.
+        scrollMaxHeight={440}
         onAdd={() => {
           store.setFocusedProject(project.id);
           store.setAddAgentModalOpen(true);
@@ -377,7 +378,7 @@ export function ProjectSections({ project }: Props) {
         )}
       </SidebarSection>
 
-      <SidebarSection title="TERMINALS" onAdd={handleAddTerminal}>
+      <SidebarSection title="TERMINALS" scrollMaxHeight={340} onAdd={handleAddTerminal}>
         {projectTerminals.length > 0 ? (
           projectTerminals.map((term) => (
             <SidebarItem
@@ -399,7 +400,7 @@ export function ProjectSections({ project }: Props) {
         )}
       </SidebarSection>
 
-      <SidebarSection title="COMMANDS" onAdd={() => setShowAddCommand(true)}>
+      <SidebarSection title="COMMANDS" scrollMaxHeight={340} onAdd={() => setShowAddCommand(true)}>
         {projectCommands.length > 0 ? (
           projectCommands.map((cmd) => (
             <SidebarItem
@@ -421,8 +422,22 @@ export function ProjectSections({ project }: Props) {
         )}
       </SidebarSection>
 
-      <SidebarGitSection projectId={project.id} />
-      <SidebarFileViewerSection projectId={project.id} />
+      </div>
+
+      {/* Workspace EXPLORER — branch row + git-decorated file tree, OUTSIDE
+          the hue-tinted project card in its own neutral glass card, so it
+          reads as a different class of surface than the process sections. */}
+      <div
+        style={{
+          marginTop: 10,
+          borderRadius: 'var(--radius-soft)',
+          overflow: 'hidden',
+          backgroundColor: 'var(--glass-bg-soft)',
+          border: '1px solid var(--glass-border)',
+          paddingBottom: 6,
+        }}
+      >
+        <SidebarExplorerSection projectId={project.id} />
       </div>
 
       {showAddCommand && (

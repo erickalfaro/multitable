@@ -3,6 +3,8 @@ import { ChevronRight, Folder, FileText, Loader2 } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useLongPress } from '../../../lib/useLongPress';
 import { ContextMenu } from '../../context-menu/ContextMenu';
+import { emphasisFill } from '../../../lib/emphasis';
+import type { GitFileStatus } from '../../../lib/types';
 
 interface Entry {
   name: string;
@@ -29,10 +31,26 @@ interface Props {
   // 'panel' = legacy fixed-width bordered column (center File Viewer host);
   // 'sidebar' = full-width, transparent, no own scroll (host scrolls).
   variant?: 'panel' | 'sidebar';
+  // Optional git decorations: project-relative path -> status. Changed files'
+  // names tint by status (VS Code-style); directories are never decorated.
+  gitStatusByPath?: ReadonlyMap<string, GitFileStatus>;
 }
 
 const ROOT = '';
 const PAGE_SIZE = 50;
+
+// Filename tints per git status. `deleted` is intentionally absent — a
+// deleted file no longer appears in the tree. NOTE: --accent-amber is a
+// lavender alias in the current theme; the true status hues live in the
+// --status-* family (kept consistent with GitChangeRow's icons).
+const GIT_TINT: Partial<Record<GitFileStatus, string>> = {
+  modified: 'var(--status-warning)',
+  renamed: 'var(--status-warning)',
+  copied: 'var(--status-warning)',
+  added: 'var(--status-running)',
+  untracked: 'var(--status-running)',
+  conflicted: 'var(--status-error)',
+};
 
 interface DirMeta {
   total: number;
@@ -48,6 +66,7 @@ export function FileTree({
   fileActions,
   onUploadHere,
   variant = 'panel',
+  gitStatusByPath,
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [childrenByDir, setChildrenByDir] = useState<Record<string, Entry[]>>({});
@@ -205,6 +224,8 @@ export function FileTree({
         );
       }
       const isSelected = entry.path === selectedPath;
+      const gitStatus = gitStatusByPath?.get(entry.path);
+      const tint = gitStatus ? GIT_TINT[gitStatus] : undefined;
       return (
         <Row
           key={entry.path}
@@ -214,7 +235,9 @@ export function FileTree({
         >
           <span style={{ width: 11, flexShrink: 0 }} />
           <FileText size={12} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
-          <Name selected={isSelected}>{entry.name}</Name>
+          <Name selected={isSelected} tint={tint}>
+            {entry.name}
+          </Name>
           {fileActions && (
             <div
               style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}
@@ -356,12 +379,13 @@ function Row({
         alignItems: 'center',
         gap: 5,
         padding: '3px 8px',
-        paddingLeft: 8 + depth * 14,
+        paddingLeft: 11 + depth * 14,
         cursor: 'pointer',
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        backgroundColor: selected ? 'var(--bg-elevated)' : 'transparent',
-        borderLeft: selected ? '3px solid var(--accent-amber)' : '3px solid transparent',
+        ...(selected
+          ? emphasisFill('var(--accent-amber)', { fill: 10, ring: 35, on: 'var(--bg-elevated)' })
+          : { backgroundColor: 'transparent' }),
         // Suppress iOS long-press text-selection callout — folder rows have
         // userSelect:none above but the callout is governed by a separate prop.
         WebkitTouchCallout: 'none',
@@ -437,14 +461,24 @@ function FolderRow({
   );
 }
 
-function Name({ selected, children }: { selected?: boolean; children: React.ReactNode }) {
+function Name({
+  selected,
+  tint,
+  children,
+}: {
+  selected?: boolean;
+  tint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <span
       style={{
         flex: 1,
         minWidth: 0,
         fontSize: 12.5,
-        color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
+        // A git tint wins even when selected (VS Code behavior) — selection
+        // still reads via the row fill and weight.
+        color: tint ?? (selected ? 'var(--text-primary)' : 'var(--text-secondary)'),
         fontWeight: selected ? 600 : 400,
         overflow: 'hidden',
         textOverflow: 'ellipsis',

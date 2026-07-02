@@ -7,6 +7,7 @@ import { useAppStore } from '../../../stores/appStore';
 import { BUILTIN_THEMES } from '../../../lib/themes';
 import { buildCmTheme } from '../../../lib/cm-theme';
 import { MD_COMPONENTS } from '../../../lib/markdown';
+import { emphasisFill } from '../../../lib/emphasis';
 
 import { EditorState, Compartment, Prec, type Extension } from '@codemirror/state';
 import {
@@ -384,12 +385,15 @@ function TabButton({
         letterSpacing: '0.14em',
         fontWeight: 500,
         border: 'none',
-        background: 'transparent',
+        borderRadius: 'var(--radius-pill)',
+        // Active tab = filled glass pill (segmented-control style).
+        ...(active
+          ? emphasisFill('var(--accent-amber)', { fill: 12, ring: 40 })
+          : { background: hover ? 'var(--bg-hover)' : 'transparent' }),
         color: active ? 'var(--text-primary)' : hover ? 'var(--text-secondary)' : 'var(--text-muted)',
-        borderBottom: `2px solid ${active ? 'var(--accent-amber)' : 'transparent'}`,
         cursor: 'pointer',
         transition:
-          'color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
+          'color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out)',
       }}
     >
       {children}

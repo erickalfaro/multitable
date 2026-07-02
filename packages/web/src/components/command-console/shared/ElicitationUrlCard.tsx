@@ -4,7 +4,7 @@ import { useAppStore } from '../../../stores/appStore';
 import { wsClient } from '../../../lib/ws';
 import type { ElicitationPrompt } from '../../../lib/types';
 import { Button } from '../../ui';
-import { SEVERITY_BORDER_VAR, categoryIcon, CATEGORY_COLOR_VAR } from '../../../lib/alertVisuals';
+import { severityEmphasis, categoryIcon, CATEGORY_COLOR_VAR } from '../../../lib/alertVisuals';
 
 /**
  * Inline URL-mode elicitation row for the Command Console. The full-screen
@@ -45,9 +45,8 @@ export function ElicitationUrlCard({
     <div
       style={{
         position: 'relative',
-        backgroundColor: 'var(--bg-elevated)',
-        borderLeft: `3px solid ${SEVERITY_BORDER_VAR.attention}`,
-        padding: compact ? '10px 10px 8px' : '12px 12px 10px',
+        ...severityEmphasis('attention'),
+        padding: compact ? '10px 10px 8px 13px' : '12px 12px 10px 15px',
         marginBottom: compact ? 6 : 8,
       }}
     >

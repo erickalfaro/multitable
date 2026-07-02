@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { FilePlus, FileMinus, FileEdit, FileWarning } from 'lucide-react';
 import type { GitFileEntry, GitFileStatus } from '../../../lib/types';
+import { emphasisFill } from '../../../lib/emphasis';
 
 interface Props {
   file: GitFileEntry;
@@ -21,13 +22,15 @@ export function GitChangeRow({ file, isSelected, onClick, actions }: Props) {
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        padding: '4px 12px',
+        padding: '4px 12px 4px 14px',
         fontSize: 12,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         color: 'var(--text-primary)',
         cursor: 'pointer',
-        backgroundColor: isSelected ? 'var(--bg-hover)' : hover ? 'var(--bg-sidebar)' : 'transparent',
-        borderLeft: isSelected ? '2px solid var(--accent-blue)' : '2px solid transparent',
+        borderRadius: 'var(--radius-snug)',
+        ...(isSelected
+          ? emphasisFill('var(--accent-blue)', { fill: 10, ring: 30, on: 'var(--bg-elevated)' })
+          : { backgroundColor: hover ? 'var(--bg-sidebar)' : 'transparent' }),
         minHeight: 24,
       }}
     >

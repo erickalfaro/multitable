@@ -392,8 +392,9 @@ export function CommandPalette() {
             margin-bottom: 4px;
           }
           [cmdk-item][data-selected="true"] {
-            background-color: var(--bg-hover);
-            box-shadow: inset 3px 0 0 var(--accent-amber);
+            background-color: color-mix(in oklch, var(--accent-amber) 10%, var(--bg-hover));
+            box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent-amber) 35%, transparent);
+            border-radius: var(--radius-snug);
             color: var(--text-primary);
           }
         `}</style>

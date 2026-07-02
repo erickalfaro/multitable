@@ -175,7 +175,6 @@ function SessionTileImpl({ sessionId, session, locked, onDragStart, onResizeStar
             gap: 'var(--space-2)',
             padding: headerPad,
             borderBottom: `1px solid color-mix(in oklch, ${projectColor.from} 30%, var(--border))`,
-            borderLeft: `3px solid ${projectColor.from}`,
             background: `linear-gradient(90deg, color-mix(in oklch, ${projectColor.from} 16%, var(--bg-elevated)), color-mix(in oklch, ${projectColor.to} 8%, var(--bg-elevated)))`,
             flexShrink: 0,
             minHeight: headerH,
