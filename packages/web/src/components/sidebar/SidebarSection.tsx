@@ -1,38 +1,44 @@
-import React, { useRef, useState } from 'react';
-import { ChevronRight, Plus } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Plus } from 'lucide-react';
 import { IconButton } from '../ui';
 import { useLongPress } from '../../lib/useLongPress';
 
 interface Props {
   title: string;
   shortcut?: string;
+  // Optional glyph rendered before the title (utility sections — the
+  // Explorer — use this to read as a different class of section).
+  icon?: React.ReactNode;
+  // When set, the section body becomes a fixed-max-height scroll window (used
+  // to cap process lists at ~10 visible rows; older items scroll).
+  scrollMaxHeight?: number;
   onAdd?: () => void;
   // Called when the header is right-clicked (desktop) or long-pressed (mobile,
   // 500ms hold). The coords are in client space — pass them straight to a
-  // <ContextMenu position={...}>. On long-press we suppress the synthetic
-  // touch-end click so the section doesn't also collapse.
+  // <ContextMenu position={...}>.
   onHeaderRequestMenu?: (x: number, y: number) => void;
   children: React.ReactNode;
 }
 
+/**
+ * A fixed (non-collapsible) sidebar section: slim uppercase header + body.
+ * Sections used to collapse on header click; that was removed deliberately —
+ * the header is now only a label + optional add-button / context-menu target.
+ */
 export function SidebarSection({
   title,
   shortcut,
+  icon,
+  scrollMaxHeight,
   onAdd,
   onHeaderRequestMenu,
   children,
 }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
-
   // Long-press support for mobile. useLongPress's callback gets no event, so
   // stash the touch coords in a ref and read them when the timer fires.
-  // `longPressFired` tells the click handler to swallow the synthetic click
-  // that would otherwise collapse the section right after the menu opens.
   const lastTouch = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const longPressFired = useRef(false);
   const longPress = useLongPress(() => {
     if (onHeaderRequestMenu) {
-      longPressFired.current = true;
       onHeaderRequestMenu(lastTouch.current.x, lastTouch.current.y);
     }
   });
@@ -44,18 +50,10 @@ export function SidebarSection({
           display: 'flex',
           alignItems: 'center',
           padding: '4px 10px 4px 12px',
-          cursor: 'pointer',
           userSelect: 'none',
           WebkitUserSelect: 'none',
           WebkitTouchCallout: 'none',
           gap: 6,
-        }}
-        onClick={() => {
-          if (longPressFired.current) {
-            longPressFired.current = false;
-            return;
-          }
-          setCollapsed(!collapsed);
         }}
         onContextMenu={
           onHeaderRequestMenu
@@ -78,15 +76,19 @@ export function SidebarSection({
         onTouchEnd={onHeaderRequestMenu ? longPress.onTouchEnd : undefined}
         onTouchCancel={onHeaderRequestMenu ? longPress.onTouchCancel : undefined}
       >
-        <ChevronRight
-          size={11}
-          style={{
-            color: 'var(--text-faint)',
-            flexShrink: 0,
-            transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
-            transition: 'transform var(--dur-fast) var(--ease-out)',
-          }}
-        />
+        {icon && (
+          <span
+            aria-hidden
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              color: 'var(--text-faint)',
+              flexShrink: 0,
+            }}
+          >
+            {icon}
+          </span>
+        )}
         <span
           style={{
             fontSize: 9.5,
@@ -119,13 +121,14 @@ export function SidebarSection({
         )}
       </div>
       <div
-        style={{
-          maxHeight: collapsed ? 0 : undefined,
-          overflow: 'hidden',
-          transition: 'max-height var(--dur-med) var(--ease-out)',
-        }}
+        className={scrollMaxHeight ? 'mt-scroll' : undefined}
+        style={
+          scrollMaxHeight
+            ? { maxHeight: scrollMaxHeight, overflowY: 'auto', overflowX: 'hidden' }
+            : undefined
+        }
       >
-        {!collapsed && children}
+        {children}
       </div>
     </div>
   );

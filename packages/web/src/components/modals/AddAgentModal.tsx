@@ -16,6 +16,7 @@ import type {
 } from '../../lib/types';
 import { modeOptionTone, modeToneColor } from '../../lib/modeTone';
 import { cleanModelLabel } from '../../lib/modelName';
+import { emphasisFill } from '../../lib/emphasis';
 
 // Modal body geometry. The body is given a fixed total height so the dialog
 // frame never resizes after opening — every internal state transition (model
@@ -928,7 +929,13 @@ function PastSessionsMerged({
                   cursor: 'pointer',
                   color: 'var(--text-primary)',
                   borderBottom: isLast ? 'none' : '1px solid var(--border)',
-                  backgroundColor: isSelected ? 'var(--bg-elevated)' : 'transparent',
+                  ...(isSelected
+                    ? emphasisFill('var(--accent-amber)', {
+                        fill: 8,
+                        ring: 30,
+                        on: 'var(--bg-elevated)',
+                      })
+                    : { backgroundColor: 'transparent' }),
                   transition: 'background-color var(--dur-fast) var(--ease-out)',
                 }}
                 onMouseEnter={(e) => {
@@ -940,18 +947,6 @@ function PastSessionsMerged({
                   (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
                 }}
               >
-                <span
-                  aria-hidden
-                  style={{
-                    position: 'absolute',
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: 3,
-                    backgroundColor: isSelected ? 'var(--accent-amber)' : 'transparent',
-                    transition: 'background-color var(--dur-fast) var(--ease-out)',
-                  }}
-                />
                 <div
                   style={{
                     fontSize: 12.5,

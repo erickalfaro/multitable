@@ -20,8 +20,10 @@ export function ProjectSectionsColumn() {
       style={{
         width: '100%',
         height: '100%',
-        backgroundColor: 'var(--bg-sidebar)',
-        borderRight: '1px solid var(--border)',
+        // Transparent — the sidebar list floats directly on the shell glass so
+        // the ambient bloom reads behind it (one blur layer: the shell). The
+        // resize handle provides the seam to the main pane.
+        backgroundColor: 'transparent',
         display: 'flex',
         flexDirection: 'column',
         overflowY: 'auto',
@@ -35,6 +37,7 @@ export function ProjectSectionsColumn() {
         </div>
       ) : (
         <div
+          className="mt-display"
           style={{
             flex: 1,
             display: 'flex',
@@ -42,13 +45,10 @@ export function ProjectSectionsColumn() {
             justifyContent: 'center',
             padding: 16,
             textAlign: 'center',
-            color: 'var(--text-faint)',
-            fontSize: 11.5,
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
+            fontSize: 19,
           }}
         >
-          Select a project
+          select a <em>project</em>
         </div>
       )}
     </div>

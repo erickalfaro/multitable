@@ -15,12 +15,26 @@ import type {
   AgentProvider,
   DiscoveredModel,
   UsageLimitSnapshot,
+  WallLayout,
 } from '../lib/types';
+import {
+  WALL_COLS,
+  autoPack,
+  makeRegionId,
+  migrateWallLayout,
+  normalizeWallLayout,
+  moveTileToRegion,
+  splitWithTile,
+  addEmptyRegion,
+  mergeAtBoundary,
+  resizeTile,
+} from '../components/main-pane/wall/grid';
 import { api } from '../lib/api';
 import type { Theme, ThemeColors } from '../lib/themes';
 import {
   BUILTIN_THEMES,
   BUILTIN_DARK,
+  DEFAULT_THEME_ID,
   loadCustomThemesFromStorage,
   loadActiveThemeIdFromStorage,
   saveCustomThemesToStorage,
@@ -29,6 +43,24 @@ import {
 import { loadSnapshot, saveSnapshot } from '../lib/persistedStore';
 import { dominantAlertForSessions } from '../lib/alertVisuals';
 import type { AlertCategory } from '../lib/types';
+
+// Wall layout persistence — write localStorage synchronously (keeps cold-load
+// correct and instant) but debounce the server PATCH, since drag/resize commit
+// continuously. The triple-write of the old design is funnelled through here.
+let _wallPatchTimer: ReturnType<typeof setTimeout> | null = null;
+function persistWallLayout(tree: WallLayout) {
+  try {
+    localStorage.setItem('mt:wallLayout', JSON.stringify(tree));
+  } catch {
+    /* ignore */
+  }
+  if (_wallPatchTimer) clearTimeout(_wallPatchTimer);
+  _wallPatchTimer = setTimeout(() => {
+    void import('../lib/api').then(({ api }) =>
+      api.config.patch({ ui: { wallLayout: tree } }).catch(() => {}),
+    );
+  }, 400);
+}
 
 interface AppState {
   // Projects
@@ -98,6 +130,13 @@ interface AppState {
   // whenever a plain (un-modified) click sets a new primary selection.
   multiSelectedSessionIds: string[];
   sidebarCollapsed: boolean;
+  // Zen Pinned Session Wall (plan §5.3) — ordered list of session ids the
+  // user has pinned to the homepage. Mirrored to localStorage for instant
+  // cold-load and to `GlobalConfig.pinnedSessionIds` for cross-browser sync.
+  pinnedSessionIds: string[];
+  // Which Wall tile owns keyboard input. Click a tile to focus; only the
+  // focused tile's composer routes the user's typing.
+  focusedPaneId: string | null;
   customThemes: Theme[];
   activeThemeId: string;
   commandPaletteOpen: boolean;
@@ -127,6 +166,28 @@ interface AppState {
   toggleMultiSelectedSession: (id: string) => void;
   clearMultiSelectedSessions: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  togglePinSession: (id: string) => void;
+  reorderPinnedSessions: (ids: string[]) => void;
+  setFocusedPane: (id: string | null) => void;
+  // Region-aware wall layout (v2) — single source of truth; DOM = f(state).
+  wallLayout: WallLayout;
+  wallLayoutLocked: boolean;
+  setWallLayout: (next: WallLayout) => void;
+  // Drag a tile into an existing region at a snapped (x,y), or onto a divider
+  // to spin off a new region at that boundary.
+  moveTileTo: (
+    sessionId: string,
+    target:
+      | { kind: 'region'; regionId: string; x: number; y: number }
+      | { kind: 'divider'; boundaryIndex: number },
+  ) => void;
+  resizeWallTile: (sessionId: string, w: number, h: number) => void;
+  addWallRegion: (boundaryIndex: number) => void;
+  // Delete the divider above region `belowIndex`, rolling its chats up.
+  deleteWallRegion: (belowIndex: number) => void;
+  pruneWallLayout: (liveIds: string[]) => void;
+  resetWallLayout: () => void;
+  setWallLayoutLocked: (locked: boolean) => void;
   setActiveTheme: (id: string) => void;
   addCustomTheme: (theme: Theme) => void;
   updateCustomTheme: (id: string, patch: { name?: string; colors?: Partial<ThemeColors>; isDark?: boolean }) => void;
@@ -587,13 +648,46 @@ export const useAppStore = create<AppState>((set, get) => ({
   fileViewerRefreshKey: {},
   multiSelectedSessionIds: [],
   sidebarCollapsed: false,
+  pinnedSessionIds: (() => {
+    // Read localStorage synchronously so the Wall paints on first frame
+    // without a hydration flash. The daemon GET /api/config will reconcile
+    // shortly after if any other browser updated the list out-of-band.
+    try {
+      const raw = localStorage.getItem('mt:pinnedSessionIds');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  })(),
+  focusedPaneId: null,
+  // Wall layout cold-loads from localStorage so the grid paints in the correct
+  // positions on first frame. We only migrate here (legacy v1 → v2); the live
+  // normalize/ghost-prune against loaded sessions happens in SessionWall once
+  // the sessions map is populated (avoids dropping not-yet-loaded sessions).
+  wallLayout: (() => {
+    try {
+      const raw = localStorage.getItem('mt:wallLayout');
+      return migrateWallLayout(raw ? JSON.parse(raw) : null);
+    } catch {
+      return { version: 2, regions: [] };
+    }
+  })(),
+  wallLayoutLocked: (() => {
+    try {
+      return localStorage.getItem('mt:wallLayoutLocked') === '1';
+    } catch {
+      return false;
+    }
+  })(),
   customThemes: loadCustomThemesFromStorage(),
   activeThemeId: (() => {
     const stored = loadActiveThemeIdFromStorage();
     const customs = loadCustomThemesFromStorage();
     const all = [...BUILTIN_THEMES, ...customs];
     if (stored && all.some((t) => t.id === stored)) return stored;
-    return BUILTIN_DARK.id;
+    return DEFAULT_THEME_ID;
   })(),
   commandPaletteOpen: false,
   addAgentModalOpen: false,
@@ -601,7 +695,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   addProjectModalOpen: false,
   globalSettingsOpen: false,
   projectSettingsOpen: false,
-  detailPanelOpen: true,
+  // Drawer is closed by default in the Zen layout (was always-open column);
+  // user opens it via Cmd+. or SessionHeaderBar's chevron when they want
+  // session context (activity / cost / notes / info).
+  detailPanelOpen: false,
   detailPanelTab: 'activity',
   // Start optimistic. The fullscreen "Cannot connect to daemon" overlay is
   // intrusive — only show it after a real connect attempt has failed, never
@@ -691,6 +788,121 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   clearMultiSelectedSessions: () => set({ multiSelectedSessionIds: [] }),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+  togglePinSession: (id) =>
+    set((s) => {
+      const next = s.pinnedSessionIds.includes(id)
+        ? s.pinnedSessionIds.filter((x) => x !== id)
+        : [...s.pinnedSessionIds, id];
+      try {
+        localStorage.setItem('mt:pinnedSessionIds', JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      // Fire-and-forget server sync — we don't await the PATCH because the
+      // local mutation is already canonical from the user's POV; any error
+      // surfaces in DevLog but doesn't block the UI.
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ pinnedSessionIds: next }).catch(() => {}),
+      );
+      return { pinnedSessionIds: next };
+    }),
+  reorderPinnedSessions: (ids) =>
+    set(() => {
+      try {
+        localStorage.setItem('mt:pinnedSessionIds', JSON.stringify(ids));
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ pinnedSessionIds: ids }).catch(() => {}),
+      );
+      return { pinnedSessionIds: ids };
+    }),
+  setFocusedPane: (id) => set({ focusedPaneId: id }),
+  setWallLayout: (next) =>
+    set((s) => {
+      const norm = normalizeWallLayout(next, s.pinnedSessionIds, null);
+      persistWallLayout(norm);
+      return { wallLayout: norm };
+    }),
+  moveTileTo: (sessionId, target) =>
+    set((s) => {
+      const moved =
+        target.kind === 'divider'
+          ? splitWithTile(s.wallLayout, target.boundaryIndex, sessionId)
+          : moveTileToRegion(s.wallLayout, sessionId, target.regionId, target.x, target.y);
+      const norm = normalizeWallLayout(moved, s.pinnedSessionIds, null);
+      persistWallLayout(norm);
+      return { wallLayout: norm };
+    }),
+  resizeWallTile: (sessionId, w, h) =>
+    set((s) => {
+      const region = s.wallLayout.regions.find((r) =>
+        r.tiles.some((t) => t.sessionId === sessionId),
+      );
+      if (!region) return {};
+      const tiles = resizeTile(region.tiles, sessionId, w, h, region.cols);
+      const next: WallLayout = {
+        version: 2,
+        regions: s.wallLayout.regions.map((r) => (r.id === region.id ? { ...r, tiles } : r)),
+      };
+      persistWallLayout(next);
+      return { wallLayout: next };
+    }),
+  addWallRegion: (boundaryIndex) =>
+    set((s) => {
+      const next = addEmptyRegion(s.wallLayout, boundaryIndex);
+      persistWallLayout(next);
+      return { wallLayout: next };
+    }),
+  deleteWallRegion: (belowIndex) =>
+    set((s) => {
+      const next = mergeAtBoundary(s.wallLayout, belowIndex);
+      persistWallLayout(next);
+      return { wallLayout: next };
+    }),
+  pruneWallLayout: (liveIds) =>
+    set((s) => {
+      const live = new Set(liveIds);
+      const norm = normalizeWallLayout(s.wallLayout, s.pinnedSessionIds, live);
+      const cleanedPins = s.pinnedSessionIds.filter((id) => live.has(id));
+      if (cleanedPins.length !== s.pinnedSessionIds.length) {
+        try {
+          localStorage.setItem('mt:pinnedSessionIds', JSON.stringify(cleanedPins));
+        } catch {
+          /* ignore */
+        }
+        void import('../lib/api').then(({ api }) =>
+          api.config.patch({ pinnedSessionIds: cleanedPins }).catch(() => {}),
+        );
+      }
+      persistWallLayout(norm);
+      return { wallLayout: norm, pinnedSessionIds: cleanedPins };
+    }),
+  resetWallLayout: () =>
+    set((s) => {
+      const ids = s.pinnedSessionIds.filter((id) => s.sessions[id]);
+      const next: WallLayout = {
+        version: 2,
+        regions: ids.length
+          ? [{ id: makeRegionId(), cols: WALL_COLS, tiles: autoPack(ids) }]
+          : [],
+      };
+      persistWallLayout(next);
+      return { wallLayout: next };
+    }),
+  setWallLayoutLocked: (locked) =>
+    set(() => {
+      try {
+        localStorage.setItem('mt:wallLayoutLocked', locked ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      void import('../lib/api').then(({ api }) =>
+        api.config.patch({ ui: { wallLayoutLocked: locked } }).catch(() => {}),
+      );
+      return { wallLayoutLocked: locked };
+    }),
   setActiveTheme: (id) =>
     set(() => {
       saveActiveThemeIdToStorage(id);

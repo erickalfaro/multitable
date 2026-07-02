@@ -114,7 +114,13 @@ export class CodexAppServerClient {
     this.transport = transport;
 
     transport.on('exit', () => this.onTransportExit());
-    transport.on('error', (err) => console.error('[codex] transport error', err));
+    transport.on('error', (err) =>
+      // Missing binary (codex not installed / not on PATH) is expected for an
+      // optional provider — one concise line, no stack spam.
+      (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+        ? console.warn('[codex] codex CLI not found on PATH (app-server unavailable)')
+        : console.error('[codex] transport error', err),
+    );
     transport.on('notification', (n) => this.dispatchNotification(n));
 
     this.registerAutoDenyHandlers(transport);

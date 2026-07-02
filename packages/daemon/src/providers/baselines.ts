@@ -50,6 +50,25 @@ export const CLAUDE_BASELINE: BaselineModel[] = [
   },
 ];
 
+// Claude models the SDK's `initializationResult()` does NOT return in its
+// model list even when the account can use them — Fable is gated behind
+// consent/credits flags (`fableCreditsRequired` / `fableConsentSessionFailed`
+// in the SDK), so it's filtered out of discovery but works when passed as an
+// explicit `model:`. discoverClaude appends any of these the SDK didn't
+// already surface (deduped by id), so they're pickable in the UI. When the
+// SDK starts listing one natively, the dedup drops the supplemental copy.
+// supportsEffort is left false — no authoritative effort metadata for these
+// until the SDK includes them, and the provider rejects a bad level with a
+// clear turn-error anyway.
+export const CLAUDE_SUPPLEMENTAL: BaselineModel[] = [
+  {
+    id: 'claude-fable-5',
+    displayName: 'Fable 5',
+    description: 'Claude Fable 5.',
+    supportsEffort: false,
+  },
+];
+
 export const CODEX_BASELINE: BaselineModel[] = [];
 
 // Hermes (Grok) baseline. Hermes does not currently expose a `list models`

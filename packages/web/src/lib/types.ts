@@ -332,6 +332,55 @@ export interface GlobalConfig {
   notifications: boolean;
   port: number;
   host: string;
+  // Zen Pinned Session Wall (plan §5.4) — server-persisted ids of sessions
+  // pinned to the homepage Wall. Mirrors localStorage `mt:pinnedSessionIds`.
+  pinnedSessionIds?: string[];
+  ui?: {
+    themeId?: string;
+    chromeAutoHide?: boolean;
+    wallDensity?: 'cozy' | 'compact';
+    // Region-aware wall layout (v2). Stored opaquely by the daemon.
+    wallLayout?: WallLayout;
+    wallLayoutLocked?: boolean;
+  };
+}
+
+// ── Wall layout ────────────────────────────────────────────────────────────
+// The wall is a vertical stack of REGIONS; each region is its own free-float
+// grid coordinate space (cols-wide, rows tall). The store holds this tree as
+// the single source of truth — the DOM is a pure function of it (no second
+// layout engine). See components/main-pane/wall/grid.ts for the pure ops.
+
+export interface WallTile {
+  sessionId: string;
+  x: number; // column (0 .. cols-1)
+  y: number; // row (cell units)
+  w: number; // width in columns
+  h: number; // height in rows
+}
+
+export interface WallRegion {
+  id: string;
+  cols: number; // grid columns for this region (default 12)
+  tiles: WallTile[];
+}
+
+export interface WallLayout {
+  version: 2;
+  regions: WallRegion[]; // ordered top → bottom
+}
+
+// Legacy v1 layout item (gridstack/RGL). Retained only so migrateWallLayout
+// can read pre-v2 persisted state and fold it into a single region.
+export interface WallLayoutItem {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  static?: boolean;
+  minW?: number;
+  minH?: number;
 }
 
 export interface TelegramIntegrationView {

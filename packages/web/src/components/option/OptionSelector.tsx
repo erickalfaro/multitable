@@ -63,10 +63,10 @@ export function OptionSelector() {
 
   return (
     <div
+      className="mt-glass-strong"
       style={{
         padding: '10px 14px',
-        borderTop: '1px solid var(--border)',
-        backgroundColor: 'var(--bg-statusbar)',
+        borderTop: '1px solid var(--glass-border)',
         animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
       }}
     >

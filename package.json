@@ -39,8 +39,5 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "prettier": "^3.2.0",
     "typescript": "^5.4.0"
-  },
-  "optionalDependencies": {
-    "@esbuild/linux-x64": "^0.28.0"
   }
 }

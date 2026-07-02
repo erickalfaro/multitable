@@ -562,10 +562,12 @@ interface DotMatrixBaseProps extends DotMatrixCommonProps {
 }
 
 export function DotMatrixBase({
-  size = 24,
-  dotSize = 3,
+  // Zen defaults (plan §5.6) — smaller, slower, calmer. Callers that pass
+  // their own size/speed override these as before.
+  size = 16,
+  dotSize = 2.5,
   color = "currentColor",
-  speed = 1,
+  speed = 0.65,
   ariaLabel = "Loading",
   className,
   pattern = "diamond",

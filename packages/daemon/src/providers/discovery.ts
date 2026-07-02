@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { BaselineModel } from './baselines.js';
+import { CLAUDE_SUPPLEMENTAL } from './baselines.js';
 import { resolveCursorCli } from '../agent/providers/cursor-cli/index.js';
 
 // Discovery functions for each provider. Each returns the live model catalog
@@ -382,6 +383,20 @@ export async function discoverClaude(
         ...(supportsEffort ? { effortLevels } : {}),
       };
     });
+    // Append supplemental models (e.g. Fable) the SDK doesn't list but the
+    // account can still use. Dedup by id so a future SDK that surfaces one
+    // natively wins over the supplemental stub. See CLAUDE_SUPPLEMENTAL.
+    const present = new Set(models.map((m) => m.id));
+    for (const extra of CLAUDE_SUPPLEMENTAL) {
+      if (present.has(extra.id)) continue;
+      models.push({
+        id: extra.id,
+        displayName: extra.displayName,
+        description: extra.description,
+        supportsEffort: extra.supportsEffort ?? false,
+        ...(extra.effortLevels ? { effortLevels: extra.effortLevels } : {}),
+      });
+    }
     return models;
   } catch (err) {
     ctrl.abort();

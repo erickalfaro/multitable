@@ -14,11 +14,11 @@ function getDaemonConfig(): { port: number; host: string } {
     const portMatch = content.match(/port:\s*(\d+)/);
     const hostMatch = content.match(/host:\s*(.+)/);
     return {
-      port: portMatch ? parseInt(portMatch[1]) : 3000,
+      port: portMatch ? parseInt(portMatch[1]) : 3117,
       host: hostMatch ? hostMatch[1].trim() : 'localhost',
     };
   }
-  return { port: 3000, host: 'localhost' };
+  return { port: 3117, host: 'localhost' };
 }
 
 program
@@ -31,7 +31,7 @@ program
 program
   .command('start')
   .description('Start the MultiTable daemon')
-  .option('--port <port>', 'Port to listen on', '3000')
+  .option('--port <port>', 'Port to listen on', '3117')
   .option('--host <host>', 'Host to bind to', '127.0.0.1')
   .action((options) => {
     console.log(`Starting MultiTable daemon on ${options.host}:${options.port}...`);

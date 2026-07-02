@@ -46,7 +46,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
           background: hover && !disabled ? 'var(--bg-hover)' : variant === 'subtle' ? 'var(--bg-elevated)' : 'transparent',
           border: `1px solid ${hover && !disabled ? hoverBorder : baseBorder}`,
           color: hover && !disabled ? hoverColor : baseColor,
-          borderRadius: 'var(--radius-snug)',
+          borderRadius: 'var(--radius-pill)',
           cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1,
           flexShrink: 0,

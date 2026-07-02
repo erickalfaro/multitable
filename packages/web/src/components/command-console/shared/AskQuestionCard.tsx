@@ -3,7 +3,7 @@ import { useAppStore } from '../../../stores/appStore';
 import { wsClient } from '../../../lib/ws';
 import type { PermissionPrompt } from '../../../lib/types';
 import { Button } from '../../ui';
-import { SEVERITY_BORDER_VAR, categoryIcon, CATEGORY_COLOR_VAR } from '../../../lib/alertVisuals';
+import { severityEmphasis, categoryIcon, CATEGORY_COLOR_VAR } from '../../../lib/alertVisuals';
 
 const HEX_RE = /#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/;
 
@@ -123,11 +123,10 @@ export function AskQuestionCard({
   return (
     <div
       style={{
-        backgroundColor: 'var(--bg-elevated)',
         // Same severity/category split as PermissionCard — elicitation-style
-        // questions are also blocking, so we border with attention.
-        borderLeft: `3px solid ${SEVERITY_BORDER_VAR.attention}`,
-        padding: compact ? '6px 8px' : '6px 8px',
+        // questions are also blocking, so we tint with attention.
+        ...severityEmphasis('attention'),
+        padding: compact ? '6px 8px 6px 11px' : '6px 8px 6px 11px',
         marginBottom: 6,
       }}
     >

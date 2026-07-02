@@ -21,7 +21,10 @@ const DEFAULT_CONFIG: GlobalConfig = {
   terminalFontSize: 13,
   terminalScrollback: 10000,
   notifications: true,
-  port: 3000,
+  // 3117, not 3000: 3000 is the default for Next.js/CRA/etc., so a co-running
+  // dev server steals it and the daemon can't bind. Keep in sync with the vite
+  // proxy target and the CLI default.
+  port: 3117,
   host: '127.0.0.1',
   projects: [],
   integrations: {},

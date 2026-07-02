@@ -19,9 +19,10 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
       onMouseEnter={(e) => { setHover(true); onMouseEnter?.(e); }}
       onMouseLeave={(e) => { setHover(false); onMouseLeave?.(e); }}
       style={{
-        backgroundColor: elevated ? 'var(--bg-elevated)' : 'var(--bg-sidebar)',
-        border: `1px solid ${interactive && hover ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
+        backgroundColor: elevated ? 'var(--glass-bg)' : 'var(--glass-bg-soft)',
+        border: `1px solid ${interactive && hover ? 'var(--accent-amber)' : 'var(--glass-border)'}`,
         borderRadius: 'var(--radius-soft)',
+        boxShadow: 'inset 0 1px 0 var(--glass-highlight)',
         padding,
         transition: 'border-color var(--dur-fast) var(--ease-out)',
         cursor: interactive ? 'pointer' : 'default',

@@ -141,11 +141,12 @@ export function GlobalSettingsModal({ onClose }: Props) {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
-                  padding: '8px 10px',
-                  border: `1px solid ${isActive ? 'var(--accent-amber)' : 'var(--border-strong)'}`,
-                  borderLeft: `3px solid ${isActive ? 'var(--accent-amber)' : 'transparent'}`,
+                  padding: '8px 10px 8px 12px',
+                  border: `1px solid ${isActive ? 'color-mix(in oklch, var(--accent-amber) 45%, transparent)' : 'var(--border-strong)'}`,
                   borderRadius: 'var(--radius-snug)',
-                  backgroundColor: isActive ? 'var(--bg-elevated)' : 'var(--bg-sidebar)',
+                  backgroundColor: isActive
+                    ? 'color-mix(in oklch, var(--accent-amber) 8%, var(--bg-elevated))'
+                    : 'var(--bg-sidebar)',
                   transition: 'border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out)',
                 }}
               >

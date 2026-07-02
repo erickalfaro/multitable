@@ -13,6 +13,7 @@ import {
   CATEGORY_ICON,
   dominantAlertForSession,
 } from '../../lib/alertVisuals';
+import { emphasisFill } from '../../lib/emphasis';
 
 interface Props {
   process: ManagedProcess;
@@ -120,23 +121,20 @@ export function SidebarItem({
       style={{
         display: 'flex',
         alignItems: 'center',
-        padding: '4px 10px 4px 9px',
+        padding: '4px 10px 4px 12px',
         margin: '1px 0',
         cursor: 'pointer',
         userSelect: 'none',
         WebkitUserSelect: 'none',
         position: 'relative',
         borderRadius: 'var(--radius-snug)',
-        backgroundColor: isSelected
-          ? 'var(--bg-elevated)'
+        // Two-tier tinted-glass emphasis: full-strength amber for the primary
+        // selection, dimmer amber for multi-select companions.
+        ...(isSelected
+          ? emphasisFill('var(--accent-amber)', { fill: 10, ring: 35, on: 'var(--bg-elevated)' })
           : isMultiSelected
-            ? 'var(--bg-hover)'
-            : 'transparent',
-        borderLeft: isSelected
-          ? '3px solid var(--accent-amber)'
-          : isMultiSelected
-            ? '3px solid var(--accent-amber-dim)'
-            : '3px solid transparent',
+            ? emphasisFill('var(--accent-amber-dim)', { fill: 6, ring: 25, on: 'var(--bg-hover)' })
+            : { backgroundColor: 'transparent' }),
       }}
     >
       <div

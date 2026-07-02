@@ -3,7 +3,7 @@ import { X, ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import type { SessionAlert } from '../../lib/types';
 import { IconButton } from '../ui';
-import { categoryIcon, SEVERITY_BORDER_VAR } from '../../lib/alertVisuals';
+import { categoryIcon, severityEmphasis } from '../../lib/alertVisuals';
 
 function formatRelative(ts: number): string {
   const diff = Date.now() - ts;
@@ -25,12 +25,12 @@ function NotificationRow({ alert, sessionName, onJump, onDismiss }: RowProps) {
   return (
     <div
       style={{
-        padding: '10px 12px',
+        padding: '10px 12px 10px 15px',
         borderBottom: '1px solid var(--border)',
         // Severity stays the urgency channel (red on error, amber on attention,
         // green on success) so the at-a-glance vocabulary survives even as the
         // icon shape now encodes category instead.
-        borderLeft: `3px solid ${SEVERITY_BORDER_VAR[alert.severity]}`,
+        ...severityEmphasis(alert.severity),
         display: 'flex',
         gap: 10,
         alignItems: 'flex-start',

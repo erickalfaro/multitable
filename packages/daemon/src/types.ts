@@ -143,6 +143,51 @@ export interface GlobalConfig {
   // Opus session; new sessions on models that don't support them are clamped
   // to the model's max at session-create time by the UI.
   lastThinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+  // Zen redesign — Pinned Session Wall (plan §5.4). The user pins individual
+  // sessions across projects; the no-selection homepage renders them as live
+  // mini-chats in a responsive grid (desktop) or vertical feed (mobile).
+  // Server-persisted so a browser swap or fresh load preserves the wall.
+  pinnedSessionIds?: string[];
+
+  ui?: {
+    // Active theme id; mirrored to localStorage `mt:activeThemeId` for
+    // instant pre-fetch on cold load, but this is the source of truth for
+    // cross-browser sync.
+    themeId?: string;
+    // Chrome-on-intent toggle. When false, header bar / status bar render
+    // at full opacity always (accessibility / preference). Default true.
+    chromeAutoHide?: boolean;
+    // Wall tile size preference. Cozy = larger tiles, more chat visible per
+    // tile, fewer per row. Compact = denser grid.
+    wallDensity?: 'cozy' | 'compact';
+    // Region-aware wall layout (v2). The daemon persists it opaquely; the web
+    // client owns the shape (see packages/web/src/lib/types.ts WallLayout).
+    wallLayout?: WallLayout;
+    // Lock toggle — when true tiles can't be dragged/resized.
+    wallLayoutLocked?: boolean;
+  };
+}
+
+// Wall layout v2 — a vertical stack of regions, each a free-float grid.
+// Mirrors packages/web/src/lib/types.ts; stored opaquely by the daemon.
+export interface WallTile {
+  sessionId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface WallRegion {
+  id: string;
+  cols: number;
+  tiles: WallTile[];
+}
+
+export interface WallLayout {
+  version: 2;
+  regions: WallRegion[];
 }
 
 export interface ProjectConfig {

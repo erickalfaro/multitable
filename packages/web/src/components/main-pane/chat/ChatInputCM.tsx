@@ -856,7 +856,8 @@ export const ChatInputCM = memo(function ChatInputCM({
     <div
       style={{
         padding: '8px 12px 12px',
-        backgroundColor: 'var(--bg-sidebar)',
+        // Transparent — the composer card below floats on the shell glass.
+        backgroundColor: 'transparent',
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
@@ -887,10 +888,14 @@ export const ChatInputCM = memo(function ChatInputCM({
           flexDirection: 'column',
           gap: 8,
           padding: '8px 10px',
-          backgroundColor: 'var(--bg-elevated)',
-          border: `1px solid ${focused ? 'var(--border-strong)' : 'var(--border)'}`,
+          // Frosted composer card — a single blur over whatever chat scrolls
+          // behind it; CodeMirror inside stays transparent.
+          backgroundColor: 'var(--glass-bg-strong)',
+          backdropFilter: 'blur(var(--blur)) saturate(1.3)',
+          WebkitBackdropFilter: 'blur(var(--blur)) saturate(1.3)',
+          border: `1px solid ${focused ? 'var(--border-strong)' : 'var(--glass-border)'}`,
           borderRadius: 'var(--radius-composer)',
-          boxShadow: 'var(--shadow-composer)',
+          boxShadow: 'var(--shadow-composer), inset 0 1px 0 var(--glass-highlight)',
           cursor: 'text',
           transition:
             'border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',

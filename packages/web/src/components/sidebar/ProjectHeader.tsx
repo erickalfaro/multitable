@@ -91,7 +91,7 @@ export function ProjectHeader({
         userSelect: 'none',
         WebkitUserSelect: 'none',
         backgroundColor: focused
-          ? 'var(--bg-elevated)'
+          ? 'var(--glass-bg)'
           : hover
             ? 'var(--bg-hover)'
             : 'transparent',

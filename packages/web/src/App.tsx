@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
-import { Menu, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Menu, ChevronRight } from 'lucide-react';
 import {
   Panel,
   PanelGroup,
@@ -31,7 +31,7 @@ import { playPermissionChime, playAttentionChime, playDoneChime } from './lib/so
 import { handleSessionAlert } from './lib/notify';
 import { updateTabBadge } from './lib/tabBadge';
 import { loadPrefs, subscribePrefs } from './lib/notificationPrefs';
-import { useTheme } from './hooks/useTheme';
+import { useTheme, useAmbientAccent } from './hooks/useTheme';
 import { useIsMobile } from './lib/useIsMobile';
 import { ConnectionOverlay } from './components/ConnectionOverlay';
 import { NotificationCenter } from './components/notifications/NotificationCenter';
@@ -53,6 +53,7 @@ const RUNNING_SAFETY_POLL_MS = 60_000;
 function App() {
   const store = useAppStore();
   useTheme();
+  useAmbientAccent();
 
   const isMobile = useIsMobile();
   const mobileDrawerOpen = store.mobileDrawerOpen;
@@ -276,10 +277,10 @@ function App() {
             if (!liveTerminalIds.has(id)) live.removeTerminal(id);
           }
 
-          // Seed git status for every project so the sidebar's SOURCE CONTROL
-          // section knows which projects are git repos and what their badge
+          // Seed git status for every project so the sidebar's EXPLORER
+          // branch row knows which projects are git repos and what their badge
           // counts are. The daemon's GitWatcher only emits on change, so
-          // without this seed the section would be invisible until the first
+          // without this seed the row would be invisible until the first
           // working-tree mutation. Failures are silent (non-git or missing).
           for (const p of projects) {
             api.git
@@ -378,7 +379,7 @@ function App() {
 
     // Whenever a new project appears in the store (e.g. user added one via
     // AddProjectModal, or one was imported by the past-agents flow), seed its
-    // git status so the sidebar SOURCE CONTROL section can render immediately.
+    // git status so the sidebar EXPLORER branch row can render immediately.
     const unsubSeedGit = useAppStore.subscribe((state, prev) => {
       if (state.projects === prev.projects) return;
       const known = new Set(prev.projects.map((p) => p.id));
@@ -450,7 +451,25 @@ function App() {
           if (sessionRes.status === 'fulfilled') {
             upsertCanonicalSession(sessionRes.value);
           } else {
-            console.warn(`[sessions] failed to sync state for ${sessionId} (${reason})`, sessionRes.reason);
+            // A definitive 404 means the daemon no longer has this session (it
+            // was restarted/reset and the turn is long over, or the row is
+            // gone). Leaving local state at 'running' spins the loader forever
+            // since no WS turn-end event will ever arrive. Clear the stuck
+            // indicators — same cleanup the session:turn-complete handler does.
+            const status = (sessionRes.reason as { status?: number } | undefined)?.status;
+            if (status === 404) {
+              const live = useAppStore.getState();
+              live.updateProcessState(sessionId, 'stopped');
+              live.setToolProgress(sessionId, null);
+              live.setSessionStatus(sessionId, { status: null });
+              live.setToolStreaming(sessionId, null);
+              live.setReasoningStreaming(sessionId, '');
+              live.setStreamingText(sessionId, '');
+            } else {
+              // Transient (network drop, daemon mid-restart) — keep state as-is
+              // so a still-running turn isn't prematurely marked stopped.
+              console.warn(`[sessions] failed to sync state for ${sessionId} (${reason})`, sessionRes.reason);
+            }
           }
           if (messagesRes.status === 'fulfilled') {
             useAppStore.getState().mergeMessages(sessionId, messagesRes.value.messages);
@@ -954,6 +973,11 @@ function App() {
         // duplicate sync here when a resume is what brought us back.
         if (wsClient.isSuspended()) {
           wsClient.resume();
+        } else if (!wsClient.isConnected()) {
+          // Socket died while backgrounded (laptop sleep / network drop) and
+          // the auto-retry budget may be exhausted. Force a fresh reconnect —
+          // the daemon is almost always back by the time the user returns.
+          wsClient.reconnect();
         } else {
           syncActiveSessions('visible');
         }
@@ -962,6 +986,8 @@ function App() {
     const syncOnFocus = () => {
       if (wsClient.isSuspended()) {
         wsClient.resume();
+      } else if (!wsClient.isConnected()) {
+        wsClient.reconnect();
       } else {
         syncActiveSessions('focus');
       }
@@ -1058,19 +1084,19 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Imperative refs to the resizable panels so keyboard shortcuts can
-  // collapse/expand them without re-rendering the whole app on a store flag.
+  // Imperative ref to the sidebar panel so Cmd+B can toggle collapse without
+  // forcing a re-render on the store flag. The context (detail) panel is no
+  // longer a PanelGroup column — it's a fixed-position drawer overlay (Zen
+  // §5.2 detail-panel-as-drawer) so it doesn't need an imperative ref.
   const sidebarRef = useRef<ImperativePanelHandle>(null);
-  const contextRef = useRef<ImperativePanelHandle>(null);
 
-  // Mirror panel collapsed state in React so we can render edge rails that
-  // give the user a click target to expand them again (Cmd+B / Cmd+. aren't
-  // discoverable on their own).
+  // Mirror sidebar collapsed state so the edge rail (click target to expand
+  // when Cmd+B isn't discoverable) can render. The detail drawer no longer
+  // needs this because its open state lives directly in the store.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [contextCollapsed, setContextCollapsed] = useState(false);
 
   // Global keybindings: Ctrl/Cmd+Shift+L → Dev Log, Ctrl/Cmd+B → sidebar,
-  // Ctrl/Cmd+. → context panel.
+  // Ctrl/Cmd+. → detail drawer.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
@@ -1089,59 +1115,82 @@ function App() {
       }
       if (!e.shiftKey && !e.altKey && e.key === '.') {
         e.preventDefault();
-        const p = contextRef.current;
-        if (p) {
-          if (p.isCollapsed()) p.expand();
-          else p.collapse();
-        }
-        // Mirror state so SessionHeaderBar's toggle stays in sync.
         const { detailPanelOpen, setDetailPanelOpen } = useAppStore.getState();
         setDetailPanelOpen(!detailPanelOpen);
+        return;
+      }
+      // Zen: Cmd+P toggles the focused session's pin (the focused session is
+      // either the selected one in main pane, or the Wall tile holding
+      // focusedPaneId). Lets the user build/tear down the Wall by keyboard.
+      if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        const s = useAppStore.getState();
+        const target = s.focusedPaneId ?? s.selectedProcessId;
+        if (target && s.sessions[target]) s.togglePinSession(target);
+        return;
+      }
+      // Cmd+1..9 — focus the Nth Wall tile (1-indexed). Only kicks in when
+      // the Wall is the active surface (no selected process).
+      if (!e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        const s = useAppStore.getState();
+        if (s.selectedProcessId) return; // Don't hijack composer-side digits.
+        const idx = parseInt(e.key, 10) - 1;
+        const id = s.pinnedSessionIds[idx];
+        if (id) {
+          e.preventDefault();
+          s.setFocusedPane(id);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Keep the context panel's collapse state in lockstep with the store's
-  // `detailPanelOpen` flag so SessionHeaderBar's chevron button still works.
+  // Detail panel is now a fixed-position drawer overlay (Zen redesign §5.2):
+  // it sits over the main pane on demand rather than consuming a column.
+  // Open/close lives in the store; SessionHeaderBar's chevron + Cmd+. + the
+  // drawer's own backdrop-click all toggle the same `detailPanelOpen` flag.
   const detailPanelOpen = useAppStore((s) => s.detailPanelOpen);
   const setDetailPanelOpen = useAppStore((s) => s.setDetailPanelOpen);
-  useEffect(() => {
-    const p = contextRef.current;
-    if (!p) return;
-    if (detailPanelOpen && p.isCollapsed()) p.expand();
-    else if (!detailPanelOpen && !p.isCollapsed()) p.collapse();
-  }, [detailPanelOpen]);
 
-  // The right "Context UI" panel renders the SessionDetailPanel for sessions;
-  // for commands/terminals it shows a thin muted placeholder. Picking the
-  // session here (rather than inside the panel) keeps the panel's mount cycle
-  // tied to selection rather than to its parent's re-renders.
+  // Picking the session here (rather than inside the panel) keeps the panel's
+  // mount cycle tied to selection rather than to its parent's re-renders.
   const selectedSession = useAppStore((s) =>
     s.selectedProcessId ? s.sessions[s.selectedProcessId] ?? null : null,
   );
 
   return (
+    // Ambient backdrop — opaque canvas + the per-project accent bloom. The app
+    // floats inside it as a single glass shell inset by --shell-inset. Fixed
+    // overlays (drawers, palette, modals, toasts) are SIBLINGS of the shell so
+    // they never inherit the shell's backdrop-filter containing block.
     <div
-      className="mt-app-shell"
+      className="mt-app-shell mt-ambient"
       style={{
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        backgroundColor: 'var(--bg-primary)',
+        padding: 'var(--shell-inset)',
       }}
     >
+      <div
+        className="mt-shell"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
       {/* Mobile top bar — only when no session is focused; SessionHeaderBar
           takes over as the mobile header on session views. */}
       {showAppTopBar && (
-        <div style={{
+        <div className="mt-glass" style={{
           height: 52,
           display: 'flex',
           alignItems: 'center',
           padding: '0 10px',
-          backgroundColor: 'var(--bg-sidebar)',
-          borderBottom: '1px solid var(--border)',
           flexShrink: 0,
           gap: 10,
           userSelect: 'none',
@@ -1157,67 +1206,6 @@ function App() {
           <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {focusedProject?.name || 'MultiTable'}
           </span>
-        </div>
-      )}
-
-      {/* Mobile drawer overlay */}
-      {isMobile && mobileDrawerOpen && (
-        <>
-          <div
-            onClick={() => setMobileDrawerOpen(false)}
-            style={{
-              position: 'fixed',
-              inset: 0,
-              backgroundColor: 'var(--bg-overlay)',
-              backdropFilter: 'blur(6px) saturate(1.1)',
-              WebkitBackdropFilter: 'blur(6px) saturate(1.1)',
-              zIndex: 900,
-              animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
-            }}
-          />
-          <div
-            className="mt-scroll"
-            style={{
-              position: 'fixed', top: 0, left: 0, bottom: 0, width: 300,
-              zIndex: 901, backgroundColor: 'var(--bg-sidebar)',
-              boxShadow: 'var(--shadow-xl)',
-              transform: 'translateX(0)',
-              animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
-              overflowY: 'auto',
-            }}
-          >
-            <Sidebar />
-          </div>
-        </>
-      )}
-
-      {/* Mobile detail-panel — on desktop the SessionDetailPanel lives in the
-          right PanelGroup column, but the mobile branch below renders only
-          <MainPane />. Without this, SessionHeaderBar's "Toggle detail panel"
-          button flips `detailPanelOpen` but nothing ever mounts the panel.
-          On mobile it takes over the full screen with a back button (passed
-          via isMobile/onClose) rather than a cramped side drawer. */}
-      {isMobile && detailPanelOpen && selectedSession && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 901,
-            width: '100%',
-            height: '100%',
-            backgroundColor: 'var(--bg-primary)',
-            animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          <SessionDetailPanel
-            key={selectedSession.id}
-            session={selectedSession}
-            isMobile
-            onClose={() => setDetailPanelOpen(false)}
-          />
         </div>
       )}
 
@@ -1263,41 +1251,6 @@ function App() {
           >
             <MainPane />
           </Panel>
-          <PanelResizeHandle className="mt-resize-handle" />
-          <Panel
-            id="context"
-            order={3}
-            ref={contextRef}
-            defaultSize={28}
-            minSize={18}
-            maxSize={50}
-            collapsible
-            collapsedSize={0}
-            onCollapse={() => setContextCollapsed(true)}
-            onExpand={() => setContextCollapsed(false)}
-            style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-          >
-            {selectedSession ? (
-              <SessionDetailPanel key={selectedSession.id} session={selectedSession} />
-            ) : (
-              <div
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--text-faint)',
-                  fontSize: 11.5,
-                  letterSpacing: '0.06em',
-                  textTransform: 'uppercase',
-                  borderLeft: '1px solid var(--border)',
-                  backgroundColor: 'var(--bg-primary)',
-                }}
-              >
-                No agent selected
-              </div>
-            )}
-          </Panel>
         </PanelGroup>
         {sidebarCollapsed && (
           <button
@@ -1309,16 +1262,6 @@ function App() {
             <ChevronRight size={14} />
           </button>
         )}
-        {contextCollapsed && (
-          <button
-            type="button"
-            className="mt-edge-rail mt-edge-rail-right"
-            title="Open context panel (Cmd+.)"
-            onClick={() => contextRef.current?.expand()}
-          >
-            <ChevronLeft size={14} />
-          </button>
-        )}
         </div>
         </div>
       )}
@@ -1328,8 +1271,120 @@ function App() {
           when closed, taking zero space. */}
       <DevLogPanel />
 
-      <OptionSelector />
       {!isMobile && <StatusBar />}
+      </div>
+
+      {/* ── Fixed overlays — siblings of the shell ──────────────────────── */}
+
+      {/* Mobile drawer overlay */}
+      {isMobile && mobileDrawerOpen && (
+        <>
+          <div
+            onClick={() => setMobileDrawerOpen(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'var(--bg-overlay)',
+              backdropFilter: 'blur(6px) saturate(1.1)',
+              WebkitBackdropFilter: 'blur(6px) saturate(1.1)',
+              zIndex: 900,
+              animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
+            }}
+          />
+          <div
+            className="mt-glass-strong mt-scroll"
+            style={{
+              position: 'fixed', top: 0, left: 0, bottom: 0, width: 300,
+              zIndex: 901,
+              boxShadow: 'var(--shadow-xl)',
+              transform: 'translateX(0)',
+              animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
+              overflowY: 'auto',
+            }}
+          >
+            <Sidebar />
+          </div>
+        </>
+      )}
+
+      {/* Mobile detail-panel — on desktop the SessionDetailPanel lives in the
+          right PanelGroup column, but the mobile branch below renders only
+          <MainPane />. Without this, SessionHeaderBar's "Toggle detail panel"
+          button flips `detailPanelOpen` but nothing ever mounts the panel.
+          On mobile it takes over the full screen with a back button (passed
+          via isMobile/onClose) rather than a cramped side drawer. */}
+      {isMobile && detailPanelOpen && selectedSession && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 901,
+            width: '100%',
+            height: '100%',
+            backgroundColor: 'var(--bg-primary)',
+            animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <SessionDetailPanel
+            key={selectedSession.id}
+            session={selectedSession}
+            isMobile
+            onClose={() => setDetailPanelOpen(false)}
+          />
+        </div>
+      )}
+
+      {/* Desktop detail drawer — fixed-position overlay on the right, glass
+          backdrop. Replaces the always-present third PanelGroup column from
+          the pre-Zen layout (see plan §5.2). Toggled by Cmd+. or
+          SessionHeaderBar's chevron. Click-outside dismisses without
+          flipping the store flag back via setDetailPanelOpen(false). */}
+      {!isMobile && detailPanelOpen && selectedSession && (
+        <>
+          <div
+            onClick={() => setDetailPanelOpen(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'transparent',
+              zIndex: 800,
+              cursor: 'default',
+              animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
+            }}
+          />
+          <aside
+            className="mt-glass-strong mt-scroll"
+            // Floats as a glass card inset by --shell-inset to match the shell,
+            // with the shell's own corner radius. Width clamps so it's
+            // comfortable on a 14" laptop but doesn't dominate a 32" display.
+            style={{
+              position: 'fixed',
+              top: 'var(--shell-inset)',
+              right: 'var(--shell-inset)',
+              bottom: 'var(--shell-inset)',
+              width: 'clamp(360px, 32vw, 540px)',
+              borderRadius: 'var(--shell-radius)',
+              zIndex: 801,
+              boxShadow: 'var(--shadow-xl)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflowY: 'auto',
+              animation: 'mt-slide-up var(--dur-med) var(--ease-out)',
+            }}
+          >
+            <SessionDetailPanel
+              key={selectedSession.id}
+              session={selectedSession}
+              onClose={() => setDetailPanelOpen(false)}
+            />
+          </aside>
+        </>
+      )}
+
+      <OptionSelector />
       <CommandPalette />
       <NotificationCenter />
       <ElicitationModalHost />
@@ -1338,12 +1393,14 @@ function App() {
         position="top-right"
         toastOptions={{
           style: {
-            background: 'var(--bg-elevated)',
+            background: 'var(--glass-bg-strong)',
+            backdropFilter: 'blur(var(--blur)) saturate(1.3)',
+            WebkitBackdropFilter: 'blur(var(--blur)) saturate(1.3)',
             color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--glass-border)',
+            borderRadius: 'var(--radius-comfortable)',
             fontSize: 13,
-            boxShadow: 'var(--shadow-lg)',
+            boxShadow: 'var(--glass-shadow)',
           },
           success: {
             iconTheme: {

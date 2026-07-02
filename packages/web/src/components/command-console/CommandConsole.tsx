@@ -4,6 +4,7 @@ import { useAppStore } from '../../stores/appStore';
 import { IconButton } from '../ui';
 import { PendingActionsTab, usePendingCount } from './PendingActionsTab';
 import { AlertsTab } from './AlertsTab';
+import { emphasisFill } from '../../lib/emphasis';
 
 type TabKey = 'pending' | 'alerts';
 
@@ -32,15 +33,20 @@ function TabButton({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 6,
-        padding: '8px 10px',
-        background: 'transparent',
+        height: 26,
+        margin: '5px 4px',
+        padding: '0 10px',
         border: 'none',
-        borderBottom: `2px solid ${active ? 'var(--accent-amber)' : 'transparent'}`,
+        borderRadius: 'var(--radius-pill)',
+        // Active tab = filled glass pill (segmented-control style).
+        ...(active
+          ? emphasisFill('var(--accent-amber)', { fill: 12, ring: 40 })
+          : { background: 'transparent' }),
         color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
         fontSize: 12,
         fontWeight: active ? 600 : 500,
         cursor: 'pointer',
-        transition: 'color 0.12s, border-color 0.12s',
+        transition: 'color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out)',
       }}
     >
       {config.icon}
@@ -134,17 +140,16 @@ export function CommandConsole() {
         }}
       />
       <div
-        className="mt-scroll"
+        className="mt-glass-strong mt-scroll"
         style={{
           position: 'fixed',
-          top: 0,
-          right: 0,
-          bottom: 0,
+          top: 'var(--shell-inset)',
+          right: 'var(--shell-inset)',
+          bottom: 'var(--shell-inset)',
           width: 420,
           maxWidth: '94vw',
+          borderRadius: 'var(--shell-radius)',
           zIndex: 951,
-          backgroundColor: 'var(--bg-sidebar)',
-          borderLeft: '1px solid var(--border)',
           boxShadow: 'var(--shadow-xl)',
           display: 'flex',
           flexDirection: 'column',

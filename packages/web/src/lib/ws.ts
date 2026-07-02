@@ -294,6 +294,22 @@ class WsClient {
     return this.suspended;
   }
 
+  isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  // Force a fresh reconnect with a full retry budget. The automatic backoff
+  // loop gives up permanently after MAX_RETRIES (so it doesn't hammer a truly
+  // dead daemon), and `connect()` alone doesn't reset the counter — so after a
+  // long sleep/network drop the UI can be stuck on "disconnected" even though
+  // the daemon is alive. This is the recovery path: the Retry button and
+  // tab-refocus/wake call it to clear the budget and reopen.
+  reconnect(): void {
+    this.retryCount = 0;
+    this.reconnectDelay = 1000;
+    this.connect();
+  }
+
   respondElicitation(
     id: string,
     action: 'accept' | 'decline' | 'cancel',

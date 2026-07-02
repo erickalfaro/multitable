@@ -35,10 +35,10 @@ import type {
 //   - Session state machine (state, currentTurn, lastActivity)
 //   - In-memory s.messages cache + DB writes (sessions, cost_records)
 //   - WS event surface (every emit() here is rebroadcast by server.ts)
-//   - Two-phase watchdog: hard-kill ONLY before the first SDK byte arrives
-//     (handshake — surfaces auth/network failures with a real error); after
-//     that, the watchdog only WARNS and never kills (long thinks / subagents
-//     are legitimate work and the user can always click Stop).
+//   - Watchdog: WARN-ONLY, never kills. A silent handshake surfaces an
+//     auth/network diagnostic warning; a long quiet stretch (extended thinking,
+//     subagents) surfaces a soft warning. Live agent work is never thrown away
+//     on a timer — only the user (clicking Stop) terminates a turn.
 //   - Cross-cutting side effects (auto-rename, option detection)
 //   - Capability advertisement (UI gating via session:capabilities)
 //
@@ -388,15 +388,25 @@ export class AgentSessionManager extends EventEmitter {
       );
     }
     s.mode = mode;
+    // Will we flip the mode on a live, in-flight turn below? (Claude via
+    // streaming-input Query.setPermissionMode.) Accepting a plan flips
+    // plan→acceptEdits mid-turn and hits exactly this path.
+    const willFlipLive = Boolean(
+      s.state === 'running' && s.currentTurn && adapter?.applyModeChangeLive,
+    );
     // Some adapters cache provider state that's tied to mode (Codex caches a
     // Thread with a fixed sandboxMode; Copilot will likely cache a Session
     // with fixed system prompt). Reset the adapter cache so the NEXT turn
-    // picks up the new mode. ClaudeAdapter's reset is a no-op for this case
-    // since Claude assembles options per-turn — safe to call uniformly.
-    try {
-      adapter?.reset?.(s);
-    } catch (err) {
-      console.error('[agent] adapter.reset on mode change failed:', err);
+    // picks up the new mode. BUT NOT when we're about to flip a live turn:
+    // ClaudeAdapter.reset() is the /clear teardown — it aborts the session
+    // AbortController and closes the prompt queue, which kills the in-flight
+    // turn with "Claude session ended". When idle, reset→rebuild is correct.
+    if (!willFlipLive) {
+      try {
+        adapter?.reset?.(s);
+      } catch (err) {
+        console.error('[agent] adapter.reset on mode change failed:', err);
+      }
     }
     try {
       updateSession(sessionId, { mode });
@@ -406,12 +416,11 @@ export class AgentSessionManager extends EventEmitter {
     this.emit('mode-changed', { sessionId, mode });
 
     // If a turn is currently in flight and the adapter supports live mid-turn
-    // mode flips (Claude via streaming-input Query.setPermissionMode), apply
-    // the change to the running SDK so the user doesn't have to wait for the
-    // next turn. Fire-and-forget — `s.mode` is already updated, so the next
-    // turn picks up the new mode regardless of whether the live apply lands.
-    if (s.state === 'running' && s.currentTurn && adapter?.applyModeChangeLive) {
-      adapter.applyModeChangeLive(s, mode).catch((err) => {
+    // mode flips, apply the change to the running SDK so the user doesn't have
+    // to wait for the next turn. Fire-and-forget — `s.mode` is already updated,
+    // so the next turn picks up the new mode regardless of whether this lands.
+    if (willFlipLive) {
+      adapter!.applyModeChangeLive!(s, mode).catch((err) => {
         console.error('[agent] live mode change failed:', err);
       });
     }
@@ -601,7 +610,6 @@ export class AgentSessionManager extends EventEmitter {
     const WARN_MS = 90_000;
     const TOOL_GRACE_MS = 10 * 60_000;
     let stuckTimer: TrackedTimer | null = null;
-    let abortedDueToStuck = false;
     let sawAnyMessage = false;
     let warnedThisQuietStretch = false;
     const armStuckTimer = () => {
@@ -624,28 +632,22 @@ export class AgentSessionManager extends EventEmitter {
             armStuckTimer();
             return;
           }
-          if (handshake) {
-            // Phase 1 — hard kill so the catch block can surface the
-            // "check NODE_EXTRA_CA_CERTS / credentials / network" diagnostic.
-            abortedDueToStuck = true;
-            try {
-              ctrl.abort();
-            } catch {
-              /* ignore */
-            }
-            return;
-          }
-          // Phase 2 — warn once per quiet stretch and re-arm. Stays alive
-          // until the SDK speaks again (which resets warnedThisQuietStretch
-          // via the callback proxy below) or the user clicks Stop.
+          // Warn-only — the watchdog NEVER force-terminates a turn. Even a
+          // silent handshake (likely an auth/network/CA problem) just surfaces
+          // a diagnostic warning; the user clicks Stop if they want to cancel.
+          // We never throw away live agent work on a timer.
           if (!warnedThisQuietStretch) {
             warnedThisQuietStretch = true;
             this.emitAlert({
               sessionId,
               category: 'turn',
               severity: 'warning',
-              title: `${s.provider} quiet for ${WARN_MS / 1000}s`,
-              body: 'Still waiting — the agent may be thinking, in a subagent, or stuck. Click Stop to cancel.',
+              title: handshake
+                ? `No response from ${s.provider} in ${HANDSHAKE_MS / 1000}s`
+                : `${s.provider} quiet for ${WARN_MS / 1000}s`,
+              body: handshake
+                ? 'No bytes received yet — check NODE_EXTRA_CA_CERTS, credentials, or network. Click Stop to cancel.'
+                : 'Still waiting — the agent may be thinking, in a subagent, or stuck. Click Stop to cancel.',
             });
           }
           armStuckTimer();
@@ -682,27 +684,15 @@ export class AgentSessionManager extends EventEmitter {
     armStuckTimer();
     try {
       await adapter.runTurn(s, text, ctrl, cb);
-      if (abortedDueToStuck) {
-        // Handshake watchdog only — see HANDSHAKE_MS comment above. Phase 2
-        // never aborts, so reaching here always means we saw zero bytes from
-        // the SDK/RPC and want to surface the auth/network diagnostic.
-        throw new Error(
-          `No response from ${s.provider} in ${HANDSHAKE_MS / 1000}s. ` +
-            `Check NODE_EXTRA_CA_CERTS, credentials, or network connection.`,
-        );
-      }
     } catch (err: unknown) {
       const baseMessage = err instanceof Error ? err.message : String(err);
 
-      // Distinguish three termination causes — they have very different UX:
+      // Two termination causes — different UX:
       //   1. User-initiated abort (clicked Stop) — NOT an error. Soft cancel.
-      //   2. Watchdog abort (no progress for NO_PROGRESS_MS) — IS an error.
-      //   3. SDK/network/auth/etc. — IS an error.
-      // The signal-aborted check distinguishes (1) from (3); abortedDueToStuck
-      // distinguishes (2). Watchdog ALSO aborts the controller, so check it
-      // first to avoid misclassifying as user-initiated.
-      const isWatchdog = abortedDueToStuck;
-      const isUserAbort = !isWatchdog && ctrl.signal.aborted;
+      //   2. SDK/network/auth/etc. — IS an error.
+      // The watchdog never aborts (warn-only), so a set abort signal always
+      // means the user clicked Stop.
+      const isUserAbort = ctrl.signal.aborted;
 
       // Adapter-specific recovery: only on real errors. A user cancel doesn't
       // need a thread reset (codex thread is still resumable for the next turn).
@@ -726,15 +716,9 @@ export class AgentSessionManager extends EventEmitter {
         // No alert — the user *initiated* the cancel; toasting them about it
         // would be noise. The composer can react to session:idle if needed.
       } else {
-        // Real error path — handshake watchdog or SDK/network/auth/etc.
-        // Watchdog throws its own self-explanatory message above; for every
-        // other error path, surface the underlying error verbatim so the
-        // user always sees what actually went wrong.
-        const message =
-          isWatchdog && !new RegExp(s.provider, 'i').test(baseMessage)
-            ? `No response from ${s.provider} in ${HANDSHAKE_MS / 1000}s. ` +
-              `Check NODE_EXTRA_CA_CERTS, credentials, or network. (${baseMessage})`
-            : baseMessage;
+        // Real error path — SDK/network/auth/etc. Surface the underlying error
+        // verbatim so the user always sees what actually went wrong.
+        const message = baseMessage;
 
         console.error(`[agent] ${s.provider} turn failed`, {
           sessionId,
@@ -805,13 +789,11 @@ export class AgentSessionManager extends EventEmitter {
         state: s.state,
         // Inform the UI whether the loop ended cleanly, with an error, or via
         // user abort, so it can render the right re-engage prompt.
-        outcome: abortedDueToStuck
-          ? 'watchdog'
-          : ctrl.signal.aborted
-            ? 'aborted'
-            : s.state === 'errored'
-              ? 'error'
-              : 'completed',
+        outcome: ctrl.signal.aborted
+          ? 'aborted'
+          : s.state === 'errored'
+            ? 'error'
+            : 'completed',
       });
       // Stop work fire-and-forget (option detection from JSONL) for Claude.
       if (s.provider === 'claude' && s.claudeSessionId) {

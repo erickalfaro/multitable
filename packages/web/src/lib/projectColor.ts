@@ -1,12 +1,29 @@
-const PALETTE = [
-  { name: 'White', hex: '#E8E8E8' },
-  { name: 'Red', hex: '#DF0100' },
-  { name: 'Blue', hex: '#0071E3' },
-  { name: 'Green', hex: '#0A7C4F' },
-  { name: 'Black', hex: '#2A2A28' },
-  { name: 'Purple', hex: '#6B2D8C' },
-  { name: 'Yellow', hex: '#FFBF00' },
-  { name: 'Orange', hex: '#F9A227' },
+// Zen Project Hue Ring (plan §3.2). Each project deterministically resolves
+// to one of 8 hues evenly distributed on the OKLCH wheel. Every entry shares
+// Chroma + Lightness within its band — only hue varies — so any two
+// projects' colors are perceptually equivalent against the canvas and a
+// 4-tile Wall never has one tile dominating because of brighter hue.
+//
+// Two variants per hue: dark-mode (L=74) for use against the dark canvas,
+// light-mode (L=48) for the light canvas. The `dot` field returns a single
+// pickable color; `tint` returns a semi-transparent overlay tuned for the
+// canvas; `stripe` is a stronger fill for legacy callers (sidebar stripe).
+// The new WorkspaceTint component reads `from`/`to` for the gradient stops.
+
+interface RingEntry {
+  name: string;
+  hue: number;
+}
+
+const RING: RingEntry[] = [
+  { name: 'Lavender', hue: 285 },
+  { name: 'Iris', hue: 250 },
+  { name: 'Sky', hue: 215 },
+  { name: 'Sage', hue: 165 },
+  { name: 'Citrus', hue: 110 },
+  { name: 'Apricot', hue: 70 },
+  { name: 'Coral', hue: 30 },
+  { name: 'Rose', hue: 350 },
 ];
 
 function hashString(s: string): number {
@@ -18,28 +35,41 @@ function hashString(s: string): number {
   return h >>> 0;
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const v = hex.replace('#', '');
-  return {
-    r: parseInt(v.slice(0, 2), 16),
-    g: parseInt(v.slice(2, 4), 16),
-    b: parseInt(v.slice(4, 6), 16),
-  };
+export interface ProjectColor {
+  /** Strong fill — sidebar stripe legacy callers. */
+  stripe: string;
+  /** Soft overlay — older callers using `rgba(..., 0.12)` style tints. */
+  tint: string;
+  /** Single pickable color — project dot in chrome. */
+  dot: string;
+  /** Workspace gradient `from` stop (same hue, slightly lifted lightness). */
+  from: string;
+  /** Workspace gradient `to` stop (same hue, slightly dropped lightness). */
+  to: string;
+  /** Hue name (debug / tooltips). */
+  name: string;
 }
 
-export function getProjectColor(
-  id: string,
-  _dark: boolean
-): {
-  stripe: string;
-  tint: string;
-  dot: string;
-} {
-  const { hex } = PALETTE[hashString(id) % PALETTE.length];
-  const { r, g, b } = hexToRgb(hex);
+export function getProjectColor(id: string, dark: boolean): ProjectColor {
+  const entry = RING[hashString(id) % RING.length];
+  const H = entry.hue;
+  // Band-anchored L per theme (see plan §3.1–§3.4). Chroma bumped to a
+  // vivid envelope (was 0.10/0.12) — colors now read clearly across the
+  // wall mosaic without losing OKLCH equal-brightness guarantee.
+  const L = dark ? 74 : 48;
+  const C = dark ? 0.16 : 0.19;
+  const ramp = (dl: number) => `oklch(${L + dl}% ${C} ${H})`;
   return {
-    stripe: hex,
-    tint: `rgba(${r}, ${g}, ${b}, 0.12)`,
-    dot: hex,
+    name: entry.name,
+    stripe: ramp(0),
+    // Tint composites via the canvas color at use site (preferred — see
+    // .mt-workspace-tinted in globals.css). For the rare caller that needs a
+    // standalone semi-transparent value, expose it at low alpha.
+    tint: `oklch(${L}% ${C} ${H} / 0.12)`,
+    dot: ramp(0),
+    // Same-hue gradient: ΔL=4 (plan §3.4 Rule 1). One hue per workspace —
+    // never blend two project colors in a single gradient.
+    from: ramp(+2),
+    to: ramp(-2),
   };
 }

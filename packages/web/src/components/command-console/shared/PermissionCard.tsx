@@ -4,7 +4,7 @@ import { wsClient } from '../../../lib/ws';
 import type { PermissionPrompt } from '../../../lib/types';
 import { Button } from '../../ui';
 import { ToolInputPreview } from '../../permission/ToolInputPreview';
-import { SEVERITY_BORDER_VAR, categoryIcon, CATEGORY_COLOR_VAR } from '../../../lib/alertVisuals';
+import { severityEmphasis, categoryIcon, CATEGORY_COLOR_VAR } from '../../../lib/alertVisuals';
 
 /**
  * Shared permission card — rendered by both the per-session `PermissionBar`
@@ -51,13 +51,12 @@ export function PermissionCard({
     <div
       style={{
         position: 'relative',
-        backgroundColor: 'var(--bg-elevated)',
-        // Match the alerts-tab visual language: severity-color left rule + a
+        // Match the alerts-tab visual language: severity-tinted fill + a
         // body that lets the per-category icon do the disambiguation.
         // Permission prompts are always "attention" severity — they block the
         // session until acted on.
-        borderLeft: `3px solid ${SEVERITY_BORDER_VAR.attention}`,
-        padding: compact ? '10px 10px 8px' : '14px 14px 12px',
+        ...severityEmphasis('attention'),
+        padding: compact ? '10px 10px 8px 13px' : '14px 14px 12px 17px',
         marginBottom: compact ? 6 : 8,
       }}
     >

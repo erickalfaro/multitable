@@ -11,7 +11,7 @@ import { ProjectSectionsColumn } from './ProjectSectionsColumn';
 export function Sidebar() {
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden' }}>
-      <ProjectRail />
+      <ProjectRail alwaysExpanded />
       <div style={{ flex: 1, minWidth: 0, height: '100%' }}>
         <ProjectSectionsColumn />
       </div>

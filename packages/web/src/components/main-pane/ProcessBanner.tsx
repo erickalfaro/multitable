@@ -39,15 +39,14 @@ export function ProcessBanner({ process }: Props) {
     };
   }
 
-  const stripeColor = isErrored ? 'var(--status-error)' : 'var(--status-warning)';
+  const tintColor = isErrored ? 'var(--status-error)' : 'var(--status-warning)';
 
   return (
     <div
       style={{
-        backgroundColor: 'var(--bg-statusbar)',
+        backgroundColor: `color-mix(in oklch, ${tintColor} 10%, var(--bg-statusbar))`,
         borderBottom: '1px solid var(--border)',
-        borderLeft: `3px solid ${stripeColor}`,
-        padding: '12px 16px',
+        padding: '12px 19px 12px 16px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
