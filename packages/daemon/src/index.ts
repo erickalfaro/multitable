@@ -136,7 +136,6 @@ async function main() {
   );
   const { server, broadcast } = serverInstance;
   broadcastRef = broadcast;
-  tgBridge.start();
 
   // 7. Load projects from DB, start autostart processes
   const projects = getAllProjects();
@@ -214,10 +213,39 @@ async function main() {
     }
   }
 
-  // 9. Listen on host:port
-  server.listen(config.port, config.host, () => {
+  // 9. Listen on host:port. tsx-watch restarts can race the old process's
+  // server.close(), so EADDRINUSE gets a bounded retry before failing fast.
+  // A daemon that can't bind must EXIT — lingering leaves a zombie that holds
+  // the DB, keeps adapters warm, and fights the real daemon for Telegram's
+  // single getUpdates long-poll slot (the 409 Conflict spam).
+  const MAX_LISTEN_ATTEMPTS = 10;
+  let listenAttempts = 0;
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE' && listenAttempts < MAX_LISTEN_ATTEMPTS) {
+      listenAttempts++;
+      console.warn(
+        `Port ${config.port} in use, retrying in 1s (${listenAttempts}/${MAX_LISTEN_ATTEMPTS})...`,
+      );
+      setTimeout(() => server.listen(config.port, config.host), 1000);
+      return;
+    }
+    console.error(`Failed to listen on http://${config.host}:${config.port}: ${err.message}`);
+    if (err.code === 'EADDRINUSE') {
+      console.error(
+        'Another MultiTable daemon may already be running (`mt start` or another `npm run dev`). ' +
+          'Kill it or change `port` in ~/.config/multitable/config.yml.',
+      );
+    }
+    shutdown('listen failure', 1);
+  });
+
+  server.once('listening', () => {
     console.log(`MultiTable daemon running at http://${config.host}:${config.port}`);
     console.log(`WebSocket endpoint: ws://${config.host}:${config.port}/ws`);
+    // Telegram long-poll starts only after a successful bind — a daemon that
+    // never bound must not contend for the bot's single getUpdates slot.
+    tgBridge.start();
     // Background catalog refresh — fires after the daemon is listening so the
     // ~2-4s of discovery work doesn't delay first paint. Errors per provider
     // are isolated; WS broadcast lets any open UI rerender model dropdowns
@@ -234,27 +262,33 @@ async function main() {
     agentManager.refreshAllUsageLimits();
   });
 
+  server.listen(config.port, config.host);
+
   // 10. Graceful shutdown — idempotent, force exits within 2s
   let shuttingDown = false;
-  function shutdown(signal: string) {
+  function shutdown(reason: string, code = 0) {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`\nReceived ${signal}, shutting down...`);
-    setTimeout(() => process.exit(0), 2000);
+    console.log(`\nShutting down (${reason})...`);
+    setTimeout(() => process.exit(code), 2000);
     fileWatcher.unwatchAll();
     gitWatcher.unwatchAll();
     manager.destroy();
     void agentManager.shutdown();
     serverInstance.closeAllClients();
     void tgBridge.stop();
-    server.close(() => process.exit(0));
+    server.close(() => process.exit(code));
   }
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
+  // A daemon that keeps running after an uncaught exception is a half-alive
+  // zombie (HTTP maybe unbound, Telegram still polling). Tear down and exit;
+  // tsx watch / mt start simply respawn or surface a clean failure.
   process.on('uncaughtException', (err) => {
     console.error('Uncaught exception:', err);
+    shutdown('uncaughtException', 1);
   });
 }
 
