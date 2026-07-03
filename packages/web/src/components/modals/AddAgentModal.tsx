@@ -31,6 +31,10 @@ const MODEL_SECTION_HEIGHT = 120;
 // Mode picker sits between the model picker and past-sessions. Single row of
 // small chips + a label; only shown when the provider declares > 1 mode.
 const MODE_SECTION_HEIGHT = 58;
+// Worktree section mirrors the mode row: label + one toggle-chip/input row.
+// Only shown when the project is a git repo. Height is constant whether the
+// toggle is on or off (the input appears beside the chip, not below it).
+const WORKTREE_SECTION_HEIGHT = 58;
 const SECTION_GAP = 14;
 
 type AgentProviderOption = 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | undefined;
@@ -96,6 +100,12 @@ export function AddAgentModal({ onClose, projectId }: Props) {
     Partial<Record<AgentProvider, ProviderCapabilities>>
   >({});
   const [selectedMode, setSelectedMode] = useState<string | null>(null);
+  // Optional isolated git worktree. Enabling prefills a generated branch name;
+  // the daemon creates the branch from the project's current HEAD and the
+  // session runs in `<repo-parent>/<repo>.worktrees/<branch>`.
+  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
+  const [worktreeBranch, setWorktreeBranch] = useState('');
+  const isRepo = useAppStore((s) => !!s.gitByProject[projectId]?.isRepo);
   const [selectedPastSession, setSelectedPastSession] = useState<{
     provider: AgentProvider;
     sessionId: string;
@@ -219,6 +229,22 @@ export function AddAgentModal({ onClose, projectId }: Props) {
     setSelectedMode((fromSeed ?? activeCaps.modes[0]).value);
   }, [activeCaps, agentProvider]);
 
+  // Readable-but-unique default branch name; the server's 409 on collision is
+  // the backstop for the 2-char random suffix.
+  const generateBranchName = () => {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const rand = Math.random().toString(36).slice(2, 4);
+    return `mt/${agentProvider ?? 'agent'}-${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}-${rand}`;
+  };
+
+  const handleWorktreeToggle = () => {
+    setWorktreeEnabled((on) => {
+      if (!on && !worktreeBranch.trim()) setWorktreeBranch(generateBranchName());
+      return !on;
+    });
+  };
+
   const handleSubmit = async () => {
     if (loading) return;
     setLoading(true);
@@ -245,13 +271,18 @@ export function AddAgentModal({ onClose, projectId }: Props) {
         ...(agentProvider ? { agentProvider } : {}),
         model: selectedModel,
         ...(selectedMode ? { mode: selectedMode } : {}),
+        ...(worktreeEnabled && worktreeBranch.trim()
+          ? { worktree: { branch: worktreeBranch.trim() } }
+          : {}),
       });
       store.upsertSession(session);
       store.setSelectedProcess(session.id);
       toast.success('Agent added');
       onClose();
-    } catch {
-      toast.error('Failed to start');
+    } catch (err) {
+      // Surface the server's message — branch collisions (409) and git
+      // failures carry the actionable detail in the error body.
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to start');
     } finally {
       setLoading(false);
     }
@@ -265,7 +296,8 @@ export function AddAgentModal({ onClose, projectId }: Props) {
   const submitDisabled =
     loading ||
     (!selectedPastSession && (!selectedPreset || !selectedPreset.command)) ||
-    (needsModel && !selectedModel);
+    (needsModel && !selectedModel) ||
+    (!selectedPastSession && worktreeEnabled && !worktreeBranch.trim());
   const startLabel = selectedPastSession
     ? loading
       ? 'Resuming…'
@@ -277,11 +309,13 @@ export function AddAgentModal({ onClose, projectId }: Props) {
   const showModelSection = !selectedPastSession && !!agentProvider;
   const showModeSection =
     !selectedPastSession && !!activeCaps && activeCaps.modes.length > 1;
+  const showWorktreeSection = !selectedPastSession && isRepo;
   const pastSectionHeight =
     BODY_HEIGHT -
     PRESETS_HEIGHT -
     (showModelSection ? MODEL_SECTION_HEIGHT + SECTION_GAP : 0) -
-    (showModeSection ? MODE_SECTION_HEIGHT + SECTION_GAP : 0);
+    (showModeSection ? MODE_SECTION_HEIGHT + SECTION_GAP : 0) -
+    (showWorktreeSection ? WORKTREE_SECTION_HEIGHT + SECTION_GAP : 0);
 
   return (
     <Modal
@@ -362,6 +396,17 @@ export function AddAgentModal({ onClose, projectId }: Props) {
               scope={activeCaps.modeSwitchScope}
               selected={selectedMode}
               onSelect={setSelectedMode}
+            />
+          </div>
+        )}
+
+        {showWorktreeSection && (
+          <div style={{ height: WORKTREE_SECTION_HEIGHT, flexShrink: 0 }}>
+            <WorktreePicker
+              enabled={worktreeEnabled}
+              branch={worktreeBranch}
+              onToggle={handleWorktreeToggle}
+              onBranchChange={setWorktreeBranch}
             />
           </div>
         )}
@@ -1083,6 +1128,77 @@ function ModePicker({ modes, scope, selected, onSelect }: ModePickerProps) {
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Worktree picker ─────────────────────────────────────────────────────────
+//
+// Optional isolated git worktree for the new session. A single toggle chip
+// (styled like the mode chips); enabling it reveals an editable branch-name
+// input beside it. The daemon runs `git worktree add -b <branch>` from the
+// project's current HEAD and the session's cwd becomes the worktree.
+
+interface WorktreePickerProps {
+  enabled: boolean;
+  branch: string;
+  onToggle: () => void;
+  onBranchChange: (branch: string) => void;
+}
+
+function WorktreePicker({ enabled, branch, onToggle, onBranchChange }: WorktreePickerProps) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          color: 'var(--text-faint)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.18em',
+          marginBottom: 8,
+          flexShrink: 0,
+        }}
+      >
+        Git worktree
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={onToggle}
+          title="Run this agent in an isolated git worktree — a new branch from the project's current HEAD, checked out in a sibling directory (<repo>.worktrees/<branch>)"
+          style={{
+            padding: '4px 10px',
+            height: 24,
+            borderRadius: 'var(--radius-snug)',
+            border: `1px solid ${enabled ? 'var(--accent-amber)' : 'var(--border)'}`,
+            background: enabled
+              ? 'color-mix(in srgb, var(--accent-amber) 16%, var(--bg-elevated))'
+              : 'var(--bg-sidebar)',
+            color: enabled ? 'var(--accent-amber)' : 'var(--text-secondary)',
+            fontFamily: 'inherit',
+            fontSize: 11,
+            fontWeight: enabled ? 600 : 500,
+            letterSpacing: '0.02em',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            transition:
+              'border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)',
+          }}
+        >
+          Isolate in worktree
+        </button>
+        {enabled && (
+          <Input
+            value={branch}
+            onChange={(e) => onBranchChange(e.target.value)}
+            placeholder="branch name"
+            title="New branch created from the project's current HEAD"
+            wrapperStyle={{ flex: 1, minWidth: 0 }}
+            style={{ fontSize: 11, padding: '4px 10px', fontFamily: 'var(--font-mono, monospace)' }}
+          />
+        )}
       </div>
     </div>
   );

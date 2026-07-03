@@ -270,6 +270,9 @@ export const api = {
         // non-'live' (Codex/Cursor/Hermes), so the user explicitly picks rather
         // than relying on the per-provider seed.
         mode?: string;
+        // Create an isolated git worktree (new branch from the project's HEAD)
+        // and run the session inside it. 409 on branch/dir collision.
+        worktree?: { branch: string };
       },
     ) => post<Session>(`/api/projects/${projectId}/sessions`, data),
     update: (id: string, data: Partial<Session>) => put<Session>(`/api/sessions/${id}`, data),

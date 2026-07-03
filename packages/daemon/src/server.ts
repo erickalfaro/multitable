@@ -95,7 +95,7 @@ export function createServer(
   // ─── Mount API routes ───────────────────────────────────────────────────────
 
   app.use('/api/projects', createProjectsRouter(manager, gitWatcher, agentManager));
-  app.use('/api/sessions', createSessionsRouter(agentManager));
+  app.use('/api/sessions', createSessionsRouter(agentManager, gitWatcher));
   app.use('/api/commands', createCommandsRouter(manager));
   app.use('/api/processes', createProcessesRouter(manager));
   app.use('/api/terminals', createTerminalsRouter(manager));

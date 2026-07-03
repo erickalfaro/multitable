@@ -728,6 +728,13 @@ function App() {
           store.setGitStatus(projectId, status);
         }
       }),
+      wsClient.on('git:session-status-changed', (msg: any) => {
+        const sessionId = msg.payload?.sessionId;
+        const status = msg.payload?.status;
+        if (typeof sessionId === 'string' && status) {
+          store.setSessionGitStatus(sessionId, status);
+        }
+      }),
       wsClient.on('session:tool-event', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
         const messages = msg.payload?.messages;

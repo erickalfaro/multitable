@@ -21,6 +21,17 @@ import {
   createTerminal,
 } from '../db/store.js';
 import type { GitWatcher } from '../git/watcher.js';
+import {
+  isGitRepo,
+  isValidBranchName,
+  branchExists,
+  worktreePathFor,
+  worktreeContainerFor,
+  addWorktree,
+  removeWorktree,
+  removeSessionWorktree,
+  deleteBranch,
+} from '../git/index.js';
 import { loadProjectConfig, loadGlobalConfig } from '../config/loader.js';
 import { removeAttachmentDir } from './attachments.js';
 import type { PtyManager } from '../pty/manager.js';
@@ -461,6 +472,24 @@ export function createProjectsRouter(
     // Stop git status watcher before the row is removed.
     gitWatcher.unwatch(req.params.id);
 
+    // Worktree teardown for worktree-backed sessions (same remove-if-clean
+    // policy as the single-session DELETE; dirty worktrees are kept so the
+    // uncommitted work survives the project delete).
+    for (const session of sessions) {
+      if (!session.worktreePath) continue;
+      gitWatcher.unwatchSession(session.id);
+      try {
+        await removeSessionWorktree(project.path, session.worktreePath);
+      } catch { /* best effort */ }
+    }
+    // Drop the sibling container dir once it's empty (best effort).
+    try {
+      const container = worktreeContainerFor(project.path);
+      if (fs.existsSync(container) && fs.readdirSync(container).length === 0) {
+        fs.rmdirSync(container);
+      }
+    } catch {}
+
     // Cascades to sessions/commands/terminals/session_events/cost_records.
     deleteProject(req.params.id);
     res.status(204).send();
@@ -549,9 +578,45 @@ export function createProjectsRouter(
       agentProvider,
       model,
       mode,
+      worktree,
     } = req.body || {};
     if (!name || !command) {
       return res.status(400).json({ error: 'name and command are required' });
+    }
+
+    // Optional isolated git worktree. Created on disk BEFORE the DB insert and
+    // before provisionSession — provider children bind to the session cwd at
+    // provision time, so the directory must already exist. Any git failure
+    // fails the whole request; no session row is left behind.
+    let worktreePath: string | null = null;
+    let worktreeBranch: string | null = null;
+    if (worktree) {
+      if (!isGitRepo(project.path)) {
+        return res.status(400).json({ error: 'Project is not a git repository' });
+      }
+      const branch = typeof worktree.branch === 'string' ? worktree.branch.trim() : '';
+      if (!branch) {
+        return res.status(400).json({ error: 'worktree.branch is required' });
+      }
+      if (!(await isValidBranchName(project.path, branch))) {
+        return res.status(400).json({ error: `Invalid branch name: ${branch}` });
+      }
+      if (await branchExists(project.path, branch)) {
+        return res.status(409).json({ error: `Branch already exists: ${branch}` });
+      }
+      const wtPath = worktreePathFor(project.path, branch);
+      if (fs.existsSync(wtPath)) {
+        return res.status(409).json({ error: `Worktree directory already exists: ${wtPath}` });
+      }
+      try {
+        await addWorktree(project.path, wtPath, branch);
+      } catch (err) {
+        // git's own stderr (in err.message) is the useful diagnostic here.
+        const msg = err instanceof Error ? err.message : String(err);
+        return res.status(500).json({ error: `Failed to create worktree: ${msg}` });
+      }
+      worktreePath = wtPath;
+      worktreeBranch = branch;
     }
 
     try {
@@ -576,7 +641,9 @@ export function createProjectsRouter(
         projectId: req.params.id,
         name,
         command,
-        workingDirectory: workingDirectory || project.path,
+        workingDirectory: worktreePath ?? (workingDirectory || project.path),
+        worktreePath,
+        worktreeBranch,
         type: 'session',
         autostart,
         autorestart,
@@ -610,6 +677,11 @@ export function createProjectsRouter(
         claudeSessionId: session.claudeSessionId ?? null,
         claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
       });
+      // Stream git status for the worktree so the session's branch/dirty
+      // indicator stays live (broadcast as git:session-status-changed).
+      if (worktreePath) {
+        gitWatcher.watchSession(session.id, worktreePath);
+      }
       // Mint the provider-side session id BEFORE returning. The cold-start
       // cost (codex `thread/start` RPC ~500ms–2s; warmup at boot has already
       // paid for the app-server spawn) happens here instead of on the user's
@@ -631,6 +703,15 @@ export function createProjectsRouter(
         capabilities,
       });
     } catch (err) {
+      // The session never came to life — roll the worktree (and its branch)
+      // back so a retry with the same name doesn't 409. "Branch always kept"
+      // applies to deleting a real session, not to a failed create.
+      if (worktreePath && worktreeBranch) {
+        try {
+          await removeWorktree(project.path, worktreePath);
+          await deleteBranch(project.path, worktreeBranch, true);
+        } catch {}
+      }
       res.status(500).json({ error: 'Failed to create session' });
     }
   });

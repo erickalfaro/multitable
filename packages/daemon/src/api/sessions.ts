@@ -24,8 +24,14 @@ import { parseCursorSession } from '../transcripts/cursorParser.js';
 import { createAttachmentHandler, rawAttachmentBody, removeAttachmentDir } from './attachments.js';
 import type { AgentSessionManager } from '../agent/manager.js';
 import { loadGlobalConfig, saveGlobalConfigDebounced } from '../config/loader.js';
+import { removeSessionWorktree } from '../git/index.js';
+import type { GitWatcher } from '../git/watcher.js';
+import { createAlert } from '../agent/alerts.js';
 
-export function createSessionsRouter(agentManager: AgentSessionManager): Router {
+export function createSessionsRouter(
+  agentManager: AgentSessionManager,
+  gitWatcher: GitWatcher,
+): Router {
   const router = Router();
 
   const attachmentHandler = createAttachmentHandler({
@@ -71,7 +77,8 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
     });
   });
 
-  // POST /api/sessions
+  // POST /api/sessions — legacy, unused by the web UI. Worktree-backed
+  // creation lives on POST /api/projects/:id/sessions (the projects router).
   router.post('/', async (req: Request, res: Response) => {
     const {
       projectId,
@@ -162,14 +169,36 @@ export function createSessionsRouter(agentManager: AgentSessionManager): Router 
   });
 
   // DELETE /api/sessions/:id
-  router.delete('/:id', (req: Request, res: Response) => {
+  router.delete('/:id', async (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
+    const project = getProjectById(session.projectId);
 
     deleteSession(req.params.id);
     // Clean up in-memory agent state + any in-flight turn.
     agentManager.remove(req.params.id);
     removeAttachmentDir(req.params.id);
+    // Worktree teardown: remove only when clean. A dirty worktree is kept —
+    // destroying uncommitted work on a session delete would be unrecoverable.
+    // The branch is never deleted either way.
+    if (session.worktreePath && project) {
+      gitWatcher.unwatchSession(session.id);
+      const result = await removeSessionWorktree(project.path, session.worktreePath);
+      if (!result.removed && result.reason !== 'missing') {
+        agentManager.emit('alert', {
+          alert: createAlert({
+            sessionId: session.id,
+            category: 'status',
+            severity: 'warning',
+            title: 'Worktree kept',
+            body:
+              result.reason === 'dirty'
+                ? `${session.worktreePath} has uncommitted changes — left in place on branch ${session.worktreeBranch}`
+                : `Failed to remove worktree ${session.worktreePath}: ${result.message}`,
+          }),
+        });
+      }
+    }
     res.status(204).send();
   });
 

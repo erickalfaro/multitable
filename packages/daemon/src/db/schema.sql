@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at INTEGER NOT NULL,
   last_active_at INTEGER,
   loader_variant TEXT,
-  git_baseline_commit TEXT
+  git_baseline_commit TEXT,
+  worktree_path TEXT,
+  worktree_branch TEXT
 );
 
 CREATE TABLE IF NOT EXISTS claude_session_loaders (
