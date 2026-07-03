@@ -108,9 +108,14 @@ async function main() {
   // eslint-disable-next-line prefer-const
   let broadcastRef: (type: string, payload: unknown) => void = () => {};
   const fileWatcher = new FileWatcher();
-  const gitWatcher = new GitWatcher((projectId, status) => {
-    broadcastRef('git:status-changed', { projectId, status });
-  });
+  const gitWatcher = new GitWatcher(
+    (projectId, status) => {
+      broadcastRef('git:status-changed', { projectId, status });
+    },
+    (sessionId, status) => {
+      broadcastRef('git:session-status-changed', { sessionId, status });
+    },
+  );
 
   // 5c. Provider catalog — hydrate from on-disk cache BEFORE the server
   // starts so the very first /api/providers call returns cached data instead
@@ -173,6 +178,11 @@ async function main() {
         claudeSessionId: session.claudeSessionId ?? null,
         claudeSessionIdHistory: session.claudeSessionIdHistory ?? [],
       });
+      // Re-attach the worktree status watcher across daemon restarts. A
+      // manually-deleted worktree dir makes this a no-op (isGitRepo guard).
+      if (session.worktreePath) {
+        gitWatcher.watchSession(session.id, session.worktreePath);
+      }
       console.log(`Registered session: ${session.name} (${session.id})`);
     }
 

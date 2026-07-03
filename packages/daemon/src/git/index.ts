@@ -241,6 +241,89 @@ export async function stashPop(projectPath: string): Promise<void> {
   await git(projectPath).stash(['pop']);
 }
 
+// ─── Worktrees ────────────────────────────────────────────────────────────────
+//
+// Session worktrees live in a sibling directory of the repo
+// (`<parent>/<repo>.worktrees/<branch>`) so the project's own watcher and
+// gitignore are never involved. Branch names may contain `/` (e.g. `mt/...`);
+// the directory name flattens those to `-` while the branch keeps the slash.
+
+export function worktreeContainerFor(repoPath: string): string {
+  return path.join(path.dirname(repoPath), `${path.basename(repoPath)}.worktrees`);
+}
+
+export function worktreePathFor(repoPath: string, branch: string): string {
+  return path.join(worktreeContainerFor(repoPath), branch.replace(/\//g, '-'));
+}
+
+export async function isValidBranchName(projectPath: string, branch: string): Promise<boolean> {
+  try {
+    await git(projectPath).raw(['check-ref-format', '--branch', branch]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function branchExists(projectPath: string, branch: string): Promise<boolean> {
+  try {
+    await git(projectPath).revparse(['--verify', `refs/heads/${branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `git worktree add -b <branch> <path>` — new branch from the repo's current HEAD. */
+export async function addWorktree(
+  repoPath: string,
+  worktreePath: string,
+  branch: string
+): Promise<void> {
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  await git(repoPath).raw(['worktree', 'add', '-b', branch, worktreePath]);
+}
+
+/** Clean = no staged, unstaged, untracked, or conflicted entries. */
+export async function isWorktreeClean(worktreePath: string): Promise<boolean> {
+  const status = await git(worktreePath).status();
+  return status.files.length === 0 && status.conflicted.length === 0;
+}
+
+export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+  await git(repoPath).raw(['worktree', 'remove', worktreePath]);
+}
+
+/**
+ * Delete-path teardown: remove the worktree only when it holds no uncommitted
+ * work. The branch is never deleted — committed work stays reachable either way.
+ */
+export async function removeSessionWorktree(
+  repoPath: string,
+  worktreePath: string
+): Promise<{ removed: boolean; reason?: 'dirty' | 'missing' | 'error'; message?: string }> {
+  if (!fs.existsSync(worktreePath)) {
+    // Manually deleted out from under us — drop git's stale bookkeeping entry.
+    try {
+      await git(repoPath).raw(['worktree', 'prune']);
+    } catch {}
+    return { removed: false, reason: 'missing' };
+  }
+  try {
+    if (!(await isWorktreeClean(worktreePath))) {
+      return { removed: false, reason: 'dirty' };
+    }
+    await removeWorktree(repoPath, worktreePath);
+    return { removed: true };
+  } catch (err) {
+    return {
+      removed: false,
+      reason: 'error',
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 // ─── Remote ops ───────────────────────────────────────────────────────────────
 
 export interface PushPullResult {

@@ -168,6 +168,11 @@ export interface Session extends ManagedProcess {
   tags?: string[];
   createdAt?: number;
   lastActiveAt?: number | null; // bumped per turn boundary so the sidebar can sort by recency
+  // Set when the session was created with an isolated git worktree. The
+  // session's workingDir points at worktreePath; the branch was created from
+  // the project's HEAD at creation time.
+  worktreePath?: string | null;
+  worktreeBranch?: string | null;
 }
 
 export interface Command extends ManagedProcess {

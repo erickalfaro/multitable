@@ -57,6 +57,12 @@ export function initDb(): void {
   try {
     db.exec('ALTER TABLE sessions ADD COLUMN thinking_effort TEXT');
   } catch {}
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
+  } catch {}
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN worktree_branch TEXT');
+  } catch {}
 
   // Sessions no longer use a PTY (they go through the Claude/Codex SDK). The
   // pre-SDK PTY scrollback column accumulated stale BLOBs that ballooned
@@ -295,6 +301,8 @@ export interface SessionRow {
   created_at: number;
   last_active_at: number | null;
   loader_variant: string | null;
+  worktree_path: string | null;
+  worktree_branch: string | null;
 }
 
 export interface SessionRecord {
@@ -325,6 +333,8 @@ export interface SessionRecord {
   createdAt: number;
   lastActiveAt: number | null;
   loaderVariant: string | null;
+  worktreePath: string | null;
+  worktreeBranch: string | null;
 }
 
 // Parse the JSON-encoded chain of prior claude_session_ids the SDK has assigned
@@ -403,6 +413,8 @@ function rowToSession(row: SessionRow): SessionRecord {
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
     loaderVariant: row.loader_variant,
+    worktreePath: row.worktree_path,
+    worktreeBranch: row.worktree_branch,
   };
 }
 
@@ -461,6 +473,10 @@ export function createSession(data: {
   // The agent manager validates against the adapter's capabilities.modes when
   // the session is registered, so an invalid value would surface on first turn.
   mode?: string | null;
+  // Set when the session was created with an isolated git worktree. The
+  // worktree must already exist on disk; workingDirectory should point at it.
+  worktreePath?: string | null;
+  worktreeBranch?: string | null;
 }): SessionRecord {
   const id = uuidv4();
   const now = Date.now();
@@ -504,8 +520,8 @@ export function createSession(data: {
       autostart, autorestart, autorestart_max, autorestart_delay_ms,
       autorestart_window_secs, autorespawn, terminal_alerts, file_watch_patterns,
       agent_provider, model, mode, scratchpad, created_at, loader_variant,
-      thinking_effort
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
+      thinking_effort, worktree_path, worktree_branch
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)
   `).run(
     id,
     data.projectId,
@@ -526,7 +542,9 @@ export function createSession(data: {
     initialMode,
     now,
     loaderVariant,
-    data.thinkingEffort ?? null
+    data.thinkingEffort ?? null,
+    data.worktreePath ?? null,
+    data.worktreeBranch ?? null
   );
   return getSessionById(id)!;
 }

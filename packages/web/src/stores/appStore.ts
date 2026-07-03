@@ -291,6 +291,12 @@ interface AppState {
   gitByProject: Record<string, GitStatusSummary>;
   setGitStatus: (projectId: string, status: GitStatusSummary) => void;
 
+  // Live git status per worktree-backed session — fed by
+  // `git:session-status-changed` WS events (daemon GitWatcher on the
+  // session's worktree). No REST seed: empty until the first event.
+  gitBySession: Record<string, GitStatusSummary>;
+  setSessionGitStatus: (sessionId: string, status: GitStatusSummary) => void;
+
   // Alerts (notification history + per-session unread counts)
   alerts: SessionAlert[];
   unreadBySession: Record<string, number>;
@@ -616,7 +622,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       delete messagesBySession[id];
       const messagesMeta = { ...s.messagesMeta };
       delete messagesMeta[id];
-      return { sessions, messagesBySession, messagesMeta };
+      const gitBySession = { ...s.gitBySession };
+      delete gitBySession[id];
+      return { sessions, messagesBySession, messagesMeta, gitBySession };
     }),
   upsertCommand: (command) =>
     set((s) => ({ commands: { ...s.commands, [command.id]: command } })),
@@ -1258,6 +1266,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   gitByProject: {},
   setGitStatus: (projectId, status) =>
     set((s) => ({ gitByProject: { ...s.gitByProject, [projectId]: status } })),
+  gitBySession: {},
+  setSessionGitStatus: (sessionId, status) =>
+    set((s) => ({ gitBySession: { ...s.gitBySession, [sessionId]: status } })),
 
   // Alerts
   alerts: [],

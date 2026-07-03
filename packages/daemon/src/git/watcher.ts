@@ -55,13 +55,38 @@ function loadGitignorePatterns(projectPath: string): string[] {
 export class GitWatcher {
   private watchers = new Map<string, WatchEntry>();
   private onStatus: (projectId: string, status: GitStatusSummary) => void;
+  private onSessionStatus?: (sessionId: string, status: GitStatusSummary) => void;
 
-  constructor(onStatus: (projectId: string, status: GitStatusSummary) => void) {
+  constructor(
+    onStatus: (projectId: string, status: GitStatusSummary) => void,
+    onSessionStatus?: (sessionId: string, status: GitStatusSummary) => void,
+  ) {
     this.onStatus = onStatus;
+    this.onSessionStatus = onSessionStatus;
   }
 
   watch(projectId: string, projectPath: string): void {
-    this.unwatch(projectId);
+    this.attach(projectId, projectPath, (status) => this.onStatus(projectId, status));
+  }
+
+  // Session worktree watch. Keys are prefixed `session:` so they can never
+  // collide with project ids (bare UUIDs) in the shared watchers map.
+  watchSession(sessionId: string, worktreePath: string): void {
+    this.attach(`session:${sessionId}`, worktreePath, (status) =>
+      this.onSessionStatus?.(sessionId, status),
+    );
+  }
+
+  unwatchSession(sessionId: string): void {
+    this.unwatch(`session:${sessionId}`);
+  }
+
+  private attach(
+    key: string,
+    projectPath: string,
+    emit: (status: GitStatusSummary) => void,
+  ): void {
+    this.unwatch(key);
     if (!isGitRepo(projectPath)) return;
 
     const watcher = chokidar.watch(projectPath, {
@@ -102,8 +127,27 @@ export class GitWatcher {
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
     });
 
+    // Linked worktrees keep HEAD/index under the main repo's
+    // `.git/worktrees/<name>/` — outside the watched tree (`.git` here is a
+    // pointer file, not a directory). Watch the resolved gitdir's HEAD/index
+    // too so commits and branch flips inside the worktree refresh status.
+    // Best-effort: a malformed pointer just means fewer refresh triggers.
+    try {
+      const dotGit = path.join(projectPath, '.git');
+      if (fs.statSync(dotGit).isFile()) {
+        const gitdir = fs
+          .readFileSync(dotGit, 'utf8')
+          .match(/^gitdir:\s*(.+)$/m)?.[1]
+          ?.trim();
+        if (gitdir) {
+          const resolved = path.isAbsolute(gitdir) ? gitdir : path.join(projectPath, gitdir);
+          watcher.add([path.join(resolved, 'HEAD'), path.join(resolved, 'index')]);
+        }
+      }
+    } catch {}
+
     const entry: WatchEntry = { watcher, timer: null, inflight: false };
-    const tick = () => this.refresh(projectId, projectPath, entry);
+    const tick = () => this.refresh(projectPath, entry, emit);
 
     const debounced = () => {
       if (entry.timer) clearTimeout(entry.timer);
@@ -138,18 +182,18 @@ export class GitWatcher {
       console.warn(`[git/watcher] watcher error (${projectPath}):`, err);
     });
 
-    this.watchers.set(projectId, entry);
+    this.watchers.set(key, entry);
 
     // Emit an initial status so subscribers don't have to fetch separately.
     void tick();
   }
 
-  unwatch(projectId: string): void {
-    const entry = this.watchers.get(projectId);
+  unwatch(key: string): void {
+    const entry = this.watchers.get(key);
     if (!entry) return;
     if (entry.timer) clearTimeout(entry.timer);
     entry.watcher.close().catch(() => {});
-    this.watchers.delete(projectId);
+    this.watchers.delete(key);
   }
 
   unwatchAll(): void {
@@ -159,15 +203,15 @@ export class GitWatcher {
   // Recompute and broadcast. Drops overlapping ticks; the trailing edge of
   // the debounce window is what matters when a burst of writes lands.
   private async refresh(
-    projectId: string,
     projectPath: string,
     entry: WatchEntry,
+    emit: (status: GitStatusSummary) => void,
   ): Promise<void> {
     if (entry.inflight) return;
     entry.inflight = true;
     try {
       const status = await getStatusSummary(projectPath);
-      this.onStatus(projectId, status);
+      emit(status);
     } catch {
       // Repos in transitional states (rebase mid-flight, etc.) can throw —
       // swallow and try again on the next tick.

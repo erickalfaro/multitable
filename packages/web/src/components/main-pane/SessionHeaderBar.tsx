@@ -6,6 +6,7 @@ import { PinToggle } from './PinToggle';
 import { ModeBadge } from './ModeBadge';
 import { ModelChip } from './chat/ModelChip';
 import { UsageLimitBadge } from './UsageLimitBadge';
+import { WorktreeBadge } from './WorktreeBadge';
 import type { Session } from '../../lib/types';
 import { IconButton, Spinner } from '../ui';
 import { api } from '../../lib/api';
@@ -224,6 +225,7 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
         >
           <ModelChip session={session} />
           <ModeBadge session={session} placement="bottom" />
+          <WorktreeBadge session={session} />
           <UsageLimitBadge session={session} placement="bottom" />
         </div>
       </div>
@@ -310,6 +312,7 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
           {/* Always-present usage-limits indicator (hidden when the provider
               has no live feed). Sits ahead of the action buttons so it's the
               first thing in the header's right cluster. */}
+          <WorktreeBadge session={session} />
           <UsageLimitBadge session={session} placement="bottom" />
           <IconButton
             size="sm"
