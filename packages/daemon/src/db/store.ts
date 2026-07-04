@@ -572,6 +572,8 @@ export function updateSession(id: string, data: Partial<{
   thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   scratchpad: string;
   lastActiveAt: number;
+  worktreePath: string | null;
+  worktreeBranch: string | null;
 }>): SessionRecord | null {
   const fields: string[] = [];
   const values: any[] = [];
@@ -595,6 +597,8 @@ export function updateSession(id: string, data: Partial<{
     lastActiveAt: 'last_active_at',
     mode: 'mode',
     thinkingEffort: 'thinking_effort',
+    worktreePath: 'worktree_path',
+    worktreeBranch: 'worktree_branch',
   };
 
   for (const [key, col] of Object.entries(fieldMap)) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { GitBranch, Trash2, Bot } from 'lucide-react';
 import { api } from '../../../lib/api';
+import { useAppStore } from '../../../stores/appStore';
 import type { GitWorktree } from '../../../lib/types';
 import { GitConfirmDialog } from './GitConfirmDialog';
 
@@ -12,11 +13,14 @@ interface Props {
 }
 
 // Inventory of the repo's linked worktrees (session-created or otherwise).
-// Ownership rule: a worktree referenced by a live agent session is removed by
-// deleting that agent — this list only offers removal for orphans, so nothing
-// "floating" on disk is invisible or unkillable, and nothing under a running
-// agent can be yanked away.
+// Ownership rule: a worktree referenced by a live agent session belongs to
+// that agent — removing it from here DETACHES it first (the agent survives
+// and continues in the project root; only the directory goes), always behind
+// a confirm that names the agent. Orphans remove directly: one click when
+// clean, a discard confirm when dirty. Either way nothing "floating" on disk
+// is invisible or unkillable.
 export function GitWorktreeList({ projectId, refreshKey, onError }: Props) {
+  const upsertSession = useAppStore((s) => s.upsertSession);
   const [worktrees, setWorktrees] = useState<GitWorktree[] | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<GitWorktree | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -46,6 +50,24 @@ export function GitWorktreeList({ projectId, refreshKey, onError }: Props) {
       } else {
         onError(e.message || 'Failed to remove worktree');
       }
+    } finally {
+      setRemoving(null);
+    }
+  };
+
+  // Owned worktrees: detach from the agent (session survives, cwd falls back
+  // to the project root) and remove the directory. Reached only via the
+  // confirm dialog, so force is always true here.
+  const detach = async (wt: GitWorktree) => {
+    if (!wt.sessionId) return;
+    setRemoving(wt.path);
+    try {
+      const r = await api.sessions.detachWorktree(wt.sessionId, true);
+      if (r.session) upsertSession(r.session);
+      load();
+    } catch (err) {
+      const e = err as Error & { status?: number };
+      onError(e.message || 'Failed to detach worktree');
     } finally {
       setRemoving(null);
     }
@@ -114,9 +136,9 @@ export function GitWorktreeList({ projectId, refreshKey, onError }: Props) {
             ) : (
               <Tag color="var(--text-muted)">clean</Tag>
             )}
-            {owned ? (
+            {owned && (
               <span
-                title={`In use by agent "${wt.sessionName}" — delete the agent to remove this worktree`}
+                title={`In use by agent "${wt.sessionName}" — removing detaches the agent (it keeps running, back in the project root)`}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -132,45 +154,65 @@ export function GitWorktreeList({ projectId, refreshKey, onError }: Props) {
                 <Bot size={11} style={{ flexShrink: 0 }} />
                 {wt.sessionName}
               </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void remove(wt, false)}
-                disabled={removing === wt.path}
-                title={wt.prunable ? 'Remove stale worktree entry' : 'Remove worktree'}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  padding: 3,
-                  background: 'transparent',
-                  border: 'none',
-                  borderRadius: 'var(--radius-snug)',
-                  color: 'var(--status-error)',
-                  cursor: removing === wt.path ? 'default' : 'pointer',
-                  opacity: removing === wt.path ? 0.5 : 0.8,
-                }}
-              >
-                <Trash2 size={12} />
-              </button>
             )}
+            <button
+              type="button"
+              // Owned rows always confirm (the action also detaches an agent);
+              // orphans confirm only when the server reports them dirty.
+              onClick={() => (owned ? setConfirmTarget(wt) : void remove(wt, false))}
+              disabled={removing === wt.path}
+              title={
+                owned
+                  ? `Detach from "${wt.sessionName}" and remove worktree (the agent is kept)`
+                  : wt.prunable
+                    ? 'Remove stale worktree entry'
+                    : 'Remove worktree'
+              }
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: 3,
+                background: 'transparent',
+                border: 'none',
+                borderRadius: 'var(--radius-snug)',
+                color: 'var(--status-error)',
+                cursor: removing === wt.path ? 'default' : 'pointer',
+                opacity: removing === wt.path ? 0.5 : 0.8,
+              }}
+            >
+              <Trash2 size={12} />
+            </button>
           </div>
         );
       })}
 
       <GitConfirmDialog
         open={confirmTarget !== null}
-        title="Remove Dirty Worktree"
+        title={confirmTarget?.sessionId ? 'Detach & Remove Worktree' : 'Remove Dirty Worktree'}
         destructive
-        confirmLabel="Discard & Remove"
+        confirmLabel={confirmTarget?.sessionId ? 'Detach & Remove' : 'Discard & Remove'}
         body={
-          <span>
-            Worktree <code>{confirmTarget?.branch ?? confirmTarget?.path}</code> has uncommitted
-            changes. Removing it discards them permanently (the branch and its commits are kept).
-          </span>
+          confirmTarget?.sessionId ? (
+            <span>
+              Worktree <code>{confirmTarget.branch ?? confirmTarget.path}</code> belongs to agent{' '}
+              <strong>{confirmTarget.sessionName}</strong>. The agent is kept and will continue in
+              the project root; the worktree is deleted
+              {confirmTarget.dirty ? ' and its uncommitted changes are discarded permanently' : ''}.
+              The branch and its commits are kept.
+            </span>
+          ) : (
+            <span>
+              Worktree <code>{confirmTarget?.branch ?? confirmTarget?.path}</code> has uncommitted
+              changes. Removing it discards them permanently (the branch and its commits are kept).
+            </span>
+          )
         }
         onCancel={() => setConfirmTarget(null)}
         onConfirm={() => {
-          if (confirmTarget) void remove(confirmTarget, true);
+          if (confirmTarget) {
+            if (confirmTarget.sessionId) void detach(confirmTarget);
+            else void remove(confirmTarget, true);
+          }
           setConfirmTarget(null);
         }}
       />
