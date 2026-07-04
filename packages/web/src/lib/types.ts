@@ -435,6 +435,20 @@ export interface GitStatusSummary {
   head: string | null;
 }
 
+export interface GitWorktree {
+  path: string;
+  branch: string | null;
+  head: string | null;
+  isMain: boolean;
+  /** Directory vanished; git bookkeeping entry is stale (removable via prune). */
+  prunable: boolean;
+  dirty: boolean;
+  /** Live agent session that owns this worktree, if any — owned worktrees are
+   * removed by deleting the agent, never directly from the git panel. */
+  sessionId: string | null;
+  sessionName: string | null;
+}
+
 export interface GitLogEntry {
   sha: string;
   shortSha: string;

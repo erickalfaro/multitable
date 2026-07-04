@@ -10,6 +10,7 @@ import { GitChangeList } from './GitChangeList';
 import { GitDiffEditor } from './GitDiffEditor';
 import { GitBranchQuickPick } from './GitBranchQuickPick';
 import { GitConfirmDialog } from './GitConfirmDialog';
+import { GitWorktreeList } from './GitWorktreeList';
 import type { GitMenuItem } from './GitActionMenu';
 
 interface Props {
@@ -453,6 +454,7 @@ function ProjectBody({
           onDiscard={onDiscard}
           onDiscardAll={onDiscardAll}
         />
+        <GitWorktreeList projectId={projectId} refreshKey={refreshKey} onError={onDiffError} />
       </div>
     </div>
   );

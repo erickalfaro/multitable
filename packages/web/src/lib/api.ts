@@ -11,6 +11,7 @@ import type {
   GitStatusSummary,
   GitLogEntry,
   GitBranchList,
+  GitWorktree,
   PermissionPrompt,
   ElicitationPrompt,
   OptionPrompt,
@@ -474,6 +475,15 @@ export const api = {
       post<{ ok: true; summary: string }>(`/api/projects/${projectId}/git/push`, opts ?? {}),
     deleteBranch: (projectId: string, name: string, force = false) =>
       del(`/api/projects/${projectId}/git/branches/${encodeURIComponent(name)}${force ? '?force=1' : ''}`),
+    worktrees: (projectId: string) =>
+      get<{ worktrees: GitWorktree[] }>(`/api/projects/${projectId}/git/worktrees`),
+    // 409 with code 'dirty' when force=false and the worktree has uncommitted
+    // changes; 409 with code 'in-use' when a live agent owns it.
+    removeWorktree: (projectId: string, path: string, force = false) =>
+      post<{ ok: true; pruned?: boolean }>(`/api/projects/${projectId}/git/worktrees/remove`, {
+        path,
+        force,
+      }),
     aiCommitMessage: (projectId: string) =>
       post<{ message: string }>(`/api/projects/${projectId}/git/ai-commit-message`, {}),
   },

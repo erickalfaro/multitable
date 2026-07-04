@@ -290,8 +290,68 @@ export async function isWorktreeClean(worktreePath: string): Promise<boolean> {
   return status.files.length === 0 && status.conflicted.length === 0;
 }
 
-export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
-  await git(repoPath).raw(['worktree', 'remove', worktreePath]);
+export async function removeWorktree(
+  repoPath: string,
+  worktreePath: string,
+  opts: { force?: boolean } = {}
+): Promise<void> {
+  const args = ['worktree', 'remove'];
+  if (opts.force) args.push('--force');
+  args.push(worktreePath);
+  await git(repoPath).raw(args);
+}
+
+export interface WorktreeEntry {
+  /** Absolute path of the worktree's root. */
+  path: string;
+  /** Checked-out branch (refs/heads/ stripped), or null when detached. */
+  branch: string | null;
+  head: string | null;
+  /** True for the repo's main working tree (never removable). */
+  isMain: boolean;
+  /** git's own flag for a worktree whose directory has vanished. */
+  prunable: boolean;
+}
+
+/** Parse `git worktree list --porcelain` — one stanza per worktree, blank-line separated. */
+export async function listWorktrees(repoPath: string): Promise<WorktreeEntry[]> {
+  const raw = await git(repoPath).raw(['worktree', 'list', '--porcelain']);
+  const entries: WorktreeEntry[] = [];
+  let current: Partial<WorktreeEntry> | null = null;
+  const flush = () => {
+    if (current?.path) {
+      entries.push({
+        path: current.path,
+        branch: current.branch ?? null,
+        head: current.head ?? null,
+        isMain: entries.length === 0, // porcelain lists the main worktree first
+        prunable: current.prunable ?? false,
+      });
+    }
+    current = null;
+  };
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+    if (line.startsWith('worktree ')) {
+      flush();
+      current = { path: line.slice('worktree '.length).trim() };
+    } else if (current && line.startsWith('HEAD ')) {
+      current.head = line.slice('HEAD '.length).trim();
+    } else if (current && line.startsWith('branch ')) {
+      current.branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '');
+    } else if (current && line.startsWith('prunable')) {
+      current.prunable = true;
+    }
+  }
+  flush();
+  return entries;
+}
+
+export async function pruneWorktrees(repoPath: string): Promise<void> {
+  await git(repoPath).raw(['worktree', 'prune']);
 }
 
 /**

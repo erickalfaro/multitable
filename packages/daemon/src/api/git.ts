@@ -1,9 +1,14 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getProjectById } from '../db/store.js';
+import path from 'path';
+import { getProjectById, getAllSessions } from '../db/store.js';
 import {
   isGitRepo,
   getStatusSummary,
+  listWorktrees,
+  removeWorktree,
+  pruneWorktrees,
+  isWorktreeClean,
   getDiff,
   getStagedDiff,
   getStagedDiffForAi,
@@ -313,6 +318,104 @@ export function createGitRouter(): Router {
       res.json({ ok: true });
     } catch (err) {
       handleError(err, res, 'Branch delete failed');
+    }
+  });
+
+  // ── Worktrees ──────────────────────────────────────────────────────────────
+  //
+  // Inventory + cleanup surface for linked worktrees. Sessions own the
+  // worktrees they created: an owned worktree is never removable here (delete
+  // the agent instead — that routes through the remove-if-clean teardown).
+  // Orphans (no live session references the path) are the "floating dirty"
+  // leftovers this surface exists to make visible and killable.
+
+  // Resolve which live session (if any) owns each worktree path. Paths are
+  // normalized via path.resolve so a trailing slash or symlink-free variant
+  // still matches the stored sessions.worktree_path.
+  function worktreeOwners(): Map<string, { sessionId: string; sessionName: string }> {
+    const owners = new Map<string, { sessionId: string; sessionName: string }>();
+    for (const s of getAllSessions()) {
+      if (s.worktreePath) {
+        owners.set(path.resolve(s.worktreePath), { sessionId: s.id, sessionName: s.name });
+      }
+    }
+    return owners;
+  }
+
+  router.get('/worktrees', async (req, res) => {
+    const ctx = resolveProject(req, res);
+    if (!ctx) return;
+    try {
+      const entries = await listWorktrees(ctx.path);
+      const owners = worktreeOwners();
+      const worktrees = await Promise.all(
+        entries.map(async (wt) => {
+          const owner = owners.get(path.resolve(wt.path)) ?? null;
+          let dirty = false;
+          if (!wt.prunable) {
+            try {
+              dirty = !(await isWorktreeClean(wt.path));
+            } catch {
+              // Transitional repo state — report clean rather than failing the list.
+            }
+          }
+          return { ...wt, dirty, sessionId: owner?.sessionId ?? null, sessionName: owner?.sessionName ?? null };
+        }),
+      );
+      res.json({ worktrees });
+    } catch (err) {
+      handleError(err, res, 'Failed to list worktrees');
+    }
+  });
+
+  router.post('/worktrees/remove', async (req, res) => {
+    const ctx = resolveProject(req, res);
+    if (!ctx) return;
+    const target = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
+    const force = req.body?.force === true;
+    if (!target) {
+      res.status(400).json({ error: 'path is required' });
+      return;
+    }
+    try {
+      // Only paths git itself reports are removable — this is what stops the
+      // endpoint from being a generic rm -rf: an arbitrary path never matches.
+      const entries = await listWorktrees(ctx.path);
+      const wt = entries.find((e) => path.resolve(e.path) === path.resolve(target));
+      if (!wt) {
+        res.status(404).json({ error: 'Not a linked worktree of this repository' });
+        return;
+      }
+      if (wt.isMain) {
+        res.status(400).json({ error: 'The main working tree cannot be removed' });
+        return;
+      }
+      const owner = worktreeOwners().get(path.resolve(wt.path));
+      if (owner) {
+        res.status(409).json({
+          error: `Worktree is in use by agent "${owner.sessionName}" — delete the agent instead`,
+          code: 'in-use',
+          sessionId: owner.sessionId,
+        });
+        return;
+      }
+      if (wt.prunable) {
+        // Directory already gone — just drop git's stale bookkeeping.
+        await pruneWorktrees(ctx.path);
+        res.json({ ok: true, pruned: true });
+        return;
+      }
+      if (!force && !(await isWorktreeClean(wt.path))) {
+        res.status(409).json({
+          error: 'Worktree has uncommitted changes',
+          code: 'dirty',
+        });
+        return;
+      }
+      await removeWorktree(ctx.path, wt.path, { force });
+      res.json({ ok: true });
+    } catch (err) {
+      handleError(err, res, 'Failed to remove worktree');
     }
   });
 
