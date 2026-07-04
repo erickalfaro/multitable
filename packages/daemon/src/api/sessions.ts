@@ -24,7 +24,13 @@ import { parseCursorSession } from '../transcripts/cursorParser.js';
 import { createAttachmentHandler, rawAttachmentBody, removeAttachmentDir } from './attachments.js';
 import type { AgentSessionManager } from '../agent/manager.js';
 import { loadGlobalConfig, saveGlobalConfigDebounced } from '../config/loader.js';
-import { removeSessionWorktree } from '../git/index.js';
+import {
+  removeSessionWorktree,
+  removeWorktree,
+  isWorktreeClean,
+  pruneWorktrees,
+} from '../git/index.js';
+import fs from 'fs';
 import type { GitWatcher } from '../git/watcher.js';
 import { createAlert } from '../agent/alerts.js';
 
@@ -166,6 +172,63 @@ export function createSessionsRouter(
       agentManager.emit('session-renamed', { sessionId: req.params.id });
     }
     res.json(updated);
+  });
+
+  // POST /api/sessions/:id/detach-worktree
+  //
+  // Release a session's worktree without deleting the session: remove the
+  // worktree from disk, point the session back at the project root, and clear
+  // the worktree binding. The conversation (and the branch with any commits)
+  // survives; only the working directory goes. For "keep the chat for
+  // reference, reclaim the disk" — the common end-state of abandoned worktree
+  // sessions.
+  //
+  // 409 `busy` while a turn is in flight (the provider child's cwd is inside
+  // the worktree); 409 `dirty` without `force: true` when there are
+  // uncommitted changes.
+  router.post('/:id/detach-worktree', async (req: Request, res: Response) => {
+    const session = getSessionById(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session.worktreePath) {
+      return res.status(400).json({ error: 'Session has no worktree' });
+    }
+    const project = getProjectById(session.projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const agent = agentManager.get(session.id);
+    if (agent?.state === 'running') {
+      return res.status(409).json({
+        error: 'Agent has a turn in flight — stop it before detaching its worktree',
+        code: 'busy',
+      });
+    }
+    const force = req.body?.force === true;
+    try {
+      if (fs.existsSync(session.worktreePath)) {
+        if (!force && !(await isWorktreeClean(session.worktreePath))) {
+          return res.status(409).json({ error: 'Worktree has uncommitted changes', code: 'dirty' });
+        }
+        await removeWorktree(project.path, session.worktreePath, { force });
+      } else {
+        // Directory already gone — just drop git's stale bookkeeping.
+        try { await pruneWorktrees(project.path); } catch {}
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return res.status(500).json({ error: `Failed to remove worktree: ${msg}` });
+    }
+    gitWatcher.unwatchSession(session.id);
+    const updated = updateSession(session.id, {
+      workingDirectory: project.path,
+      worktreePath: null,
+      worktreeBranch: null,
+    });
+    // Point the in-memory session at the project root so the next turn spawns
+    // there. Providers whose threads pin options at start (Codex) simply start
+    // a fresh provider-side thread on the next message — same trade as a mode
+    // flip, and MultiTable's own conversation history is unaffected.
+    if (agent) agent.workingDir = project.path;
+    agentManager.emit('session-updated', { sessionId: session.id });
+    res.json({ ok: true, session: updated });
   });
 
   // DELETE /api/sessions/:id

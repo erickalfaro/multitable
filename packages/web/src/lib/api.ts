@@ -293,6 +293,11 @@ export const api = {
         { thinkingEffort },
       ),
     stop: (id: string) => post<{ ok: boolean }>(`/api/sessions/${id}/stop`),
+    // Remove the session's worktree and point it back at the project root; the
+    // session (and the branch) survive. 409 code 'dirty' without force, 409
+    // code 'busy' while a turn is in flight.
+    detachWorktree: (id: string, force = false) =>
+      post<{ ok: true; session: Session }>(`/api/sessions/${id}/detach-worktree`, { force }),
     renameAi: (id: string) =>
       post<{ session: Session; name: string; tags: string[] }>(`/api/sessions/${id}/rename-ai`),
     cost: (id: string) => get<{
