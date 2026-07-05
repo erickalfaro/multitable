@@ -1,6 +1,25 @@
 # MultiTable integration plan for GitHub Copilot
 
-Status: **GitHub Copilot is currently `comingSoon: true` in the AddAgentModal** ([`packages/web/src/components/modals/AddAgentModal.tsx:24`](../../../../packages/web/src/components/modals/AddAgentModal.tsx#L24)). No daemon-side integration exists. This file is the step-by-step for wiring it up. Read [`adapter-architecture.md`](adapter-architecture.md) first for the structural picture.
+Status: **IMPLEMENTED** (2026-07, SDK 1.0.5) — `packages/daemon/src/agent/providers/copilot.ts` +
+`packages/daemon/src/transcripts/copilotParser.ts` are live and GitHub Copilot is a selectable
+provider in the AddAgentModal. This file is kept as the historical plan/rationale. The shipped
+adapter **deviates** where SDK 1.0.5 made things native or reality differed:
+
+- **Modes are native** — `send({ prompt, agentMode: 'interactive'|'plan'|'autopilot' })` per send +
+  `onExitPlanModeRequest`; none of Phase 7's recreate-the-session recipes were needed.
+- **No dynamic-import hack** — the SDK ships a CJS build; a plain Node16/CJS `import` works.
+- **Session ids** — the adapter mints a fresh `randomUUID()` per provider conversation (NOT `s.id`):
+  `/clear` nulls `agentSessionId` and must start a new Copilot conversation.
+- **`reset()` does NOT call `client.deleteSession`** — MultiTable never wipes provider-side state.
+- **Parser reads `events.jsonl`**, not checkpoints (see pitfalls #19).
+- **Freeform `onUserInputRequest`** routes through the elicitation FORM UI (one-field schema);
+  multiple-choice goes through the AskUserQuestion permission-prompt path (grok pattern).
+- **`reasoningEffort` hard-fails on non-supporting models** — the adapter retries session
+  open once without it (pitfalls #31).
+- Past-agents browser (Phase 5's `GET /api/transcripts/copilot` + resume UI) was **not** built —
+  matches Grok/Cursor scope (restart hydration only).
+
+Read [`adapter-architecture.md`](adapter-architecture.md) first for the structural picture.
 
 ## Goal: parity with Codex provider
 

@@ -146,8 +146,35 @@ export const CURSOR_BASELINE: BaselineModel[] = [
   },
 ];
 
+// GitHub Copilot baseline. The SDK's `client.listModels()` is the source of
+// truth via live discovery (rich per-model `supportedReasoningEfforts`); this
+// minimal seed shows through before the first probe / if auth is missing.
+// `auto` is Copilot's own recommended default (it also carries a premium-
+// request discount).
+export const COPILOT_BASELINE: BaselineModel[] = [
+  {
+    id: 'auto',
+    displayName: 'Auto',
+    description: 'Let Copilot pick the best available model per turn.',
+    isDefault: true,
+    supportsEffort: false,
+  },
+  {
+    id: 'claude-sonnet-5',
+    displayName: 'Claude Sonnet 5',
+    supportsEffort: true,
+    effortLevels: ['low', 'medium', 'high', 'xhigh'],
+  },
+  {
+    id: 'gpt-5.5',
+    displayName: 'GPT-5.5',
+    supportsEffort: true,
+    effortLevels: ['low', 'medium', 'high', 'xhigh'],
+  },
+];
+
 export function baselineFor(
-  provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor',
+  provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot',
 ): BaselineModel[] {
   switch (provider) {
     case 'claude':
@@ -160,5 +187,7 @@ export function baselineFor(
       return GROK_BASELINE;
     case 'cursor':
       return CURSOR_BASELINE;
+    case 'copilot':
+      return COPILOT_BASELINE;
   }
 }

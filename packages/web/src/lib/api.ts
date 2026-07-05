@@ -264,7 +264,7 @@ export const api = {
       data: {
         name: string;
         command: string;
-        agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
+        agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot';
         model?: string;
         // Optional creation-time mode. Required UX for Grok (modeSwitchScope ===
         // 'creation'); recommended for any provider whose mode-switch scope is
@@ -341,7 +341,7 @@ export const api = {
     clearScrollback: (id: string) => del(`/api/processes/${id}/scrollback`),
   },
   providers: {
-    models: (provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor') =>
+    models: (provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot') =>
       get<{
         provider: string;
         models: Array<{
@@ -361,7 +361,7 @@ export const api = {
     catalog: () =>
       get<
         Record<
-          'claude' | 'codex' | 'hermes' | 'grok' | 'cursor',
+          'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot',
           {
             models: Array<{
               id: string;
@@ -380,13 +380,13 @@ export const api = {
     // Adapter capability bag for a provider, fetched without needing a session.
     // Used by AddAgentModal so the creation-time mode picker can render the
     // adapter-declared modes and gate creation-only providers (e.g. Grok).
-    capabilities: (provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor') =>
+    capabilities: (provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot') =>
       get<{ provider: string; capabilities: import('./types').ProviderCapabilities }>(
         `/api/providers/${provider}/capabilities`,
       ),
     // Trigger live discovery. Server returns 202; the actual catalog lands
     // via the `providers:catalog-updated` WS event.
-    refresh: (provider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor') =>
+    refresh: (provider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot') =>
       post<{ ok: boolean; refreshing: string[] }>(
         '/api/providers/refresh',
         provider ? { provider } : {},

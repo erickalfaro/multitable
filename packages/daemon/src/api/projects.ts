@@ -620,12 +620,13 @@ export function createProjectsRouter(
     }
 
     try {
-      const provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | undefined =
+      const provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot' | undefined =
         agentProvider === 'claude' ||
         agentProvider === 'codex' ||
         agentProvider === 'hermes' ||
         agentProvider === 'grok' ||
-        agentProvider === 'cursor'
+        agentProvider === 'cursor' ||
+        agentProvider === 'copilot'
           ? agentProvider
           : undefined;
       const modelId =

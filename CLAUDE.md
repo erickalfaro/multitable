@@ -41,17 +41,23 @@ Each provider authenticates independently from the same place its own CLI does:
 - **Claude** — `ANTHROPIC_API_KEY` env var, or `~/.claude/auth.json` (`claude login`).
 - **Codex** — JSON-RPC over stdio to a long-lived `codex app-server` child (one per daemon, lazy-spawned). Inherits `process.env`, reads `~/.codex/auth.json` (`codex login`). The `@openai/codex-sdk` npm dep was removed — see `agent/providers/codex-app-server/`.
 - **Hermes** — ACP JSON-RPC to `hermes acp` children; xAI OAuth under `~/.hermes/` (`hermes login`). See the `hermes-grok` skill.
+- **Grok Build** — ACP JSON-RPC to `grok agent stdio` children; `~/.grok/auth.json` (`grok auth login`) or `GROK_CODE_XAI_API_KEY`. See the `grok-build` skill.
+- **Cursor** — one-shot `cursor-agent --print` child per turn; `~/.cursor/` login. See the `cursor-cli` skill.
+- **Copilot** — `@github/copilot-sdk` JSON-RPC to one long-lived bundled `copilot` CLI child per daemon (lazy-spawned); GitHub OAuth under `~/.copilot/` (`copilot` login) or a `gho_`/`ghu_`/`github_pat_` token (classic `ghp_` PATs rejected). See the `github-copilot-sdk` skill.
 
 Missing credentials fail the first turn, surfaced via `session:turn-error`.
 
 ## Multi-provider architecture
 
-`AgentSession.provider` is `'claude' | 'codex' | 'hermes'` (`agent/types.ts`). All three are **live, fully-implemented adapters** under `packages/daemon/src/agent/providers/`, registered in `agent/manager.ts` (~line 109) in a `Record<string, ProviderAdapter>`:
+`AgentSession.provider` is `'claude' | 'codex' | 'copilot' | 'hermes' | 'grok' | 'cursor'` (`agent/types.ts`). All six are **live, fully-implemented adapters** under `packages/daemon/src/agent/providers/`, registered in `agent/manager.ts` in a `Record<string, ProviderAdapter>`:
 
 - `types.ts` — the `ProviderAdapter` contract (`runTurn`, optional `reset`/`destroy`/`shutdown`), `ProviderCapabilities` (drives conditional UI), and the manager-owned `AdapterCallbacks`.
 - `claude.ts` — `ClaudeAdapter`. SDK option assembly, `canUseTool` → `PermissionManager` bridge, `makeHooks`, `StreamBuffer` reducer.
 - `codex.ts` + `codex-app-server/` + `codex-protocol/` — `CodexAdapter` over a `codex app-server` JSON-RPC child. `codex-protocol/` is generated (`codex app-server generate-ts`; bump `_codex-cli-version.ts`).
 - `hermes.ts` + `hermes-acp/` — `HermesAdapter` over `hermes acp` (one child per project cwd). See the `hermes-grok` skill for the ACP wire contract.
+- `grok.ts` + `grok-acp/` — `GrokAdapter` over `grok agent stdio` (one child per {cwd, mode, effort, model}). See the `grok-build` skill.
+- `cursor.ts` + `cursor-cli/` — `CursorAdapter`, one-shot `cursor-agent --print` NDJSON child per turn. See the `cursor-cli` skill.
+- `copilot.ts` — `CopilotAdapter` over `@github/copilot-sdk` (ONE long-lived bundled-CLI child per daemon; many `CopilotSession`s multiplex on it). See the `github-copilot-sdk` skill.
 - `index.ts` — re-exports.
 
 `agent/manager.ts` is a thin, provider-agnostic orchestrator: session state machine, DB persistence, WS dispatch, two-phase watchdog (hard-kill at 180s before any SDK byte arrives — for auth/network/CA diagnostics; warn-only every 90s after first byte — never kills live work), capability advertisement. `sendTurn()` looks up the adapter and delegates.
@@ -78,27 +84,32 @@ Keep each skill **strictly single-provider** — never blend two providers' SDK 
 - **Claude** (SDK `PermissionMode`): `default`, `acceptEdits`, `bypassPermissions`, `plan`, `dontAsk`, `auto`.
 - **Codex** (`SandboxMode`, OS-enforced): `workspace-write`, `read-only`, `danger-full-access`.
 - **Hermes** (advisory only — ACP has no mode RPC): `default`, `plan`, `read-only`.
+- **Grok** (spawn-time `grok agent` flags): `default`, `auto`, `plan`. Creation-bound (`modeSwitchScope: 'creation'`).
+- **Cursor** (CLI approval flags): `default`, `plan`, `ask`, `force`.
+- **Copilot** (native `MessageOptions.agentMode`, per-send): `interactive`, `plan`, `autopilot`. No session rebuild on flip.
 
 Claude reuses one thread across mode flips; Codex options are immutable post-thread-start so a flip discards the cached `threadId`. Mode changes broadcast `session:mode-changed`.
 
 ### Thinking effort
 
-`ThinkingEffort` is `'low' | 'medium' | 'high' | 'xhigh' | 'max'`; the session field is `ThinkingEffort | null` (null = provider default). `xhigh`/`max` are model-gated — each `DiscoveredModel.effortLevels` declares the supported subset and the UI's `ThinkingEffortBadge` filters its dropdown to it. Claude passes `{ effort }` through SDK options; Codex forwards `effort` to `turn/start` (`max` → undefined); Hermes plumbs it as a `/reasoning <level>` prefix. `GlobalConfig.lastThinkingEffort` seeds new sessions; `PUT /api/sessions/:id/thinking-effort` updates it and emits `session:thinking-effort-changed`.
+`ThinkingEffort` is `'low' | 'medium' | 'high' | 'xhigh' | 'max'`; the session field is `ThinkingEffort | null` (null = provider default). `xhigh`/`max` are model-gated — each `DiscoveredModel.effortLevels` declares the supported subset and the UI's `ThinkingEffortBadge` filters its dropdown to it. Claude passes `{ effort }` through SDK options; Codex forwards `effort` to `turn/start` (`max` → undefined); Hermes plumbs it as a `/reasoning <level>` prefix; Grok passes `--reasoning-effort` at spawn (`max` → `xhigh`); Cursor encodes effort in the model id (`thinkingEffort: 'unsupported'`); Copilot sets `SessionConfig.reasoningEffort` (`max` → `xhigh`, and a model that rejects effort triggers one retry without it). `GlobalConfig.lastThinkingEffort` seeds new sessions; `PUT /api/sessions/:id/thinking-effort` updates it and emits `session:thinking-effort-changed`.
 
 ### Provider-specific notes
 
 - **Codex** — `approvalPolicy` is hardcoded to `'never'`; tool gating is the spawn-time `sandbox` enum, and the client auto-denies approval ServerRequests defensively. Per-chunk additive deltas. No USD cost field. Threads persist as `~/.codex/sessions/.../rollout-*.jsonl`, parsed by `transcripts/codexParser.ts`; listed via `GET /api/transcripts/codex`, resumed via `POST /api/transcripts/codex/:threadId/resume`. Depth: `openai-codex-sdk` skill.
 - **Hermes** — additive deltas, sessions persist under `~/.hermes/`, parsed by `transcripts/hermesParser.ts`. Depth: `hermes-grok` skill (gap analysis: `docs/ideas/hermes-grok-gap-analysis.md`).
-- **Permission routing** — Claude **and** Hermes route per-call approvals through `PermissionManager`. Codex bypasses it entirely (sandbox-gated). `ElicitationManager` is provider-agnostic.
+- **Grok / Cursor** — additive deltas; sessions persist under `~/.grok/sessions/` / `~/.cursor/projects/`, parsed by `transcripts/{grok,cursor}Parser.ts` (restart hydration only — no past-agents browser). Depth: `grok-build` / `cursor-cli` skills.
+- **Copilot** — additive deltas; `session.idle` (never `assistant.turn_end`) ends the turn; abort via `session.abort()`. Sessions persist as `~/.copilot/session-state/<id>/events.jsonl` (checkpoints/*.md are compaction summaries, NOT the transcript), parsed by `transcripts/copilotParser.ts`. `assistant.usage.cost` is a premium-request multiplier, not USD (`costUsd: false`). Usage limits pull from `client.rpc.account.getQuota`. Depth: `github-copilot-sdk` skill.
+- **Permission routing** — Claude, Hermes, Grok, **and Copilot** route per-call approvals through `PermissionManager` (Copilot's requests are kind-discriminated: shell/write/read/mcp/url with rich per-kind fields). Codex and Cursor bypass it (sandbox/mode-gated). `ElicitationManager` is provider-agnostic (Claude + Copilot).
 
 ## Provider catalog
 
 `packages/daemon/src/providers/` (top-level, distinct from `agent/providers/`) is the live model-catalog system feeding the AddAgentModal picker and the effort-tier filter:
 
 - `baselines.ts` — `BaselineModel` shape + shipped seed catalogs (Claude holds the canonical `opus`/`sonnet`/`haiku` triple).
-- `discovery.ts` — `discoverClaude` / `discoverCodex` / `discoverHermes` probe each provider for `DiscoveredModel[]`.
+- `discovery.ts` — `discoverClaude` / `discoverCodex` / `discoverHermes` / `discoverGrok` / `discoverCursor` / `discoverCopilot` probe each provider for `DiscoveredModel[]` (Copilot spins a short-lived SDK client for `listModels()`).
 - `catalog.ts` — `ProviderCatalog` EventEmitter layering baseline → on-disk cache (`~/.cache/multitable/models.json`) → live discovery; emits `updated`.
-- `api/providers.ts` — `VALID_PROVIDERS = ['claude','codex','hermes']`. `GET /:provider/models` and `GET /catalog` serve the in-memory cache (never block); `POST /refresh` triggers async discovery (202, shared in-flight Promise).
+- `api/providers.ts` — `VALID_PROVIDERS = ['claude','codex','hermes','grok','cursor','copilot']`. `GET /:provider/models` and `GET /catalog` serve the in-memory cache (never block); `POST /refresh` triggers async discovery (202, shared in-flight Promise).
 
 **Don't reintroduce per-request CLI calls** in the API handlers — they're cache-served by design. The web store updates off `providers:catalog-updated`.
 
@@ -189,7 +200,7 @@ The UI says "agent" wherever code says "session"/`AgentSession` — that's the o
 - `stores/appStore.ts` — the single store: projects/processes/permissions/options/themes/modals/selection/`messagesBySession` plus `alerts`+`unreadBySession`+`notificationCenterOpen`, `pendingElicitations`, `gitByProject`, `tasksBySession`, `toolProgressBySession`, `statusBySession`, `streamingBySession`, `modelCatalog`+`modelCatalogStatus`, `attentionBySession`+`attentionFilters` (FIFO-trimmed 500/session), `devLogOpen`. `detailPanelTab` is `'files' | 'tasks' | 'cost' | 'prompt-builder'`.
 - `lib/` — `ws.ts`/`api.ts` (talk to these, not raw fetch; `wsClient.sendTurn` is the only way to send a session message), `cm-completions.ts` (`@` mentions + `/` commands), `cm-theme.ts`, `shiki.ts`, plus `notify`/`browserNotifications`/`sound`/`tabBadge`/`notificationPrefs`/`devLog`/`markdown`/`pastAgents`/`processState`/`rafBatch`/`nodeColor`/`relativeTime`/`attention`/`composerDrafts`/`clipboard`/`modelName`/`projectColor`/`terminalManager`/`useIsMobile`.
 - `components/main-pane/` — `MainPane` branches on `process.type === 'session'` → `chat/` (`SessionChat`, `MessageList`, `AssistantMessage`, `UserMessage`, `ToolCallCard`, `ReasoningCard`, `CodeBlock`, `ChatInputCM`, `ExpandedComposer`, `ModelChip`, `LoaderNode`, …) else `TerminalView` (xterm). Also `git/` (`GitPanel`, `GitFileList`, `GitDiffPane`, …), `context/` (`AttentionStream`, `ProviderCapabilityStrip`), `SessionDetailPanel`, `SessionHeaderBar`, `ModeBadge`, `ThinkingEffortBadge`, `AttachButton`. `MainPane` also routes a `selectedFileViewerProjectId` surface (`file-viewer/` — `FileViewerMainView` + lazy `FileTree` + CM6 `FileEditor`; reads/writes `GET|POST /api/projects/:id/file-content`, and `/files` takes `?all=1` to expose dotfolders), mutually exclusive with process/git/overview selection — any one setter clears the others.
-- `components/` — `sidebar/` (`Sidebar`, `PastAgentsList`, `SidebarFileViewerSection`, …), `modals/` (`AddAgentModal` — live: Claude Code / Codex / Hermes (Grok); `comingSoon`: Gemini CLI, GitHub Copilot, opencode, Amp, Aider, Goose, Pi — plus `AddProjectModal`, `GlobalSettingsModal`, `IntegrationsSection`, `NotificationsSection`, `PastAgentsBrowser`), `elicitation/`, `notifications/`, `dev-log/`, `permission/`, `command-palette/`, `context-menu/`, `ui/` (primitives + 60 dotmatrix variants), `ConnectionOverlay.tsx`.
+- `components/` — `sidebar/` (`Sidebar`, `PastAgentsList`, `SidebarFileViewerSection`, …), `modals/` (`AddAgentModal` — live: Claude Code / Codex / Hermes (Grok) / Grok Build / Cursor / GitHub Copilot; `comingSoon`: Gemini CLI, opencode, Amp, Aider, Goose, Pi — plus `AddProjectModal`, `GlobalSettingsModal`, `IntegrationsSection`, `NotificationsSection`, `PastAgentsBrowser`), `elicitation/`, `notifications/`, `dev-log/`, `permission/`, `command-palette/`, `context-menu/`, `ui/` (primitives + 60 dotmatrix variants), `ConnectionOverlay.tsx`.
 - Styling: Tailwind is set up but most components use inline `style={{ }}` with `var(--...)` CSS-variable tokens (theme system in `hooks/useTheme.ts` + `lib/themes.ts`). Match the file you're editing.
 
 ## TypeScript / module system

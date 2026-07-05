@@ -310,6 +310,58 @@ export async function discoverCursor(env: NodeJS.ProcessEnv): Promise<Discovered
   return models;
 }
 
+// === Copilot ===============================================================
+//
+// The Copilot SDK exposes the authoritative catalog via `client.listModels()`
+// (per-model `supportedReasoningEfforts` + `defaultReasoningEffort`). We spin
+// a short-lived CopilotClient (spawns the bundled CLI child), list, and stop —
+// same spirit as discoverClaude's throwaway query(). Permissive: any failure
+// (no GitHub auth, CLI spawn error, timeout) → `[]` so COPILOT_BASELINE shows
+// through. `max` is filtered out even where advertised — the SDK's
+// SessionConfig.reasoningEffort enum tops out at `xhigh`, so we never send it.
+export async function discoverCopilot(): Promise<DiscoveredModel[]> {
+  const { CopilotClient } = await import('@github/copilot-sdk');
+  const client = new CopilotClient({ logLevel: 'error' });
+  try {
+    const models = await Promise.race([
+      (async () => {
+        await client.start();
+        return client.listModels();
+      })(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('copilot discovery timed out')), 15000),
+      ),
+    ]);
+    return models
+      .filter((m) => m && typeof m.id === 'string')
+      .map((m, idx) => {
+        const raw = m as unknown as {
+          id: string;
+          name?: string;
+          supportedReasoningEfforts?: string[];
+          defaultReasoningEffort?: string;
+        };
+        const effortLevels = (raw.supportedReasoningEfforts ?? [])
+          .map(clampEffort)
+          .filter((x): x is EffortLevel => !!x && x !== 'max');
+        const supportsEffort = effortLevels.length > 0;
+        const defaultEffort = clampEffort(raw.defaultReasoningEffort);
+        return {
+          id: raw.id,
+          displayName: raw.name || raw.id,
+          ...(idx === 0 ? { isDefault: true } : {}),
+          supportsEffort,
+          ...(supportsEffort ? { effortLevels } : {}),
+          ...(defaultEffort && defaultEffort !== 'max' ? { defaultEffort } : {}),
+        };
+      });
+  } catch {
+    return [];
+  } finally {
+    void client.stop().catch(() => {});
+  }
+}
+
 // === Claude ================================================================
 //
 // The Claude Agent SDK exposes the authoritative per-model metadata through

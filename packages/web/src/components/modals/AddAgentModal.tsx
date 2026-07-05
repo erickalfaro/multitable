@@ -37,7 +37,7 @@ const MODE_SECTION_HEIGHT = 58;
 const WORKTREE_SECTION_HEIGHT = 58;
 const SECTION_GAP = 14;
 
-type AgentProviderOption = 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | undefined;
+type AgentProviderOption = 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot' | undefined;
 
 const AGENTS: Array<{
   name: string;
@@ -51,7 +51,7 @@ const AGENTS: Array<{
   { name: 'Grok Build', command: 'grok', provider: 'grok' },
   { name: 'Cursor', command: 'cursor', provider: 'cursor' },
   { name: 'Gemini CLI', command: 'gemini', comingSoon: true },
-  { name: 'GitHub Copilot', command: 'copilot', comingSoon: true },
+  { name: 'GitHub Copilot', command: 'copilot', provider: 'copilot' },
   { name: 'opencode', command: 'opencode', comingSoon: true },
   { name: 'Amp', command: 'amp', comingSoon: true },
   { name: 'Aider', command: 'aider', comingSoon: true },
@@ -83,6 +83,7 @@ export function AddAgentModal({ onClose, projectId }: Props) {
   const hermesModels = useAppStore((s) => s.modelCatalog.hermes);
   const grokModels = useAppStore((s) => s.modelCatalog.grok);
   const cursorModels = useAppStore((s) => s.modelCatalog.cursor);
+  const copilotModels = useAppStore((s) => s.modelCatalog.copilot);
   const refreshError = useRef<{ provider: AgentProviderOption; message: string } | null>(null);
   const [, forceRender] = useState(0);
   const [refreshingProvider, setRefreshingProvider] = useState<AgentProviderOption>(undefined);
@@ -127,7 +128,9 @@ export function AddAgentModal({ onClose, projectId }: Props) {
             ? grokModels
             : agentProvider === 'cursor'
               ? cursorModels
-              : null;
+              : agentProvider === 'copilot'
+                ? copilotModels
+                : null;
   const modelsState: ModelsState = (() => {
     if (!agentProvider) return { status: 'idle' };
     if (refreshError.current && refreshError.current.provider === agentProvider) {
@@ -548,7 +551,7 @@ function AgentPresetsRow({
 // ─── Model picker ─────────────────────────────────────────────────────────────
 
 interface ModelPickerProps {
-  provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
+  provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot';
   state: ModelsState;
   selected: string | null;
   onSelect: (id: string) => void;
@@ -640,7 +643,7 @@ function ModelPickerState({
   onSelect,
 }: {
   state: ModelsState;
-  provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
+  provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot';
   selected: string | null;
   onSelect: (id: string) => void;
 }) {

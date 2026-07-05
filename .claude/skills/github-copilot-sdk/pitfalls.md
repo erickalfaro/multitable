@@ -67,15 +67,19 @@ const id = await session.send({ prompt }); // not before
 
 Don't confuse them. `session.ui.confirm()` pushes a UI confirmation request *into* the agent's context (e.g. so a tool can ask the user). `onUserInputRequest` is how you intercept what the agent itself wants to ask the user. They share names but flow opposite directions. Source: `nodejs/src/types.ts:902-936`.
 
-## 12. There is NO native plan / chat / auto mode in the SDK
+## 12. Plan / autopilot mode IS native in SDK ≥1.0.5 — via `MessageOptions.agentMode`, per SEND
 
-The TUI's "Plan Mode" (Shift-Tab) and "Autopilot" are CLI features only. `SessionConfig` does **not** expose `mode: 'plan' | 'auto' | 'chat'`. Approximations:
+**Superseded (verified against the installed 1.0.5, 2026-07):** `send({ prompt, agentMode })` takes
+`'interactive' | 'plan' | 'autopilot' | 'shell'` per send — no session rebuild for a mode flip, and
+none of the onPreToolUse/system-prompt approximations below are needed. Plan mode's execute gate is
+the `SessionConfig.onExitPlanModeRequest` handler (`ExitPlanModeRequest { summary, planContent?,
+actions, recommendedAction }` → `{ approved, selectedAction?, feedback? }`). The CopilotAdapter maps
+it onto the same `ExitPlanMode` PermissionManager prompt Claude/Grok use. Note the runtime uses its
+own judgment in plan mode — a trivial request may skip planning and go straight to (permission-gated)
+tool use.
 
-- **Plan-mode-equivalent**: `onPreToolUse → { permissionDecision: 'deny', permissionDecisionReason: 'plan mode — no tool use' }` for any write/shell tool, plus a custom system prompt that asks for a plan.
-- **Auto-mode-equivalent**: `onPermissionRequest: approveAll` + `onPreToolUse → { permissionDecision: 'allow' }`.
-- **Chat-mode-equivalent**: don't register tools (`tools: []`), or `permissionDecision: 'deny'` for everything.
-
-There IS a `session.mode_changed` event (`from`, `to`) and `exit_plan_mode.requested`/`completed` events, suggesting the CLI exposes mode toggling at runtime — but how to drive it from the SDK is undocumented as of this writing. See [`reference/modes-and-permissions.md`](reference/modes-and-permissions.md).
+`SessionConfig` still has no `mode` field; older SDKs (pre-agentMode) need the composed
+approximations described in [`reference/modes-and-permissions.md`](reference/modes-and-permissions.md).
 
 ## 13. Per-tool override via `defineTool({ skipPermission: true })` skips BOTH gates
 
@@ -101,11 +105,20 @@ Token type whitelist: `gho_`, `ghu_`, `github_pat_`. `ghp_` is rejected. Source:
 
 `client.start()` spawns `copilot` (or whatever `cliPath` points to) as a long-lived child. `client.stop()` shuts it down gracefully (returns `Promise<Error[]>` for any per-session shutdown errors); `client.forceStop()` kills hard. On daemon crash you may leak a `copilot` process. Wire `client.stop()` into MultiTable's shutdown sequence (`pids.ts` / SIGTERM handler).
 
-## 19. Sessions persist as numbered JSON checkpoints, NOT JSONL
+## 19. The transcript is `events.jsonl` — checkpoints are COMPACTION SUMMARIES, not history
 
-Path: `~/.copilot/session-state/<sessionId>/checkpoints/001.json`, `002.json`, ... Each checkpoint is a **full snapshot** of conversation history, not an append log. Plus `plan.md` and a `files/` artifact dir alongside.
+**Superseded (verified against real CLI 1.0.63–1.0.68 session state):**
+`~/.copilot/session-state/<sessionId>/` contains:
 
-For a `transcripts/copilotParser.ts` analog of `codexParser.ts`, you read the **highest-numbered checkpoint**, not stream-append. The schema is **not formally documented as stable** — treat as internal, version-pinned, and write a defensive parser. Source: `docs/features/session-persistence.md`.
+- **`events.jsonl`** — the full session event log, one `{ type, data, id, timestamp, parentId }`
+  per line (`session.start` with `selectedModel`, `user.message`, `assistant.message` with
+  `content`+`reasoningText`+`toolRequests`, `tool.execution_start/complete`, …). **This is the
+  transcript source** — `transcripts/copilotParser.ts` parses it. Ephemeral events (deltas,
+  `session.idle`) are not persisted.
+- `checkpoints/*.md` — markdown **compaction summaries** (`<overview>/<history>/...` sections), NOT
+  the conversation. The older "numbered JSON checkpoints" layout this pitfall used to describe no
+  longer exists.
+- `workspace.yaml` (id, cwd, summary title, timestamps), `session.db`, `files/`, `research/`.
 
 ## 20. `env: NodeJS.ProcessEnv` on `CopilotClientOptions` is a footgun if you're not careful
 
@@ -162,3 +175,28 @@ Wrong (Claude SDK): `canUseTool`, `permissionMode: 'plan'`, `Query.interrupt()`,
 Wrong (Codex SDK): `Thread`, `runStreamed`, `approvalPolicy`, `sandboxMode`, `additionalDirectories`, `ThreadEvent`, `ThreadItem`.
 
 Right (Copilot SDK): `CopilotClient`, `CopilotSession`, `session.send`, `sendAndWait`, `session.abort`, `session.disconnect`, `session.idle`, `assistant.message_delta`, `onPermissionRequest`, `onUserInputRequest`, `onElicitationRequest`, `defineTool`, `approveAll`, `mcpServers`, `customAgents`, `hooks.onPreToolUse`.
+
+## 31. Adapter-integration gotchas verified live on 1.0.5 (2026-07)
+
+- **`reasoningEffort` on a non-supporting model HARD-FAILS `session.create`** ("Model 'x' does not
+  support reasoning effort configuration") — it does not degrade like Claude. The adapter retries
+  once with the field stripped. `ReasoningEffort` is `'low'|'medium'|'high'|'xhigh'` (no `max`),
+  even though `listModels()` advertises `max` on some models — discovery filters `max` out.
+- **`SessionConfig` field is `workingDirectory`, not `workspacePath`** (the getter on
+  `CopilotSession` is still `workspacePath`).
+- **The index does NOT re-export `UserInputRequest` / `UserInputResponse` / `ReasoningEffort`** —
+  they exist in `dist/types.d.ts` but aren't in the export list; the adapter mirrors them
+  structurally.
+- **`data.reasoningText` repeats verbatim on every `assistant.message` within a turn** — dedup
+  against the last emitted value or each tool round duplicates the reasoning card (adapter and
+  parser both do this).
+- **`PermissionRequest` is a rich discriminated union** (shell carries `fullCommandText` +
+  `intention`; write carries `fileName` + `diff`; read carries `path`; mcp carries
+  `serverName`/`toolName`/`args`) — no need to correlate toolCallId→args via `onPreToolUse`.
+  Result enum is `{ kind: 'approve-once' } | { kind: 'reject', feedback? } | …`.
+- **No `autoStart` client option in 1.0.5** — call `client.start()` explicitly.
+- **`assistant.usage.cost` is the premium-request billing MULTIPLIER, not USD.** Don't record it as
+  dollars.
+- **`@github/copilot-sdk` ships a CJS build** (`dist/cjs` + `require` export condition) — the
+  daemon's Node16/CJS `import` works directly; no dynamic-import hack (unlike codex).
+- **Sub-agent events carry `agentId`** — filter them out of the main transcript.

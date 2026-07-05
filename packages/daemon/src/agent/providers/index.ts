@@ -13,3 +13,4 @@ export { CodexAdapter } from './codex.js';
 export { HermesAdapter } from './hermes.js';
 export { GrokAdapter } from './grok.js';
 export { CursorAdapter } from './cursor.js';
+export { CopilotAdapter } from './copilot.js';

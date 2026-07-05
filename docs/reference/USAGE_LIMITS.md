@@ -112,7 +112,7 @@ All endpoints/credential formats below are reverse-engineered from
 | Codex | `true` | `account/rateLimits/read` over the app-server (+ `account/rateLimits/updated` push) → `primary`/`secondary` windows, `credits`, `planType` | `~/.codex/auth.json` (app-server reads it) | [`openai-codex-sdk/reference/usage-limits.md`](../../.claude/skills/openai-codex-sdk/reference/usage-limits.md) |
 | Grok Build | `true` | `POST https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig` (gRPC-web; empty frame; heuristic protobuf scan — `grok-usage.ts`) → one window `{usedPercent, resetsAt}` | `~/.grok/auth.json` (map keyed by scope; OIDC entry's `key`) | [`grok-build/reference/usage-limits.md`](../../.claude/skills/grok-build/reference/usage-limits.md) |
 | Hermes | `false` (pending) | Same xAI billing as Grok, but `~/.hermes/auth.json` token shape not yet confirmed | `~/.hermes/auth.json` (shape TBD) | [`hermes-grok/reference/usage-limits.md`](../../.claude/skills/hermes-grok/reference/usage-limits.md) |
-| GitHub Copilot | (when built) | `assistant.usage.quotaSnapshots` + `account.getQuota` RPC | GitHub OAuth | [`github-copilot-sdk/reference/cost-and-usage.md`](../../.claude/skills/github-copilot-sdk/reference/cost-and-usage.md) |
+| GitHub Copilot | `true` | `client.rpc.account.getQuota({})` over the SDK JSON-RPC child → `quotaSnapshots.premium_interactions` `{entitlementRequests, usedRequests, remainingPercentage, resetDate}` → one window + creditsRemaining. Never spawns the CLI just to poll — returns last-known until a turn starts the client. (No in-band quota on `assistant.usage` in SDK 1.0.5.) | GitHub OAuth (~/.copilot/) | [`github-copilot-sdk/reference/usage-limits.md`](../../.claude/skills/github-copilot-sdk/reference/usage-limits.md) |
 
 ## Two gotchas that span providers
 
@@ -136,4 +136,3 @@ All endpoints/credential formats below are reverse-engineered from
 - **Claude token refresh**: we don't refresh the OAuth token (codexbar delegates to the Claude CLI
   too). An expired token → the next refresh 401s → badge goes stale until the CLI refreshes the file.
 - Optional SQLite persistence of the last snapshot.
-- The GitHub Copilot adapter itself (documented forward-looking; adapter not yet built).

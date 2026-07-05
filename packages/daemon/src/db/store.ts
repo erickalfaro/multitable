@@ -320,7 +320,7 @@ export interface SessionRecord {
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
+  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
@@ -369,7 +369,7 @@ function rowToSession(row: SessionRow): SessionRecord {
   // Provider hydration. `agent_provider` is free-text in the schema, so we
   // narrow to the known adapter set here. Unknown values fall back to Claude
   // (the original default) so a stale row can't take the daemon down.
-  const provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' =
+  const provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot' =
     row.agent_provider === 'codex'
       ? 'codex'
       : row.agent_provider === 'hermes'
@@ -378,7 +378,9 @@ function rowToSession(row: SessionRow): SessionRecord {
           ? 'grok'
           : row.agent_provider === 'cursor'
             ? 'cursor'
-            : 'claude';
+            : row.agent_provider === 'copilot'
+              ? 'copilot'
+              : 'claude';
   const agentSessionId = row.agent_session_id ?? row.claude_session_id;
   const agentSessionIdHistory =
     parseClaudeSessionIdHistory(row.agent_session_id_history).length > 0
@@ -420,12 +422,13 @@ function rowToSession(row: SessionRow): SessionRecord {
 
 function inferAgentProvider(
   command: string | null | undefined,
-): 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' {
+): 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot' {
   const first = (command ?? '').trim().split(/\s+/, 1)[0]?.toLowerCase() ?? '';
   if (first === 'codex') return 'codex';
   if (first === 'hermes') return 'hermes';
   if (first === 'grok') return 'grok';
   if (first === 'cursor' || first === 'cursor-agent') return 'cursor';
+  if (first === 'copilot') return 'copilot';
   return 'claude';
 }
 
@@ -458,7 +461,7 @@ export function createSession(data: {
   autorespawn?: boolean;
   terminalAlerts?: boolean;
   fileWatchPatterns?: string[];
-  agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
+  agentProvider?: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot';
   model?: string | null;
   /**
    * Optional explicit loader variant. Used by the transcript-resume flow to
@@ -513,7 +516,9 @@ export function createSession(data: {
         ? 'workspace-write'
         : resolvedProvider === 'cursor'
           ? 'force'
-          : 'default';
+          : resolvedProvider === 'copilot'
+            ? 'interactive'
+            : 'default';
   getDb().prepare(`
     INSERT INTO sessions (
       id, project_id, name, command, working_directory, type,
@@ -561,7 +566,7 @@ export function updateSession(id: string, data: Partial<{
   autorespawn: boolean;
   terminalAlerts: boolean;
   fileWatchPatterns: string[];
-  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
+  agentProvider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot';
   model: string | null;
   agentSessionId: string | null;
   agentSessionIdHistory: string[];
