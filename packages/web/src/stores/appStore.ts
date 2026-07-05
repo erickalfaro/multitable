@@ -1516,9 +1516,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { composerOriginNoteBySession: next };
     }),
 
-  // Model catalog cache. The daemon route serves `claude` / `codex` / `hermes`
-  // today; copilot is `comingSoon` and short-circuits to a no-op so the chip
-  // falls back to its prettifier without firing a 404.
+  // Model catalog cache, one slot per provider, fed by the daemon's
+  // /api/providers/:provider/models route + `providers:catalog-updated` WS.
   modelCatalog: { claude: null, codex: null, hermes: null, copilot: null, grok: null, cursor: null },
   modelCatalogStatus: {
     claude: 'idle',
@@ -1531,12 +1530,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadModelCatalog: (provider) => {
     const status = get().modelCatalogStatus[provider];
     if (status === 'loading' || status === 'ready') return;
-    if (provider === 'copilot') return;
     set((s) => ({
       modelCatalogStatus: { ...s.modelCatalogStatus, [provider]: 'loading' },
     }));
     api.providers
-      .models(provider as 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor')
+      .models(provider as 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot')
       .then((res) => {
         set((s) => ({
           modelCatalog: { ...s.modelCatalog, [provider]: res.models },
@@ -1550,7 +1548,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
   },
   setModelCatalog: (provider, models) => {
-    if (provider === 'copilot') return;
     set((s) => ({
       modelCatalog: { ...s.modelCatalog, [provider]: models },
       modelCatalogStatus: { ...s.modelCatalogStatus, [provider]: 'ready' },

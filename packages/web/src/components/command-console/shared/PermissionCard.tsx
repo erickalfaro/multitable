@@ -35,17 +35,14 @@ export function PermissionCard({
   // ExitPlanMode gets the Claude-Code-style choice: approving exits plan mode
   // and the chosen target controls how edits proceed. Targets are read from the
   // session's advertised modes so we never send a value the provider rejects
-  // (Claude → acceptEdits/default; Grok → auto/default, since it has no
-  // acceptEdits). The daemon flips the session mode on receipt; "Keep planning"
-  // (deny) leaves the session in plan mode.
+  // (Claude → acceptEdits/default; Grok → auto/default; Copilot →
+  // autopilot/interactive). The daemon flips the session mode on receipt;
+  // "Keep planning" (deny) leaves the session in plan mode.
   const isExitPlan = prompt.toolName === 'ExitPlanMode';
   const modeValues = session?.capabilities?.modes?.map((m) => m.value) ?? [];
-  const autoTarget = modeValues.includes('acceptEdits')
-    ? 'acceptEdits'
-    : modeValues.includes('auto')
-      ? 'auto'
-      : 'acceptEdits';
-  const manualTarget = 'default';
+  const autoTarget =
+    ['acceptEdits', 'auto', 'autopilot'].find((v) => modeValues.includes(v)) ?? 'acceptEdits';
+  const manualTarget = ['default', 'interactive'].find((v) => modeValues.includes(v)) ?? 'default';
 
   return (
     <div

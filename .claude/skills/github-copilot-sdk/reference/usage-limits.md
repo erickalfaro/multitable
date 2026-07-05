@@ -6,53 +6,36 @@ lives in [`docs/reference/USAGE_LIMITS.md`](../../../../docs/reference/USAGE_LIM
 file is the Copilot-specific source + capture path only.** Token/cost accounting is the sibling doc
 [`cost-and-usage.md`](cost-and-usage.md); **limits ≠ cost** — keep them separate.
 
-> **Status: forward-looking.** The Copilot adapter doesn't exist yet. When it's built, wire the
-> indicator from day one (the requirement in `CLAUDE.md` → "Provider skill folders (required)"):
-> advertise `capabilities.usageLimits = true` and feed `applyUsageLimits(...)`.
+> **Status: LIVE** (adapter shipped 2026-07 against SDK 1.0.5). `capabilities.usageLimits = true`;
+> the manager's out-of-band poll calls `CopilotAdapter.fetchUsageLimits(...)`.
 
-## Where the data comes from
+## Where the data comes from (verified on 1.0.5)
 
-Copilot bills against a **premium-request quota** (the GitHub Copilot subscription), and the SDK
-exposes it through two channels (both already noted in [`cost-and-usage.md`](cost-and-usage.md)):
-
-1. **In-band push** — `assistant.usage` events carry `quotaSnapshots` (and `copilotUsage`)
-   alongside the per-call cost/token fields. Accumulate/replace the latest snapshot as the turn
-   progresses.
-2. **Pull (RPC)** — `account.getQuota` for an authoritative, turn-independent reading:
-   ```ts
-   const quota = await client.rpc.sendRequest('account.getQuota', {});
-   // → AccountGetQuotaResult: { totalPremiumRequests, usedPremiumRequests, ... }
-   ```
-
-There is **no** separate "reset countdown" event the way Codex carries `resetsAt`; the quota is a
-billing-period counter. Surface `usedPercent` from `usedPremiumRequests / totalPremiumRequests`,
-and `resetsAt` only if the quota result exposes a period-end (else leave it `null`).
-
-## The capture path (when the adapter exists)
+Copilot bills against a **premium-request quota** (the GitHub Copilot subscription). In SDK 1.0.5
+the ONLY live source is the **pull RPC** — `assistant.usage` events carry cost/token fields and
+`copilotUsage.totalNanoAiu`, but **no quota snapshot** (the in-band `quotaSnapshots` this doc used
+to describe does not exist on the event):
 
 ```ts
-function normalizeCopilotQuota(q: { totalPremiumRequests?: number; usedPremiumRequests?: number }): UsageLimitSnapshot {
-  const total = q.totalPremiumRequests ?? 0;
-  const used = q.usedPremiumRequests ?? 0;
-  return {
-    status: 'live',
-    source: 'copilot', // extend the source union when the provider lands
-    windows: [
-      {
-        label: 'Premium requests',
-        usedPercent: total > 0 ? Math.round((used / total) * 100) : 0,
-        resetsAt: null, // unless the quota result exposes a period end
-      },
-    ],
-    creditsRemaining: total > 0 ? total - used : null,
-    capturedAt: Date.now(),
-  };
-}
+const result = await client.rpc.account.getQuota({});
+// → AccountGetQuotaResult: { quotaSnapshots: Record<string, AccountQuotaSnapshot> }
+//   keyed by quota type — 'premium_interactions' is the one that matters.
+// AccountQuotaSnapshot: { isUnlimitedEntitlement, entitlementRequests, usedRequests,
+//   usageAllowedWithExhaustedQuota, remainingPercentage, overage,
+//   overageAllowedWithExhaustedQuota, resetDate? /* ISO string */ }
 ```
 
-- On `assistant.usage`, if `quotaSnapshots` is present, normalize and `cb.applyUsageLimits(...)`.
-- On warmup / provision, call `account.getQuota` once and feed the same pipe (so the badge has data
-  before the first turn).
+## The capture path (as shipped — `copilot.ts` `normalizeQuota` / `fetchUsageLimits`)
+
+- `fetchUsageLimits` **never spawns the CLI child just to poll** — if the client hasn't been
+  started by a turn yet it returns the last-known snapshot (`null` on first boot; the badge shows
+  once the first Copilot turn runs).
+- Normalization picks the `premium_interactions` snapshot (fallback: first entry):
+  `usedPercent = round(100 - remainingPercentage)` (or `used/entitlement` if the percentage is
+  absent; `0` when `isUnlimitedEntitlement`), `resetsAt = Date.parse(resetDate)` when present,
+  `creditsRemaining = entitlementRequests - usedRequests`, `source: 'copilot'`, `status: 'live'`.
+- Verified live: a real account returned `creditsRemaining` + a valid `resetsAt` through
+  `GET /api/sessions/:id/usage-limits`.
 
 ## Don't confuse these three
 

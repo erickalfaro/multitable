@@ -66,10 +66,10 @@ Need to RESUME a prior conversation?
     REQUIRES the same sessionId you supplied on createSession.
     BYOK keys must be re-supplied; not persisted.
 
-Need PLAN mode / CHAT mode / AUTO mode?
-└── Not first-class SDK fields. The TUI's "Plan Mode" / "Autopilot" are CLI-only.
-    Approximate via permission policy + system prompt.
-    See reference/modes-and-permissions.md for the recipe.
+Need PLAN mode / AUTOPILOT / interactive?
+└── NATIVE since 1.0.5: send({ prompt, agentMode: 'interactive'|'plan'|'autopilot' }) per send.
+    Plan's execute gate = SessionConfig.onExitPlanModeRequest. (Pre-1.0.5 recipes in
+    reference/modes-and-permissions.md are superseded — see pitfalls #12.)
 ```
 
 ## Five rules that get violated most
@@ -103,23 +103,24 @@ When in doubt about behavior, these are authoritative (in this order):
 5. **Official docs**: `https://github.com/github/copilot-sdk/tree/main/docs` and `https://docs.github.com/en/copilot/how-tos/copilot-sdk/sdk-getting-started`.
 6. **Public-preview blog post** (concept overview, not API surface): `https://github.blog/news-insights/company-news/build-an-agent-into-any-app-with-the-github-copilot-sdk/`.
 
-## Where this SDK will live in our codebase
+## Where this SDK lives in our codebase
 
-Today: there is **no** Copilot integration. The AddAgentModal still has GitHub Copilot as `comingSoon: true` ([`packages/web/src/components/modals/AddAgentModal.tsx:24`](../../../packages/web/src/components/modals/AddAgentModal.tsx#L24)). When we wire it up, follow the existing pattern:
+**The integration is LIVE** (SDK 1.0.5, exact-pinned in `packages/daemon/package.json`; shipped 2026-07):
 
 ```
 packages/daemon/src/
-├── agent/
-│   ├── manager.ts                  ← add a 'copilot' branch in sendTurn dispatch
-│   ├── providers/
-│   │   ├── copilot.ts              ← NEW: the Copilot adapter; will own a singleton
-│   │   │                              CopilotClient + per-session CopilotSession cache
-│   │   ├── codex.ts                ← unchanged
-│   │   ├── types.ts                ← extend ProviderAdapter.name to include 'copilot'
-│   │   └── index.ts
-│   └── types.ts                    ← AgentSession.provider: 'claude' | 'codex' | 'copilot'
-└── transcripts/
-    └── copilotParser.ts            ← NEW: parse ~/.copilot/session-state/<id>/checkpoints/*.json → Message[]
+├── agent/providers/copilot.ts      ← CopilotAdapter: singleton CopilotClient (lazy start()),
+│                                      per-MT-session CopilotSession cache, native agentMode
+│                                      per send, all three ask channels + onExitPlanModeRequest
+└── transcripts/copilotParser.ts    ← parses ~/.copilot/session-state/<id>/events.jsonl → Message[]
+                                       (NOT checkpoints — see pitfalls #19)
 ```
 
-See [`multitable/integration-plan.md`](multitable/integration-plan.md) for the step-by-step. The big architectural difference vs. Codex: Copilot has a **long-lived child** shared across sessions, so the adapter must own the client lifecycle (one `start()` on first use, `stop()` on daemon shutdown), not start fresh per turn.
+Plus registration in `agent/manager.ts` (`copilot: new CopilotAdapter(permManager, elicitManager)`),
+hydration branches in `manager.ts` / `api/sessions.ts`, catalog wiring (`providers/baselines.ts`
+COPILOT_BASELINE + `discovery.ts` discoverCopilot via a short-lived `client.listModels()` probe),
+and the AddAgentModal entry. **Read [`pitfalls.md`](pitfalls.md) #31 first** — the live-verified
+1.0.5 gotchas (effort hard-fail + retry, `workingDirectory` naming, missing re-exports,
+reasoningText duplication, rich PermissionRequest union, no `autoStart`).
+
+The big architectural difference vs. Codex: Copilot has a **long-lived child** shared across sessions, so the adapter owns the client lifecycle (one `start()` on first use, `stop()` on daemon shutdown), not fresh per turn. [`multitable/integration-plan.md`](multitable/integration-plan.md) is the historical plan (kept for rationale; the shipped adapter deviates where 1.0.5 made things native — see its status header).

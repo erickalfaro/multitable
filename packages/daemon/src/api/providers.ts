@@ -25,7 +25,7 @@ interface ProvidersDeps {
   agentManager: AgentSessionManager;
 }
 
-const VALID_PROVIDERS: Provider[] = ['claude', 'codex', 'hermes', 'grok', 'cursor'];
+const VALID_PROVIDERS: Provider[] = ['claude', 'codex', 'hermes', 'grok', 'cursor', 'copilot'];
 
 function isProvider(s: unknown): s is Provider {
   return typeof s === 'string' && (VALID_PROVIDERS as string[]).includes(s);

@@ -11,6 +11,7 @@ import { parseCodexThread, listCodexThreads } from '../transcripts/codexParser.j
 import { parseHermesSession } from '../transcripts/hermesParser.js';
 import { parseGrokSession } from '../transcripts/grokParser.js';
 import { parseCursorSession } from '../transcripts/cursorParser.js';
+import { parseCopilotSession } from '../transcripts/copilotParser.js';
 import type { PermissionManager } from '../hooks/permissionManager.js';
 import type { ElicitationManager } from '../hooks/elicitationManager.js';
 import { createAlert } from './alerts.js';
@@ -21,6 +22,7 @@ import { ClaudeAdapter } from './providers/claude.js';
 import { HermesAdapter } from './providers/hermes.js';
 import { GrokAdapter } from './providers/grok.js';
 import { CursorAdapter } from './providers/cursor.js';
+import { CopilotAdapter } from './providers/copilot.js';
 import { trackedTimeout, type TrackedTimer } from '../devLog.js';
 import type {
   AdapterCallbacks,
@@ -129,6 +131,7 @@ export class AgentSessionManager extends EventEmitter {
       hermes: new HermesAdapter(permManager),
       grok: new GrokAdapter(permManager),
       cursor: new CursorAdapter(),
+      copilot: new CopilotAdapter(permManager, elicitManager),
     };
 
     // Authoritative plan→execute mode flip. When the user approves an
@@ -141,7 +144,14 @@ export class AgentSessionManager extends EventEmitter {
       'permission:exit-plan-approved',
       ({ sessionId, mode }: { sessionId: string; mode: string }) => {
         try {
-          this.setMode(sessionId, mode);
+          // The target may be a wrong-provider value (Telegram approvals fall
+          // back to Claude's 'default', which e.g. Copilot doesn't declare).
+          // Coerce to the adapter's first non-plan mode instead of throwing.
+          const s = this.sessions.get(sessionId);
+          const modes = s ? (this.adapters[s.provider]?.capabilities.modes ?? []) : [];
+          const valid = modes.some((m) => m.value === mode);
+          const fallback = modes.find((m) => m.value !== 'plan')?.value ?? mode;
+          this.setMode(sessionId, valid ? mode : fallback);
         } catch (err) {
           console.error('[agent] exit-plan mode flip failed:', err);
         }
@@ -296,6 +306,16 @@ export class AgentSessionManager extends EventEmitter {
         if (hydrated.length > 0) session.messages = hydrated;
       } catch (err) {
         console.error('[agent] cursor hydration failed for', session.id, err);
+      }
+    }
+    // Copilot hydration from the on-disk event log — the Copilot CLI runtime is
+    // the source of truth (~/.copilot/session-state/<id>/events.jsonl).
+    if (session.provider === 'copilot' && session.agentSessionId) {
+      try {
+        const hydrated = parseCopilotSession(session.agentSessionId);
+        if (hydrated.length > 0) session.messages = hydrated;
+      } catch (err) {
+        console.error('[agent] copilot hydration failed for', session.id, err);
       }
     }
     return session;

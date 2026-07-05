@@ -10,6 +10,7 @@ import {
   discoverHermes,
   discoverGrok,
   discoverCursor,
+  discoverCopilot,
   type DiscoveredModel,
 } from './discovery.js';
 
@@ -32,7 +33,7 @@ import {
 //     a provider's catalog (boot hydration, discovery success, user refresh).
 //     server.ts subscribes and broadcasts `providers:catalog-updated`.
 
-export type Provider = 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor';
+export type Provider = 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot';
 
 interface CatalogEntry {
   models: DiscoveredModel[];
@@ -69,7 +70,7 @@ export class ProviderCatalog extends EventEmitter {
     this.cachePath = path.join(paths.cache, 'models.json');
     // Seed every provider with its baseline. Codex's baseline is empty by
     // design — the UI will see an empty Codex catalog until first discovery.
-    for (const provider of ['claude', 'codex', 'hermes', 'grok', 'cursor'] as const) {
+    for (const provider of ['claude', 'codex', 'hermes', 'grok', 'cursor', 'copilot'] as const) {
       this.state.set(provider, {
         models: cloneBaseline(baselineFor(provider)),
         lastRefreshed: null,
@@ -94,7 +95,7 @@ export class ProviderCatalog extends EventEmitter {
         console.warn('[catalog] cache schema version mismatch, ignoring');
         return;
       }
-      for (const provider of ['claude', 'codex', 'hermes', 'grok', 'cursor'] as const) {
+      for (const provider of ['claude', 'codex', 'hermes', 'grok', 'cursor', 'copilot'] as const) {
         const entry = parsed.entries?.[provider];
         // Only hydrate when the cache actually has models — an empty array
         // means a prior discovery returned no live data, and the seeded
@@ -133,6 +134,7 @@ export class ProviderCatalog extends EventEmitter {
       hermes: this.get('hermes'),
       grok: this.get('grok'),
       cursor: this.get('cursor'),
+      copilot: this.get('copilot'),
     };
   }
 
@@ -164,6 +166,7 @@ export class ProviderCatalog extends EventEmitter {
       this.refresh('hermes'),
       this.refresh('grok'),
       this.refresh('cursor'),
+      this.refresh('copilot'),
     ]);
   }
 
@@ -179,6 +182,8 @@ export class ProviderCatalog extends EventEmitter {
         models = await discoverGrok(this.opts.getDaemonEnv());
       } else if (provider === 'cursor') {
         models = await discoverCursor(this.opts.getDaemonEnv());
+      } else if (provider === 'copilot') {
+        models = await discoverCopilot();
       } else {
         models = await discoverClaude(this.opts.discoveryCwd, this.opts.resolveClaudeExecutable);
       }
@@ -221,7 +226,7 @@ export class ProviderCatalog extends EventEmitter {
       version: CACHE_SCHEMA_VERSION,
       entries: {},
     };
-    for (const provider of ['claude', 'codex', 'hermes', 'grok', 'cursor'] as const) {
+    for (const provider of ['claude', 'codex', 'hermes', 'grok', 'cursor', 'copilot'] as const) {
       const entry = this.state.get(provider);
       if (entry && entry.lastRefreshed !== null) {
         payload.entries[provider] = {
