@@ -114,65 +114,96 @@ export function runCursor(opts: RunCursorOptions): Promise<RunCursorResult> {
 
   let sawResult = false;
   let stderr = '';
-  let killed = false;
 
-  const onAbort = () => {
-    killed = true;
+  const killChild = () => {
+    if (child.exitCode !== null || child.killed) return;
     try {
       child.kill('SIGTERM');
     } catch {
       /* ignore */
     }
     // Hard-kill if it doesn't exit promptly.
-    setTimeout(() => {
+    const t = setTimeout(() => {
       try {
         child.kill('SIGKILL');
       } catch {
         /* ignore */
       }
-    }, 2000).unref?.();
+    }, 2000);
+    t.unref?.();
   };
+
+  const onAbort = () => killChild();
   if (opts.signal.aborted) onAbort();
   else opts.signal.addEventListener('abort', onAbort, { once: true });
 
   const rl = createInterface({ input: child.stdout });
-  rl.on('line', (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    let ev: CursorEvent;
-    try {
-      ev = JSON.parse(trimmed) as CursorEvent;
-    } catch {
-      // cursor-agent keeps stdout clean for NDJSON; drop any stray non-JSON.
-      console.warn('[cursor] non-JSON stdout line dropped:', trimmed.slice(0, 200));
-      return;
-    }
-    if (ev && (ev as { type?: string }).type === 'result') sawResult = true;
-    try {
-      opts.onEvent(ev);
-    } catch (err) {
-      console.error('[cursor] onEvent handler threw', err);
-    }
-  });
-
-  child.stderr.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString('utf8');
-  });
 
   return new Promise<RunCursorResult>((resolve, reject) => {
+    let settled = false;
+    let exitCode: number | null = null;
+
+    // Finalize the turn. Cursor's real end-of-turn signal is the terminal
+    // `result` line, NOT process exit (cursor-cli skill pitfall #3). On Windows
+    // `child.on('close')` waits for the stdout/stderr PIPES to close, and a
+    // grandchild spawned by Cursor's Shell tool inherits those handles — so
+    // `close` can hang long after cursor-agent itself finished, wedging the turn
+    // (spinner spins forever, then a forced kill surfaces as a false failure).
+    // Settling on `(result-line || exit)` and background-killing any lingering
+    // child fixes that regardless of which way it hangs.
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      opts.signal.removeEventListener('abort', onAbort);
+      killChild();
+      resolve({ exitCode, sawResult, stderr });
+    };
+
+    rl.on('line', (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let ev: CursorEvent;
+      try {
+        ev = JSON.parse(trimmed) as CursorEvent;
+      } catch {
+        // cursor-agent keeps stdout clean for NDJSON; drop any stray non-JSON.
+        console.warn('[cursor] non-JSON stdout line dropped:', trimmed.slice(0, 200));
+        return;
+      }
+      try {
+        opts.onEvent(ev);
+      } catch (err) {
+        console.error('[cursor] onEvent handler threw', err);
+      }
+      if ((ev as { type?: string }).type === 'result') {
+        sawResult = true;
+        finish();
+      }
+    });
+
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+
     child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
       opts.signal.removeEventListener('abort', onAbort);
       reject(err);
     });
+
+    // `exit` fires on real process termination even when inherited pipe handles
+    // keep `close` from firing. Give readline a tick to drain buffered lines
+    // (a trailing `result`/usage line may still be in the pipe) before settling.
+    child.on('exit', (code) => {
+      exitCode = code;
+      setImmediate(finish);
+    });
+
+    // Fallback: pipes fully closed. Captures the exit code if `exit` didn't.
     child.on('close', (code) => {
-      opts.signal.removeEventListener('abort', onAbort);
-      if (killed) {
-        // Abort is a normal stop, not a failure — resolve so the adapter's
-        // finally-path runs without surfacing a turn error.
-        resolve({ exitCode: code, sawResult, stderr });
-        return;
-      }
-      resolve({ exitCode: code, sawResult, stderr });
+      if (exitCode === null) exitCode = code;
+      finish();
     });
   });
 }
