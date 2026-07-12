@@ -11,7 +11,7 @@ import {
 } from '../db/store.js';
 import { parseSessionCost } from '../hooks/costParser.js';
 import { parseSessionPrompts, parseAllProjectPrompts } from '../hooks/promptsParser.js';
-import { generateSessionLabel, generateSessionTags } from '../hooks/labeler.js';
+import { generateSessionLabelAndTags } from '../hooks/labeler.js';
 import {
   parseTranscriptChain,
   walkParentUuidChain,
@@ -660,12 +660,9 @@ export function createSessionsRouter(
       return res.status(400).json({ error: 'No prompts yet — send a message first' });
     }
 
-    // Title (required) and tags (best-effort) are generated concurrently from
-    // the same prompts so the whole feature is a single round trip.
-    const [result, tagsResult] = await Promise.all([
-      generateSessionLabel(prompts),
-      generateSessionTags(prompts),
-    ]);
+    // Title (required) and tags (best-effort) come back from a single Haiku
+    // call — one process spawn, one round trip.
+    const result = await generateSessionLabelAndTags(prompts);
     if (!result.ok) {
       console.error('[rename-ai] labeler failed:', result.error);
       return res.status(502).json({ error: result.error });
@@ -685,14 +682,11 @@ export function createSessionsRouter(
       return res.status(502).json({ error: 'AI returned an empty title' });
     }
 
-    // Only overwrite tags when generation succeeded — a tag failure leaves any
+    // Only overwrite tags when we got some — an empty result leaves any
     // existing tags untouched rather than wiping them.
-    if (!tagsResult.ok) {
-      console.error('[rename-ai] tag generation failed:', tagsResult.error);
-    }
     const updated = updateSession(
       req.params.id,
-      tagsResult.ok ? { name, tags: tagsResult.tags } : { name }
+      result.tags.length ? { name, tags: result.tags } : { name }
     );
     if (!updated) return res.status(500).json({ error: 'Failed to persist new name' });
     agentManager.emit('session-renamed', { sessionId: req.params.id });

@@ -1,13 +1,9 @@
 import { spawn } from 'child_process';
 import os from 'os';
 
-export interface LabelResult {
+export interface LabelAndTagsResult {
   ok: true;
   title: string;
-}
-
-export interface TagsResult {
-  ok: true;
   tags: string[];
 }
 
@@ -20,13 +16,6 @@ export interface LabelError {
   ok: false;
   error: string;
 }
-
-const SYSTEM_PROMPT = [
-  'You generate short titles for coding-agent sessions.',
-  'Read the user prompts and output ONE title that captures what the user is working on.',
-  'Constraints: max 6 words, max 50 characters. No preamble, no quotes, no trailing punctuation, no markdown.',
-  'Output the title and nothing else.',
-].join(' ');
 
 // A curated, standardized tag vocabulary offered to the model as SUGGESTIONS
 // so labels stay consistent across sessions. The model is explicitly free to
@@ -43,38 +32,78 @@ const SUGGESTED_TAGS = [
   'security', 'performance', 'git', 'deployment', 'dependencies', 'logging',
 ];
 
-const TAGS_SYSTEM_PROMPT = [
-  'You generate compact topic tags for coding-agent sessions.',
-  'Read ONLY the user prompts and infer the main topics.',
-  'Prefer tags from this standardized list when they fit:',
+// Title + tags in ONE call. rename-ai used to fire two concurrent claude.exe
+// processes (a title call and a tags call); each pays a ~2.5s cold-start plus a
+// variable API round-trip that occasionally balloons on retries through the
+// corporate TLS proxy. Asking Haiku for both in a single JSON object halves the
+// process spawns and the round-trips — the biggest practical latency win here.
+const LABEL_SYSTEM_PROMPT = [
+  'You label coding-agent sessions from the user prompts.',
+  'Output ONLY a JSON object with exactly two keys: "title" and "tags".',
+  '"title": one short title capturing what the user is working on —',
+  'max 6 words, max 50 characters, no quotes, no trailing punctuation.',
+  '"tags": a JSON array of 1 to 5 topic tags. Prefer these when they fit:',
   SUGGESTED_TAGS.join(', ') + '.',
-  'These are SUGGESTIONS, not a closed set — if none fit well, invent your own short tag (a specific feature, file, domain, or product name).',
-  'Constraints: output a JSON array of 1 to 5 strings. Each tag is preferably 1 word (max 2), lowercase, and max 24 characters.',
-  'No markdown, no prose, no trailing commentary — output only the JSON array.',
+  'These are SUGGESTIONS, not a closed set — invent a short tag (a specific',
+  'feature, file, domain, or product name) when none fit.',
+  'Each tag is preferably 1 word (max 2), lowercase, and max 24 characters.',
+  'No markdown, no code fences, no prose — output only the JSON object.',
 ].join(' ');
 
-const TIMEOUT_MS = 30_000;
+const COMMIT_MESSAGE_SYSTEM_PROMPT = [
+  'You write Conventional Commit messages for staged git diffs.',
+  'Read the diff and output ONE commit message, formatted as:',
+  '<type>(<optional scope>): <subject>',
+  '',
+  '<optional body explaining the why, wrapped at ~72 chars>',
+  '',
+  'Rules: subject is imperative mood (e.g. "add", "fix", "refactor"), max 72 chars, no trailing period.',
+  'Common types: feat, fix, refactor, docs, test, chore, perf, style, build, ci.',
+  'Omit the body when the change is trivial. Output the commit message and nothing else — no preamble, no markdown fences, no quotes.',
+].join(' ');
+
+// With FAST_FLAGS + FAST_ENV a solo call settles at ~5s, but the corporate TLS
+// proxy occasionally forces the CLI to retry a dropped request, pushing a single
+// call to 20-30s. 60s is deliberate headroom over that tail — a slow rename
+// beats a failed one.
+const TIMEOUT_MS = 60_000;
+
+// These are one-shot text-generation calls — they never need the agent harness.
+// `--setting-sources ''` skips user/project settings (hooks, permissions),
+// `--strict-mcp-config` (with no --mcp-config) boots zero MCP servers, and
+// `--disallowed-tools '*'` drops tool definitions. On a TLS-inspected corporate
+// network this cut a cold `claude --print` from ~22s to ~8s; the rest is the
+// Haiku round-trip itself.
+const FAST_FLAGS = ['--setting-sources', '', '--strict-mcp-config', '--disallowed-tools', '*'];
+
+// The CLI's non-essential background traffic (autoupdater poll, telemetry,
+// error reporting) fires extra requests that each pay the corporate-TLS tax and
+// add wild variance — solo calls swung 5s→22s depending on whether those hung.
+// Disabling them pinned a solo call to a steady ~5s.
+const FAST_ENV = {
+  ...process.env,
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  DISABLE_TELEMETRY: '1',
+  DISABLE_ERROR_REPORTING: '1',
+  DISABLE_AUTOUPDATER: '1',
+};
+
 // Cap how much we send to Haiku so a long-running session doesn't blow past
 // argv limits or pad the prompt with stale context that drowns out the topic.
 const MAX_PROMPTS = 8;
 const MAX_PROMPT_CHARS = 500;
 
-export async function generateSessionLabel(
-  userMessages: string[]
-): Promise<LabelResult | LabelError> {
-  if (!userMessages || userMessages.length === 0) {
-    return { ok: false, error: 'No prompts to summarize' };
-  }
-
-  const trimmed = userMessages
-    .slice(0, MAX_PROMPTS)
-    .map((m) => (m.length > MAX_PROMPT_CHARS ? m.slice(0, MAX_PROMPT_CHARS) + '…' : m));
-  const prompt = `User prompts:\n- ${trimmed.join('\n- ')}\n\nTitle:`;
-
+// Single spawn path shared by every labeler call — the timeout, stdio, env, and
+// error handling were identical across three functions before this.
+async function runClaude(
+  systemPrompt: string,
+  prompt: string,
+  logTag: string
+): Promise<{ ok: true; stdout: string } | LabelError> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     let resolved = false;
-    const finish = (value: LabelResult | LabelError) => {
+    const finish = (value: { ok: true; stdout: string } | LabelError) => {
       if (resolved) return;
       resolved = true;
       resolve(value);
@@ -90,18 +119,13 @@ export async function generateSessionLabel(
     try {
       // Spawn from os.tmpdir() so the project's CLAUDE.md isn't injected and
       // tilt the agent toward conversational responses. --system-prompt
-      // replaces the default coding-agent prompt with the title-only one.
+      // replaces the default coding-agent prompt with the task-only one.
       child = spawn(
         'claude',
-        [
-          '--model', 'claude-haiku-4-5',
-          '--system-prompt', SYSTEM_PROMPT,
-          '--print', prompt,
-        ],
+        ['--model', 'claude-haiku-4-5', ...FAST_FLAGS, '--system-prompt', systemPrompt, '--print', prompt],
         // stdin: 'ignore' = `< /dev/null`. Without it, `claude --print` blocks
-        // ~3s waiting on stdin it'll never get ("no stdin data received in 3s")
-        // and the call goes slow/flaky — the prompt is fully in argv.
-        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] }
+        // ~3s waiting on stdin it'll never get — the prompt is fully in argv.
+        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'], env: FAST_ENV }
       );
     } catch (err: any) {
       clearTimeout(timeout);
@@ -111,7 +135,6 @@ export async function generateSessionLabel(
 
     let stdout = '';
     let stderr = '';
-
     child.stdout?.on('data', (d: Buffer) => {
       stdout += d.toString();
     });
@@ -123,44 +146,26 @@ export async function generateSessionLabel(
       clearTimeout(timeout);
       const out = stdout.trim();
       if (out) {
-        finish({ ok: true, title: out });
+        finish({ ok: true, stdout: out });
         return;
       }
       const reason = stderr.trim() || `claude exited with code ${code ?? 'null'} and no output`;
-      console.error('[labeler] empty stdout:', reason);
+      console.error(`[${logTag}] empty stdout:`, reason);
       finish({ ok: false, error: reason });
     });
 
     child.on('error', (err) => {
       clearTimeout(timeout);
-      console.error('[labeler] spawn error:', err);
+      console.error(`[${logTag}] spawn error:`, err);
       finish({ ok: false, error: err.message || 'claude CLI failed to start' });
     });
   });
 }
 
-function sanitizeTags(raw: string): string[] {
-  // Haiku frequently wraps the array in a ```json code fence and/or adds
-  // prose around it despite the system prompt. Strip fences first, then pull
-  // out the first [...] block so we parse the actual array rather than tripping
-  // JSON.parse on the surrounding noise (which used to leak "json" and bracket
-  // fragments as literal tags via the line-split fallback).
-  const unfenced = raw.replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
-  const arrayMatch = unfenced.match(/\[[\s\S]*\]/);
-
-  let values: unknown = null;
-  try {
-    values = JSON.parse(arrayMatch ? arrayMatch[0] : unfenced);
-  } catch {
-    values = (arrayMatch ? arrayMatch[0] : unfenced)
-      .replace(/^[[\]]+|[[\]]+$/g, '')
-      .split(/[\n,]/)
-      .map((part) => part.replace(/^[-*\d.\s]+/, '').trim())
-      .filter(Boolean);
-  }
-
-  if (!Array.isArray(values)) return [];
-
+// Clean an array of raw tag strings: whitespace-normalize, strip stray
+// brackets/quotes, drop trailing punctuation, clamp to 24 chars, dedupe (case-
+// insensitive), cap at 5.
+function normalizeTags(values: unknown[]): string[] {
   const seen = new Set<string>();
   const tags: string[] = [];
   for (const value of values) {
@@ -168,7 +173,6 @@ function sanitizeTags(raw: string): string[] {
     const cleaned = value
       .replace(/\s+/g, ' ')
       .trim()
-      // Strip wrapping brackets/quotes/backticks a fallback split can leave on.
       .replace(/^[[\]"'`]+|[[\]"'`]+$/g, '')
       .replace(/[.!?]+$/, '')
       .trim();
@@ -183,17 +187,39 @@ function sanitizeTags(raw: string): string[] {
   return tags;
 }
 
-const COMMIT_MESSAGE_SYSTEM_PROMPT = [
-  'You write Conventional Commit messages for staged git diffs.',
-  'Read the diff and output ONE commit message, formatted as:',
-  '<type>(<optional scope>): <subject>',
-  '',
-  '<optional body explaining the why, wrapped at ~72 chars>',
-  '',
-  'Rules: subject is imperative mood (e.g. "add", "fix", "refactor"), max 72 chars, no trailing period.',
-  'Common types: feat, fix, refactor, docs, test, chore, perf, style, build, ci.',
-  'Omit the body when the change is trivial. Output the commit message and nothing else — no preamble, no markdown fences, no quotes.',
-].join(' ');
+export async function generateSessionLabelAndTags(
+  userMessages: string[]
+): Promise<LabelAndTagsResult | LabelError> {
+  if (!userMessages || userMessages.length === 0) {
+    return { ok: false, error: 'No prompts to summarize' };
+  }
+
+  const trimmed = userMessages
+    .slice(0, MAX_PROMPTS)
+    .map((m) => (m.length > MAX_PROMPT_CHARS ? m.slice(0, MAX_PROMPT_CHARS) + '…' : m));
+  const prompt = `User prompts:\n- ${trimmed.join('\n- ')}\n\nJSON:`;
+
+  const res = await runClaude(LABEL_SYSTEM_PROMPT, prompt, 'labeler');
+  if (!res.ok) return res;
+
+  // Haiku sometimes wraps the object in a ```json fence or adds prose despite
+  // the prompt — strip fences, then pull the first {...} block and parse it.
+  const unfenced = res.stdout.replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+  const objMatch = unfenced.match(/\{[\s\S]*\}/);
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(objMatch ? objMatch[0] : unfenced);
+  } catch {
+    parsed = null;
+  }
+
+  const title = typeof parsed?.title === 'string' ? parsed.title.trim() : '';
+  if (!title) {
+    return { ok: false, error: 'AI returned no usable title' };
+  }
+  const tags = Array.isArray(parsed?.tags) ? normalizeTags(parsed.tags) : [];
+  return { ok: true, title, tags };
+}
 
 export async function generateCommitMessage(
   stagedDiff: string
@@ -210,148 +236,18 @@ export async function generateCommitMessage(
     trimmed.length > MAX_INPUT ? trimmed.slice(0, MAX_INPUT) + '\n[…truncated…]' : trimmed;
   const prompt = `Staged diff:\n\n${clipped}\n\nCommit message:`;
 
-  return new Promise((resolve) => {
-    let child: ReturnType<typeof spawn>;
-    let resolved = false;
-    const finish = (value: CommitMessageResult | LabelError) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(value);
-    };
+  const res = await runClaude(COMMIT_MESSAGE_SYSTEM_PROMPT, prompt, 'commit-msg');
+  if (!res.ok) return res;
 
-    const timeout = setTimeout(() => {
-      try {
-        child?.kill();
-      } catch {}
-      finish({ ok: false, error: `claude CLI timed out after ${TIMEOUT_MS / 1000}s` });
-    }, TIMEOUT_MS);
-
-    try {
-      child = spawn(
-        'claude',
-        [
-          '--model', 'claude-haiku-4-5',
-          '--system-prompt', COMMIT_MESSAGE_SYSTEM_PROMPT,
-          '--print', prompt,
-        ],
-        // stdin: 'ignore' = `< /dev/null` — see generateSessionLabel.
-        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] }
-      );
-    } catch (err: any) {
-      clearTimeout(timeout);
-      finish({ ok: false, error: `Failed to spawn claude: ${err?.message || err}` });
-      return;
-    }
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString();
-    });
-    child.stderr?.on('data', (d: Buffer) => {
-      stderr += d.toString();
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timeout);
-      // Strip wrapping code fences / quotes occasionally added by the model
-      // despite the prompt. Keep blank lines so a multi-paragraph body
-      // (subject + body) survives intact.
-      const cleaned = stdout
-        .trim()
-        .replace(/^```[a-z]*\n?/i, '')
-        .replace(/\n?```$/, '')
-        .replace(/^["']+|["']+$/g, '')
-        .trim();
-      if (cleaned) {
-        finish({ ok: true, message: cleaned });
-        return;
-      }
-      const reason = stderr.trim() || `claude exited with code ${code ?? 'null'} and no output`;
-      console.error('[commit-msg] empty stdout:', reason);
-      finish({ ok: false, error: reason });
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timeout);
-      console.error('[commit-msg] spawn error:', err);
-      finish({ ok: false, error: err.message || 'claude CLI failed to start' });
-    });
-  });
-}
-
-export async function generateSessionTags(
-  userMessages: string[]
-): Promise<TagsResult | LabelError> {
-  if (!userMessages || userMessages.length === 0) {
-    return { ok: false, error: 'No prompts to tag' };
+  // Strip wrapping code fences / quotes occasionally added by the model despite
+  // the prompt. Keep blank lines so a multi-paragraph body survives intact.
+  const cleaned = res.stdout
+    .replace(/^```[a-z]*\n?/i, '')
+    .replace(/\n?```$/, '')
+    .replace(/^["']+|["']+$/g, '')
+    .trim();
+  if (!cleaned) {
+    return { ok: false, error: 'claude returned no commit message' };
   }
-
-  const trimmed = userMessages
-    .slice(0, MAX_PROMPTS)
-    .map((m) => (m.length > MAX_PROMPT_CHARS ? m.slice(0, MAX_PROMPT_CHARS) + '…' : m));
-  const prompt = `User prompts:\n- ${trimmed.join('\n- ')}\n\nTags JSON:`;
-
-  return new Promise((resolve) => {
-    let child: ReturnType<typeof spawn>;
-    let resolved = false;
-    const finish = (value: TagsResult | LabelError) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(value);
-    };
-
-    const timeout = setTimeout(() => {
-      try {
-        child?.kill();
-      } catch {}
-      finish({ ok: false, error: `claude CLI timed out after ${TIMEOUT_MS / 1000}s` });
-    }, TIMEOUT_MS);
-
-    try {
-      child = spawn(
-        'claude',
-        [
-          '--model', 'claude-haiku-4-5',
-          '--system-prompt', TAGS_SYSTEM_PROMPT,
-          '--print', prompt,
-        ],
-        // stdin: 'ignore' = `< /dev/null` — see generateSessionLabel.
-        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] }
-      );
-    } catch (err: any) {
-      clearTimeout(timeout);
-      finish({ ok: false, error: `Failed to spawn claude: ${err?.message || err}` });
-      return;
-    }
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString();
-    });
-    child.stderr?.on('data', (d: Buffer) => {
-      stderr += d.toString();
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timeout);
-      const tags = sanitizeTags(stdout.trim());
-      if (tags.length > 0) {
-        finish({ ok: true, tags });
-        return;
-      }
-      const reason = stderr.trim() || `claude exited with code ${code ?? 'null'} and no usable tags`;
-      console.error('[labeler] empty tags:', reason);
-      finish({ ok: false, error: reason });
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timeout);
-      console.error('[labeler] tag spawn error:', err);
-      finish({ ok: false, error: err.message || 'claude CLI failed to start' });
-    });
-  });
+  return { ok: true, message: cleaned };
 }
