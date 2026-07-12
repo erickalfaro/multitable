@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Bell } from 'lucide-react';
 import {
   useAppStore,
@@ -6,10 +6,16 @@ import {
   useProjectDominantCategory,
   useProjectPermissionCount,
   useProjectUnreadCount,
+  useRailPreviewSessionIds,
 } from '../../stores/appStore';
 import type { Project } from '../../lib/types';
 import { getProjectColor } from '../../lib/projectColor';
+import { useProjectColor } from '../../hooks/useProjectColor';
 import { useIsDark } from '../../hooks/useIsDark';
+import { orderRailEntries } from '../../lib/projectNav';
+import { useRailReorder } from './railDrag';
+import { RailSessionPreview } from './RailSessionPreview';
+import { ProjectColorPopover } from './ProjectColorPopover';
 import { buildProjectMenuItems } from '../../lib/projectActions';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import { LogoArt } from './LogoArt';
@@ -59,36 +65,160 @@ const identitySlot: React.CSSProperties = {
   justifyContent: 'center',
 };
 
+/** Reorder drop indicator, rendered in the 6px gap above the target row. */
+function DropLine({ color }: { color: string }) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'absolute',
+        top: -4,
+        left: 2,
+        right: 2,
+        height: 2,
+        borderRadius: 1,
+        background: color,
+        pointerEvents: 'none',
+        zIndex: 5,
+      }}
+    />
+  );
+}
+
+/** Props threaded from the rail's drag hook into each draggable row wrapper. */
+interface EntryDragProps {
+  onPointerDown: (e: React.PointerEvent) => void;
+  onClickCapture: (e: React.MouseEvent) => void;
+}
+
+/**
+ * A user-inserted divider between projects. Draggable like a project row;
+ * right-click to remove.
+ */
+function RailDivider({
+  id,
+  dragging,
+  dropBefore,
+  dropColor,
+  entryProps,
+  onMenuOpenChange,
+}: {
+  id: string;
+  dragging: boolean;
+  dropBefore: boolean;
+  dropColor: string;
+  entryProps?: EntryDragProps;
+  onMenuOpenChange?: (open: boolean) => void;
+}) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [hover, setHover] = useState(false);
+
+  useEffect(() => {
+    onMenuOpenChange?.(menu !== null);
+  }, [menu, onMenuOpenChange]);
+
+  return (
+    <div
+      data-rail-entry={id}
+      {...entryProps}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
+      style={{
+        position: 'relative',
+        flexShrink: 0,
+        padding: '5px 2px',
+        cursor: entryProps ? 'grab' : 'default',
+        opacity: dragging ? 0.4 : 1,
+        touchAction: entryProps ? 'none' : undefined,
+      }}
+    >
+      {dropBefore && <DropLine color={dropColor} />}
+      <div
+        style={{
+          height: 1,
+          borderRadius: 1,
+          background: hover ? 'var(--border-strong)' : 'var(--glass-border)',
+          transition: 'background var(--dur-fast) var(--ease-out)',
+        }}
+      />
+      {menu && (
+        <ContextMenu
+          items={[
+            {
+              label: 'Remove divider',
+              danger: true,
+              action: () => useAppStore.getState().removeDivider(id),
+            },
+          ]}
+          position={menu}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 /**
  * One project = one Zen tab-pill row: a full-width rounded glass pill in a
  * single vertical column. Identity is carried by bare hue-tinted initials on
  * the left (no chip box) with the project name beside them. Transparent at
  * rest, soft glass on hover, hue-tinted glass fill + hue hairline when active
- * — no outer glow. No pop-up motion (color is identity, applied softly).
+ * — no outer glow (except the hue ring marking the project that owns the
+ * currently-selected process). While the sheet is open, the project's live
+ * sessions (mid-turn or needing attention) render as jump-to preview rows
+ * under the pill.
  */
 function ProjectRailItem({
   project,
   open,
+  allowEdgeBleed,
+  dragging,
+  dropBefore,
+  dropColor,
+  entryProps,
   onMenuOpenChange,
+  onNavigate,
 }: {
   project: Project;
   open: boolean;
+  /** Collapsed desktop rail only: the active pill bleeds to the right edge. */
+  allowEdgeBleed: boolean;
+  dragging: boolean;
+  dropBefore: boolean;
+  dropColor: string;
+  entryProps?: EntryDragProps;
   onMenuOpenChange?: (open: boolean) => void;
+  onNavigate?: () => void;
 }) {
-  const dark = useIsDark();
-  const color = getProjectColor(project.id, dark);
+  const color = useProjectColor(project.id);
   const active = useAppStore((s) => s.sidebarProjectId === project.id);
+  // The project that owns the currently-selected process keeps a hue ring
+  // even when another project's sections are revealed — the "which project
+  // does the open session belong to" anchor.
+  const ownsSelection = useAppStore((s) => {
+    const sel = s.selectedProcessId;
+    if (!sel) return false;
+    const proc = s.sessions[sel] ?? s.commands[sel] ?? s.terminals[sel];
+    return proc?.projectId === project.id;
+  });
   const total = useProjectAttentionTotal(project.id);
   const permissionCount = useProjectPermissionCount(project.id);
   const unreadAttention = useProjectUnreadCount(project.id);
   const dominantCategory = useProjectDominantCategory(project.id);
+  const previewIds = useRailPreviewSessionIds(project.id, open);
   const [hover, setHover] = useState(false);
-  const [menu, setMenuState] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null);
 
-  const setMenu = (m: { x: number; y: number } | null) => {
-    setMenuState(m);
-    onMenuOpenChange?.(m !== null);
-  };
+  // The floating sheet must stay open while any popup portaled from this row
+  // is up (menu or color picker) — pointer-leave would collapse it underneath.
+  useEffect(() => {
+    onMenuOpenChange?.(menu !== null || colorPicker !== null);
+  }, [menu, colorPicker, onMenuOpenChange]);
 
   const select = () => {
     // Reveal-only: swap the sections column to this project and make it the
@@ -110,10 +240,35 @@ function ProjectRailItem({
     : hover
       ? 'var(--border-strong)'
       : 'var(--glass-border)';
-  const boxShadow = active ? 'inset 0 1px 0 var(--glass-highlight)' : 'none';
+  const boxShadow =
+    [
+      active ? 'inset 0 1px 0 var(--glass-highlight)' : null,
+      ownsSelection
+        ? `0 0 0 1px color-mix(in oklch, ${hue} 45%, transparent), 0 0 10px color-mix(in oklch, ${hue} 25%, transparent)`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(', ') || 'none';
+  // Fused-surface cue: at rest (collapsed desktop rail) the active pill drops
+  // its right rounding and runs to the rail's right edge, visually touching
+  // the hue-washed sections column beside it.
+  const bleed = allowEdgeBleed && active;
 
   return (
-    <>
+    <div
+      data-rail-entry={project.id}
+      {...entryProps}
+      style={{
+        position: 'relative',
+        flexShrink: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        opacity: dragging ? 0.4 : 1,
+        touchAction: entryProps ? 'none' : undefined,
+      }}
+    >
+      {dropBefore && <DropLine color={dropColor} />}
       <button
         type="button"
         onClick={select}
@@ -128,7 +283,7 @@ function ProjectRailItem({
         aria-current={active}
         style={{
           position: 'relative',
-          width: '100%',
+          width: bleed ? 'calc(100% + 8px)' : '100%',
           height: 40,
           display: 'flex',
           alignItems: 'center',
@@ -136,8 +291,15 @@ function ProjectRailItem({
           padding: '0 7px',
           fontFamily: 'inherit',
           background,
-          border: `1px solid ${borderColor}`,
+          // Side longhands (not the `border` shorthand) so the bleed state
+          // can drop the right edge without React's shorthand-conflict warning.
+          borderTop: `1px solid ${borderColor}`,
+          borderBottom: `1px solid ${borderColor}`,
+          borderLeft: `1px solid ${borderColor}`,
+          borderRight: bleed ? 'none' : `1px solid ${borderColor}`,
           borderRadius: 'var(--radius-soft)',
+          borderTopRightRadius: bleed ? 0 : undefined,
+          borderBottomRightRadius: bleed ? 0 : undefined,
           boxShadow,
           overflow: 'hidden',
           cursor: 'pointer',
@@ -150,7 +312,7 @@ function ProjectRailItem({
           style={{
             ...identitySlot,
             fontSize: 12,
-            fontWeight: 600,
+            fontWeight: ownsSelection ? 700 : 600,
             letterSpacing: '0.02em',
             color: hue,
             transition: 'color var(--dur-med) var(--ease-out)',
@@ -217,23 +379,47 @@ function ProjectRailItem({
           );
         })()}
       </button>
+      {open && previewIds.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {previewIds.map((sessionId) => (
+            <RailSessionPreview key={sessionId} sessionId={sessionId} onNavigate={onNavigate} />
+          ))}
+        </div>
+      )}
       {menu && (
         <ContextMenu
-          items={buildProjectMenuItems({
-            projectId: project.id,
-            projectName: project.name,
-            onRename: () => {
-              const store = useAppStore.getState();
-              store.setSidebarProject(project.id);
-              store.setFocusedProject(project.id);
-              store.setProjectSettingsOpen(true);
+          items={[
+            {
+              label: 'Change color…',
+              action: () => setColorPicker(menu),
             },
-          })}
+            {
+              label: 'Add divider below',
+              action: () => useAppStore.getState().addDividerAfter(project.id),
+            },
+            ...buildProjectMenuItems({
+              projectId: project.id,
+              projectName: project.name,
+              onRename: () => {
+                const store = useAppStore.getState();
+                store.setSidebarProject(project.id);
+                store.setFocusedProject(project.id);
+                store.setProjectSettingsOpen(true);
+              },
+            }).map((item, i) => (i === 0 ? { ...item, divider: true } : item)),
+          ]}
           position={menu}
           onClose={() => setMenu(null)}
         />
       )}
-    </>
+      {colorPicker && (
+        <ProjectColorPopover
+          projectId={project.id}
+          position={colorPicker}
+          onClose={() => setColorPicker(null)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -241,14 +427,16 @@ function ProjectRailItem({
  * The always-visible leftmost project switcher — Zen browser compact mode.
  * At rest it is a slim icon-only strip (bare hue-tinted initials per project);
  * hovering (or keyboard-focusing) it floats a full-width glass sheet OVER the
- * sections column, revealing labels. It collapses back when the pointer
- * leaves. Rows: Home, Add-project, then one glass tab-pill per project.
- * Picking a project reveals its sections in the adjacent column without
- * disturbing the main pane. `alwaysExpanded` renders the static full-width
- * column with no hover behavior; `compact` (mobile drawer) renders the static
- * icon-only strip — no hover/focus expansion, so the narrow drawer keeps its
- * width for the sections column and identity is carried by the tinted
- * initials alone.
+ * sections column, revealing labels plus live jump-to session previews per
+ * project. It collapses back when the pointer leaves. Rows: Home, Add-project,
+ * then the user-ordered list of glass project pills and dividers (drag any row
+ * to reorder; order persists via GlobalConfig.ui.projectNav). Picking a
+ * project reveals its sections in the adjacent column without disturbing the
+ * main pane; clicking a session preview jumps straight to that session.
+ * `alwaysExpanded` renders the static full-width column with no hover
+ * behavior; `compact` (mobile drawer) renders the static icon-only strip — no
+ * hover/focus expansion and no drag — so the narrow drawer keeps its width for
+ * the sections column and identity is carried by the tinted initials alone.
  */
 export function ProjectRail({
   alwaysExpanded = false,
@@ -258,9 +446,12 @@ export function ProjectRail({
   compact?: boolean;
 }) {
   const projects = useAppStore((s) => s.projects);
+  const projectNav = useAppStore((s) => s.projectNav);
+  const setProjectNavEntries = useAppStore((s) => s.setProjectNavEntries);
   const selectedProcessId = useAppStore((s) => s.selectedProcessId);
   const projectOverviewOpen = useAppStore((s) => s.projectOverviewOpen);
   const setAddProjectModalOpen = useAppStore((s) => s.setAddProjectModalOpen);
+  const dark = useIsDark();
   const [homeHover, setHomeHover] = useState(false);
   const [addHover, setAddHover] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -269,6 +460,7 @@ export function ProjectRail({
   const [menuPinned, setMenuPinned] = useState(false);
   const enterTimer = useRef<number | undefined>(undefined);
   const leaveTimer = useRef<number | undefined>(undefined);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(
     () => () => {
@@ -278,16 +470,41 @@ export function ProjectRail({
     [],
   );
 
-  const open = !compact && (alwaysExpanded || expanded || menuPinned);
+  const railEntries = useMemo(() => orderRailEntries(projects, projectNav), [projects, projectNav]);
+
+  const { dragEntryId, dropIndex, dragging, getEntryProps } = useRailReorder({
+    containerRef: listRef,
+    entries: railEntries,
+    disabled: compact,
+    onCommit: setProjectNavEntries,
+  });
+
+  // Pin the sheet open for the drag's duration — collapsing mid-drag would
+  // reflow the rows under the pointer.
+  const open = !compact && (alwaysExpanded || expanded || menuPinned || dragging);
 
   const onEnter = () => {
     window.clearTimeout(leaveTimer.current);
     enterTimer.current = window.setTimeout(() => setExpanded(true), EXPAND_DELAY_MS);
   };
   const onLeave = () => {
+    if (dragging) return;
     window.clearTimeout(enterTimer.current);
     leaveTimer.current = window.setTimeout(() => setExpanded(false), COLLAPSE_DELAY_MS);
   };
+  // Jump-to from a session preview: collapse immediately so the landing feels
+  // instant (no 140ms grace lag over the freshly-swapped sections column).
+  const collapseNow = () => {
+    window.clearTimeout(enterTimer.current);
+    window.clearTimeout(leaveTimer.current);
+    setExpanded(false);
+  };
+
+  const dragEntry = dragEntryId ? railEntries.find((e) => e.id === dragEntryId) : undefined;
+  const dropColor =
+    dragEntry?.kind === 'project'
+      ? getProjectColor(dragEntry.id, dark).dot
+      : 'var(--accent-amber)';
 
   const onDashboard = !selectedProcessId && !projectOverviewOpen;
 
@@ -391,8 +608,12 @@ export function ProjectRail({
         }}
       />
 
-      {/* The tab list — a single column of full-width glass project pills. */}
+      {/* The tab list — user-ordered project pills + dividers, drag to
+          reorder. Right margin folds the container's 8px padding into the
+          scroll area so the active pill's edge-bleed can reach the true rail
+          edge (overflow clips at the padding box). */}
       <div
+        ref={listRef}
         className="mt-scroll"
         style={{
           flex: 1,
@@ -403,16 +624,48 @@ export function ProjectRail({
           flexDirection: 'column',
           gap: 6,
           paddingBottom: 2,
+          marginRight: -8,
+          paddingRight: 8,
         }}
       >
-        {projects.map((project) => (
-          <ProjectRailItem
-            key={project.id}
-            project={project}
-            open={open}
-            onMenuOpenChange={setMenuPinned}
+        {railEntries.map((entry, i) =>
+          entry.kind === 'divider' ? (
+            <RailDivider
+              key={entry.id}
+              id={entry.id}
+              dragging={dragEntryId === entry.id}
+              dropBefore={dropIndex === i && dragging}
+              dropColor={dropColor}
+              entryProps={compact ? undefined : getEntryProps(entry.id)}
+              onMenuOpenChange={setMenuPinned}
+            />
+          ) : (
+            <ProjectRailItem
+              key={entry.id}
+              project={entry.project}
+              open={open}
+              allowEdgeBleed={!open && !compact}
+              dragging={dragEntryId === entry.id}
+              dropBefore={dropIndex === i && dragging}
+              dropColor={dropColor}
+              entryProps={compact ? undefined : getEntryProps(entry.id)}
+              onMenuOpenChange={setMenuPinned}
+              onNavigate={collapseNow}
+            />
+          ),
+        )}
+        {dragging && dropIndex === railEntries.length && (
+          <div
+            aria-hidden
+            style={{
+              height: 2,
+              margin: '0 2px',
+              borderRadius: 1,
+              background: dropColor,
+              flexShrink: 0,
+            }}
           />
-        ))}
+        )}
       </div>
     </>
   );

@@ -11,8 +11,7 @@ import { api, stopProcessByType } from '../../lib/api';
 import { buildProjectMenuItems } from '../../lib/projectActions';
 import toast from 'react-hot-toast';
 import type { ManagedProcess, Project } from '../../lib/types';
-import { getProjectColor } from '../../lib/projectColor';
-import { useIsDark } from '../../hooks/useIsDark';
+import { useProjectColor } from '../../hooks/useProjectColor';
 
 function formatMetrics(proc: ManagedProcess): string {
   const parts: string[] = [];
@@ -45,8 +44,7 @@ export function ProjectSections({ project }: Props) {
     setSelectedProcess,
   } = store;
 
-  const dark = useIsDark();
-  const color = getProjectColor(project.id, dark);
+  const color = useProjectColor(project.id);
 
   const [showAddCommand, setShowAddCommand] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -328,8 +326,8 @@ export function ProjectSections({ project }: Props) {
           position: 'relative',
           borderRadius: 'var(--radius-soft)',
           overflow: 'hidden',
-          backgroundColor: `color-mix(in oklch, ${color.stripe} 5%, transparent)`,
-          border: `1px solid color-mix(in oklch, ${color.stripe} 30%, var(--glass-border))`,
+          backgroundColor: `color-mix(in oklch, ${color.stripe} 8%, transparent)`,
+          border: `1px solid color-mix(in oklch, ${color.stripe} 45%, var(--glass-border))`,
           transition: 'border-color var(--dur-med) var(--ease-out), background-color var(--dur-med) var(--ease-out)',
         }}
       >

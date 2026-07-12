@@ -347,7 +347,27 @@ export interface GlobalConfig {
     // Region-aware wall layout (v2). Stored opaquely by the daemon.
     wallLayout?: WallLayout;
     wallLayoutLocked?: boolean;
+    // Left-nav preferences: project order + user dividers + manual hue
+    // overrides. Stored opaquely by the daemon; the web client owns the shape.
+    projectNav?: ProjectNavPrefs;
   };
+}
+
+// ── Project nav (left rail) ────────────────────────────────────────────────
+// Interleaved order list — dividers are first-class entries so they survive
+// project reorder/removal. Projects absent from `entries` render after the
+// listed ones in server (created_at) order.
+
+export interface ProjectNavEntry {
+  kind: 'project' | 'divider';
+  /** Project id, or a stable `div-<uuid>` for dividers. */
+  id: string;
+}
+
+export interface ProjectNavPrefs {
+  entries: ProjectNavEntry[];
+  /** Manual hue override by project id → RING hue name; absent key = auto. */
+  colors?: Record<string, string>;
 }
 
 // ── Wall layout ────────────────────────────────────────────────────────────

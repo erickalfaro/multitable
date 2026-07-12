@@ -12,6 +12,7 @@ import { IconButton, Spinner } from '../ui';
 import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
 import { useIsMobile } from '../../lib/useIsMobile';
+import { useProjectColor } from '../../hooks/useProjectColor';
 
 interface Props {
   session: Session;
@@ -29,6 +30,12 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
   const [aiLoading, setAiLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const upsertSession = useAppStore((s) => s.upsertSession);
+  // Project fingerprint — the owning project's hue + name anchor the session
+  // to its project even when another project is revealed in the sidebar.
+  const color = useProjectColor(session.projectId);
+  const ownProjectName = useAppStore(
+    (s) => s.projects.find((p) => p.id === session.projectId)?.name,
+  );
 
   useEffect(() => {
     if (editing) {
@@ -113,6 +120,9 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
             <span
               title={projectName}
               style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
                 fontSize: 9.5,
                 color: 'var(--text-muted)',
                 textTransform: 'uppercase',
@@ -120,11 +130,20 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
                 fontWeight: 500,
                 lineHeight: 1,
                 overflow: 'hidden',
-                textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}
             >
-              {projectName}
+              <span
+                aria-hidden
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: '50%',
+                  background: color.dot,
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{projectName}</span>
             </span>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
@@ -244,7 +263,9 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
         backgroundColor: 'var(--glass-bg)',
         backdropFilter: 'blur(var(--blur)) saturate(1.3)',
         WebkitBackdropFilter: 'blur(var(--blur)) saturate(1.3)',
-        borderBottom: '1px solid var(--glass-border)',
+        // Project fingerprint: the hairline carries a hint of the owning
+        // project's hue so the header reads as that project's surface.
+        borderBottom: `1px solid color-mix(in oklch, ${color.dot} 30%, var(--glass-border))`,
         padding: '6px 14px',
         boxSizing: 'border-box',
         flexShrink: 0,
@@ -253,6 +274,60 @@ export function SessionHeaderBar({ session, onToggleDetailPanel, projectName, on
       {/* Top row */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0, flex: 1 }}>
+          {ownProjectName && (
+            <button
+              type="button"
+              onClick={() => {
+                // Reveal-only, like a rail pill: swap the sidebar to the
+                // owning project without touching the main-pane selection.
+                const store = useAppStore.getState();
+                store.setSidebarProject(session.projectId);
+                store.setFocusedProject(session.projectId);
+              }}
+              title={`${ownProjectName} — show in sidebar`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                flexShrink: 0,
+                maxWidth: 140,
+                height: 20,
+                margin: '1px 0',
+                padding: '0 7px',
+                fontFamily: 'inherit',
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color: 'var(--text-secondary)',
+                background: `color-mix(in oklch, ${color.dot} 10%, transparent)`,
+                border: `1px solid color-mix(in oklch, ${color.dot} 35%, transparent)`,
+                borderRadius: 'var(--radius-pill)',
+                cursor: 'pointer',
+                overflow: 'hidden',
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: color.dot,
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {ownProjectName}
+              </span>
+            </button>
+          )}
           {editing ? (
             <input
               ref={inputRef}

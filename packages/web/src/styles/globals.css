@@ -1427,6 +1427,16 @@ select:focus-visible,
     color-mix(in oklch, var(--workspace-to, transparent) 6%, var(--bg-elevated))
   );
 }
+/* Barely-there variant over the primary canvas — the project fingerprint on
+ * large surfaces (chat scroll area, sidebar sections column) where 7% over
+ * --bg-elevated would read heavy. */
+.mt-workspace-washed {
+  background-color: color-mix(
+    in oklch,
+    var(--workspace-from, transparent) 4%,
+    var(--bg-primary)
+  );
+}
 
 /* Prose helper — opt-in humanist-sans block (default body inherits it now,
  * but components that previously hard-coded a font-family stack can switch

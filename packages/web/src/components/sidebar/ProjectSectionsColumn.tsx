@@ -1,5 +1,6 @@
 import { useAppStore } from '../../stores/appStore';
 import { ProjectSections } from './ProjectSections';
+import { WorkspaceTint } from '../theme/WorkspaceTint';
 
 /**
  * The scrollable sidebar column (desktop panel `id="sidebar"`). Renders the
@@ -15,15 +16,17 @@ export function ProjectSectionsColumn() {
   const activeProject = projects.find((p) => p.id === sidebarProjectId) ?? null;
 
   return (
-    <div
+    // The faint hue wash fuses this column with the rail's active pill (which
+    // bleeds to its right edge in the collapsed rail) — the two read as one
+    // continuous per-project surface. Falls back to transparent with no
+    // project in scope (the class isn't applied).
+    <WorkspaceTint
+      projectId={activeProject?.id ?? null}
+      variant="washed"
       className="mt-scroll"
       style={{
         width: '100%',
         height: '100%',
-        // Transparent — the sidebar list floats directly on the shell glass so
-        // the ambient bloom reads behind it (one blur layer: the shell). The
-        // resize handle provides the seam to the main pane.
-        backgroundColor: 'transparent',
         display: 'flex',
         flexDirection: 'column',
         overflowY: 'auto',
@@ -51,6 +54,6 @@ export function ProjectSectionsColumn() {
           select a <em>project</em>
         </div>
       )}
-    </div>
+    </WorkspaceTint>
   );
 }

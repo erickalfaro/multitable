@@ -11,6 +11,7 @@ import { MessageList } from './MessageList';
 import { ChatScroller } from './ChatScroller';
 import { ChatInputCM } from './ChatInputCM';
 import { PinnedUserPrompt } from './PinnedUserPrompt';
+import { WorkspaceTint } from '../../theme/WorkspaceTint';
 
 /**
  * Density tiers — see plan §3 "Density is a prop, not a fork."
@@ -232,7 +233,12 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
 
       {showBanner && <ProcessBanner process={session} />}
 
-      <div
+      {/* Comfortable density wears a barely-there wash of the owning
+          project's hue (fingerprint); wall/card tiles already self-tint via
+          their wrappers, so they keep the flat canvas. */}
+      <WorkspaceTint
+        projectId={density === 'comfortable' ? session.projectId : null}
+        variant="washed"
         style={{
           flex: 1,
           display: 'flex',
@@ -241,7 +247,7 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
           minHeight: 0,
           minWidth: 0,
           position: 'relative',
-          backgroundColor: 'var(--bg-primary)',
+          ...(density === 'comfortable' ? null : { backgroundColor: 'var(--bg-primary)' }),
         }}
       >
         <ChatScroller
@@ -285,7 +291,7 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
             />
           ))}
         {cfg.showPermissionBar && <PermissionBar sessionId={sessionId} />}
-      </div>
+      </WorkspaceTint>
     </div>
   );
 }

@@ -166,6 +166,13 @@ export interface GlobalConfig {
     wallLayout?: WallLayout;
     // Lock toggle — when true tiles can't be dragged/resized.
     wallLayoutLocked?: boolean;
+    // Left-nav preferences (project order + user dividers + manual hue
+    // overrides). Persisted opaquely, like wallLayout; the web client owns
+    // the shape (see packages/web/src/lib/types.ts ProjectNavPrefs).
+    projectNav?: {
+      entries: Array<{ kind: 'project' | 'divider'; id: string }>;
+      colors?: Record<string, string>;
+    };
   };
 }
 

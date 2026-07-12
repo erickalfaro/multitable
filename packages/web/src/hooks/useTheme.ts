@@ -39,13 +39,19 @@ export function useAmbientAccent() {
     const fromSession = sel ? s.sessions[sel]?.projectId : undefined;
     return fromSession ?? s.sidebarProjectId ?? s.focusedProjectId ?? null;
   });
+  // Manual hue override — re-runs the effect when the user recolors the
+  // active project so the ambient bloom follows immediately.
+  const colorOverride = useAppStore((s) =>
+    projectId ? s.projectNav.colors?.[projectId] ?? null : null,
+  );
 
   useEffect(() => {
+    void colorOverride;
     const root = document.documentElement;
     if (projectId) {
       root.style.setProperty('--space-accent', getProjectColor(projectId, dark).stripe);
     } else {
       root.style.removeProperty('--space-accent');
     }
-  }, [projectId, dark]);
+  }, [projectId, dark, colorOverride]);
 }

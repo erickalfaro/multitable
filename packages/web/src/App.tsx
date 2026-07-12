@@ -350,6 +350,20 @@ function App() {
     loadData();
     hydratePendingPrompts();
 
+    // One-time boot reconcile of the left-nav prefs (project order, dividers,
+    // hue overrides) from the server copy — this is what makes them survive a
+    // browser swap. Server wins at boot; afterwards local edits win via the
+    // debounced PATCH in the store.
+    api.config
+      .get()
+      .then((cfg) => {
+        const nav = cfg.ui?.projectNav;
+        if (nav) useAppStore.getState().hydrateProjectNav(nav);
+      })
+      .catch(() => {
+        // Daemon may not be running yet; localStorage copy already applied.
+      });
+
     // Seed the model catalog from the daemon's cached snapshot so model
     // pickers (AddAgentModal, ModeBadge, ThinkingEffortBadge) render
     // instantly without round-tripping. The daemon's `ProviderCatalog`
