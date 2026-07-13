@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface MenuItem {
   label: string;
@@ -14,6 +15,9 @@ interface Props {
   onClose: () => void;
 }
 
+/** Sit above rail sheets, modals hosts, glyph pickers, mobile drawers, etc. */
+const CONTEXT_MENU_Z = 100_000;
+
 export function ContextMenu({ items, position, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -26,10 +30,11 @@ export function ContextMenu({ items, position, onClose }: Props) {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
-    document.addEventListener('mousedown', handleMouseDown);
+    // Capture phase so we win over stopPropagation in nested UI.
+    document.addEventListener('mousedown', handleMouseDown, true);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('mousedown', handleMouseDown, true);
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [onClose]);
@@ -44,14 +49,17 @@ export function ContextMenu({ items, position, onClose }: Props) {
   if (left < 0) left = 8;
   if (top < 0) top = 8;
 
-  return (
+  // Portal to body so fixed positioning isn't trapped by rail overflow /
+  // transform / isolation stacking contexts (which buried "Pin to Wall").
+  return createPortal(
     <div
       ref={ref}
+      role="menu"
       style={{
         position: 'fixed',
         left,
         top,
-        zIndex: 2000,
+        zIndex: CONTEXT_MENU_Z,
         backgroundColor: 'var(--bg-elevated)',
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius-lg)',
@@ -73,6 +81,8 @@ export function ContextMenu({ items, position, onClose }: Props) {
             />
           )}
           <div
+            role="menuitem"
+            aria-disabled={item.disabled || undefined}
             onClick={() => {
               if (item.disabled) return;
               item.action();
@@ -109,6 +119,7 @@ export function ContextMenu({ items, position, onClose }: Props) {
           </div>
         </React.Fragment>
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 }

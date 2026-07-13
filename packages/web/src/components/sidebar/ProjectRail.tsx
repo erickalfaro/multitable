@@ -34,7 +34,7 @@ import { buildProjectMenuItems } from '../../lib/projectActions';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import { LogoArt } from './LogoArt';
 import { CATEGORY_COLOR_VAR, CATEGORY_ICON } from '../../lib/alertVisuals';
-import { getProjectGlyph } from '../../lib/projectGlyph';
+import { ProjectGlyphIcon } from './ProjectGlyphIcon';
 import { RAIL_COLLAPSED, RAIL_EXPANDED, RAIL_MARK_COL } from '../../lib/railGeometry';
 
 
@@ -420,15 +420,21 @@ function ProjectRailItem({
   const dominantCategory = useProjectDominantCategory(project.id);
   const previewIds = useRailPreviewSessionIds(project.id, true);
   const glyphId = useAppStore((s) => s.projectNav.glyphs?.[project.id] ?? null);
-  const glyph = getProjectGlyph(glyphId);
   const [hover, setHover] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null);
   const [glyphPicker, setGlyphPicker] = useState<{ x: number; y: number } | null>(null);
+  // Session preview menus also pin the rail sheet open.
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
 
   useEffect(() => {
-    onMenuOpenChange?.(menu !== null || colorPicker !== null || glyphPicker !== null);
-  }, [menu, colorPicker, glyphPicker, onMenuOpenChange]);
+    onMenuOpenChange?.(
+      menu !== null ||
+        colorPicker !== null ||
+        glyphPicker !== null ||
+        sessionMenuOpen,
+    );
+  }, [menu, colorPicker, glyphPicker, sessionMenuOpen, onMenuOpenChange]);
 
   const select = () => {
     const store = useAppStore.getState();
@@ -488,8 +494,8 @@ function ProjectRailItem({
           hover={hover}
           dark={dark}
         >
-          {glyph ? (
-            <glyph.Icon size={16} strokeWidth={markLit ? 2.25 : 1.7} />
+          {glyphId ? (
+            <ProjectGlyphIcon id={glyphId} size={18} />
           ) : (
             projectInitials(project.name)
           )}
@@ -556,6 +562,7 @@ function ProjectRailItem({
               key={sessionId}
               sessionId={sessionId}
               onNavigate={onNavigate}
+              onMenuOpenChange={setSessionMenuOpen}
             />
           ))}
         </div>

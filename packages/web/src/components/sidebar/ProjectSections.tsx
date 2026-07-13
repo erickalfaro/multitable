@@ -7,8 +7,9 @@ import { SidebarExplorerSection } from './SidebarExplorerSection';
 import { AddProcessModal } from '../modals/AddProcessModal';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuItem } from '../context-menu/ContextMenu';
-import { api, stopProcessByType } from '../../lib/api';
+import { api } from '../../lib/api';
 import { buildProjectMenuItems } from '../../lib/projectActions';
+import { buildSessionMenuItems } from '../../lib/sessionMenuItems';
 import { isSessionListed, sessionRecencyMs } from '../../lib/sessionVisibility';
 import toast from 'react-hot-toast';
 import type { ManagedProcess, Project } from '../../lib/types';
@@ -169,70 +170,6 @@ export function ProjectSections({ project }: Props) {
     }
   };
 
-  const removeSessionsById = async (ids: string[]) => {
-    if (ids.length === 0) return;
-    const results = await Promise.allSettled(ids.map((id) => api.sessions.delete(id)));
-    const failed: string[] = [];
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') {
-        store.removeSession(ids[i]);
-        routeAwayIfSelected(ids[i]);
-      } else {
-        failed.push(ids[i]);
-      }
-    });
-    window.dispatchEvent(new Event('mt:past-sessions-refresh'));
-    store.clearMultiSelectedSessions();
-    if (failed.length === 0) {
-      toast.success(ids.length === 1 ? 'Session removed' : `${ids.length} sessions removed`);
-    } else {
-      toast.error(`Failed to remove ${failed.length} session${failed.length === 1 ? '' : 's'}`);
-    }
-  };
-
-  const getSessionMenuItems = (process: ManagedProcess): MenuItem[] => {
-    const isRunning = process.state === 'running';
-    const bulk =
-      store.multiSelectedSessionIds.length >= 2 &&
-      store.multiSelectedSessionIds.includes(process.id);
-    const bulkIds = bulk ? store.multiSelectedSessionIds : [process.id];
-    const isPinned = store.pinnedSessionIds.includes(process.id);
-
-    return [
-      ...(bulk
-        ? []
-        : [
-            {
-              label: isPinned ? 'Unpin from Wall' : 'Pin to Wall',
-              action: () => store.togglePinSession(process.id),
-              divider: true,
-            } as MenuItem,
-          ]),
-      // Sessions auto-start on the first turn (sending a message IS starting),
-      // so the Start path doesn't apply — only show Stop while a turn is in
-      // flight. Stop here means "abort the in-flight SDK turn" via
-      // /api/sessions/:id/stop, NOT the PTY route.
-      ...(isRunning && !bulk
-        ? [
-            {
-              label: 'Stop',
-              action: () =>
-                stopProcessByType(process as Parameters<typeof stopProcessByType>[0]).catch(() =>
-                  toast.error('Failed to stop'),
-                ),
-              divider: true,
-            } as MenuItem,
-          ]
-        : []),
-      {
-        label: bulk ? `Remove ${bulkIds.length} sessions` : 'Remove session',
-        action: () => {
-          void removeSessionsById(bulkIds);
-        },
-      },
-    ];
-  };
-
   const getCommandMenuItems = (process: ManagedProcess): MenuItem[] => {
     const isRunning = process.state === 'running';
     return [
@@ -314,10 +251,14 @@ export function ProjectSections({ project }: Props) {
       return [];
     }
     switch (type) {
-      case 'session': return getSessionMenuItems(process);
-      case 'command': return getCommandMenuItems(process);
-      case 'terminal': return getTerminalMenuItems(process);
-      default: return [];
+      case 'session':
+        return buildSessionMenuItems(process);
+      case 'command':
+        return getCommandMenuItems(process);
+      case 'terminal':
+        return getTerminalMenuItems(process);
+      default:
+        return [];
     }
   };
 

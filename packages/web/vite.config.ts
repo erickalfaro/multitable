@@ -59,6 +59,7 @@ export default defineConfig({
       'react-dom/client',
       'react-hot-toast',
       'lucide-react',
+      '@iconify/react',
       'zustand',
       'react-markdown',
       'streamdown',
@@ -67,5 +68,7 @@ export default defineConfig({
   build: {
     outDir: '../daemon/dist/public',
     emptyOutDir: true,
+    // Offline Iconify collections live in public/iconify/ (~20 MB) and are
+    // lazy-fetched per set — don't try to inline them.
   },
 });
