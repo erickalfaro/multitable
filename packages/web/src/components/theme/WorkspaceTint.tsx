@@ -8,11 +8,15 @@ interface Props {
   gradient?: boolean;
   /**
    * Tint strength/base: 'tinted' (7% over --bg-elevated, default),
-   * 'gradient' (same as the boolean prop), or 'washed' — a barely-there 4%
-   * wash over --bg-primary for large surfaces (chat scroll area, sidebar
-   * column). Takes precedence over `gradient` when set.
+   * 'gradient' (same as the boolean prop), 'washed' — a barely-there 4%
+   * wash over --bg-primary for large surfaces (chat scroll area), or
+   * 'fused' — the opaque 10% surface the sections column shares with the
+   * rail's docked active pill (SURFACE mix must stay string-equal with
+   * ProjectRailItem's fusedSurface; hairlines intentionally diverge — hot
+   * 55% at the tab vs the column's quiet 22% base + lit-seam overlay).
+   * Takes precedence over `gradient` when set.
    */
-  variant?: 'tinted' | 'gradient' | 'washed';
+  variant?: 'tinted' | 'gradient' | 'washed' | 'fused';
   /** Container tag — defaults to <div>. */
   as?: keyof React.JSX.IntrinsicElements;
   className?: string;

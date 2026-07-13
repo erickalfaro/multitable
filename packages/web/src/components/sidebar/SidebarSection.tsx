@@ -44,12 +44,13 @@ export function SidebarSection({
   });
 
   return (
-    <div style={{ marginTop: 20 }}>
+    <div className="mt-sidebar-section" style={{ marginTop: 14 }}>
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          padding: '4px 10px 4px 12px',
+          padding: '2px 10px 2px 10px',
+          // Match session row left rhythm; keep right inset for the + control.
           userSelect: 'none',
           WebkitUserSelect: 'none',
           WebkitTouchCallout: 'none',
@@ -91,28 +92,29 @@ export function SidebarSection({
         )}
         <span
           style={{
-            fontSize: 9.5,
+            fontSize: 10,
             fontWeight: 500,
             color: 'var(--text-faint)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.18em',
+            letterSpacing: '0.04em',
             marginRight: 'auto',
           }}
         >
           {title}
         </span>
         {onAdd && (
-          <IconButton
-            size="sm"
-            variant="subtle"
-            onClick={(e) => {
-              e.stopPropagation();
-              onAdd();
-            }}
-            label={`Add ${title.toLowerCase()}`}
-          >
-            <Plus size={11} />
-          </IconButton>
+          <span className="mt-section-add">
+            <IconButton
+              size="sm"
+              variant="subtle"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAdd();
+              }}
+              label={`Add ${title.toLowerCase()}`}
+            >
+              <Plus size={11} />
+            </IconButton>
+          </span>
         )}
         {shortcut && (
           <span style={{ fontSize: 10, color: 'var(--text-faint)', letterSpacing: '0.04em' }}>
@@ -124,7 +126,12 @@ export function SidebarSection({
         className={scrollMaxHeight ? 'mt-scroll' : undefined}
         style={
           scrollMaxHeight
-            ? { maxHeight: scrollMaxHeight, overflowY: 'auto', overflowX: 'hidden' }
+            ? {
+              maxHeight: scrollMaxHeight,
+              overflowY: 'auto',
+              // Visible so selected open-right strokes can bleed to the panel edge.
+              overflowX: 'visible',
+            }
             : undefined
         }
       >

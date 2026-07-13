@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { Session, ManagedProcess } from '../../lib/types';
 import { isProcessActive } from '../../lib/processState';
+import { isSessionListed, sessionRecencyMs } from '../../lib/sessionVisibility';
 import { Badge, Divider, IconButton, AgentBadge } from '../ui';
 import { StatusDot } from '../sidebar/StatusDot';
 import { terminalManager } from '../../lib/terminalManager';
@@ -298,13 +299,22 @@ export function ProjectOverview({ projectId }: Props) {
   const store = useAppStore();
   const project = store.projects.find((p) => p.id === projectId);
 
+  const forceIds = [
+    store.selectedProcessId,
+    ...store.multiSelectedSessionIds,
+  ].filter((id): id is string => !!id);
   const sessions = Object.values(store.sessions)
-    .filter((s) => s.projectId === projectId)
-    .sort((a, b) => {
-      const recency = (s: typeof a) =>
-        s.claudeState?.lastActivity || s.lastActiveAt || s.createdAt || 0;
-      return recency(b) - recency(a);
-    });
+    .filter((s) => {
+      if (s.projectId !== projectId) return false;
+      const hasPermission = store.pendingPermissions.some((p) => p.sessionId === s.id);
+      const isLive =
+        s.state === 'running' ||
+        !!store.streamingBySession[s.id] ||
+        !!store.toolProgressBySession[s.id] ||
+        (store.statusBySession[s.id]?.status ?? null) !== null;
+      return isSessionListed(s, { forceIds, hasPermission, isLive });
+    })
+    .sort((a, b) => sessionRecencyMs(b) - sessionRecencyMs(a));
   const commands = Object.values(store.commands).filter((c) => c.projectId === projectId);
   const terminals = Object.values(store.terminals).filter((t) => t.projectId === projectId);
 

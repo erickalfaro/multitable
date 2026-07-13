@@ -6,14 +6,15 @@ import {
   useRailSessionAttention,
 } from '../../stores/appStore';
 import { SessionStatusLoader } from './SessionStatusLoader';
+import { dockOutline, dockPool } from '../../lib/emphasis';
+import { projectHueCss } from '../../lib/metalPalette';
+import { useIsDark } from '../../hooks/useIsDark';
+import { RAIL_EXPANDED, RAIL_MARK_COL } from '../../lib/railGeometry';
 
 /**
- * One live session row under a project in the expanded rail sheet: sessions
- * that are mid-turn or need the user, with a ticking one-line snippet.
- * Clicking is the cross-project jump — it selects the session directly
- * (setSelectedProcess flips the sidebar + focused project to the owner and
- * clears the other main-pane surfaces), so the user lands in the conversation
- * in one click from anywhere.
+ * Session under a project on the rail.
+ * Row is always RAIL_EXPANDED wide; mark sits centered in the left RAIL_MARK_COL.
+ * Parent clips to 60px when collapsed → mark is centered in the panel.
  */
 export function RailSessionPreview({
   sessionId,
@@ -26,107 +27,158 @@ export function RailSessionPreview({
   const selected = useAppStore((s) => s.selectedProcessId === sessionId);
   const snippet = useRailSessionSnippet(sessionId);
   const attention = useRailSessionAttention(sessionId);
+  const dark = useIsDark();
   const [hover, setHover] = useState(false);
   if (!session) return null;
 
-  const jump = () => {
+  const jump = (e: React.MouseEvent) => {
+    e.stopPropagation();
     const store = useAppStore.getState();
     store.clearMultiSelectedSessions();
     store.setSelectedProcess(sessionId);
     onNavigate?.();
   };
 
+  const selectHue = projectHueCss(session.projectId, dark);
+  // Selected session is ALWAYS open on the right — never a closed box.
+  // That open edge meets the panel's left gap when this project is viewed.
+  const title = snippet ? `${session.name}\n${snippet}` : session.name;
+  // Sessions = thin activity rows (not project identity tiles).
+  const pool = selected
+    ? {
+        ...dockPool(selectHue, { fill: 10, tone: 'medium' }),
+        ...dockOutline(selectHue),
+      }
+    : hover
+      ? {
+          background: 'color-mix(in oklch, var(--text-primary) 5%, transparent)',
+          boxShadow: 'none',
+          border: 'none',
+        }
+      : { background: 'transparent', boxShadow: 'none', border: 'none' };
+
   return (
     <button
       type="button"
+      data-rail-session={sessionId}
+      data-selected={selected ? 'true' : undefined}
+      className={'mt-rail-session' + (selected ? ' is-docked is-docked-open' : '')}
       onClick={jump}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={session.name}
+      title={title}
+      aria-label={session.name}
       style={{
         display: 'flex',
+        flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        width: 'calc(100% - 18px)',
-        marginLeft: 18,
-        padding: '3px 6px',
-        fontFamily: 'inherit',
-        background: selected
-          ? 'var(--glass-bg)'
-          : hover
-            ? 'var(--glass-bg-soft)'
-            : 'transparent',
-        border: `1px solid ${selected ? 'var(--border-strong)' : 'transparent'}`,
-        borderRadius: 'var(--radius-soft)',
+        width: RAIL_EXPANDED,
+        minWidth: RAIL_EXPANDED,
+        height: 30,
+        padding: 0,
+        margin: 0,
+        border: 'none',
+        borderRadius: 0,
         cursor: 'pointer',
-        overflow: 'hidden',
+        fontFamily: 'inherit',
         textAlign: 'left',
+        opacity: selected ? 1 : 0.82,
+        ...pool,
+        flexShrink: 0,
         transition:
-          'background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)',
+          'background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
       }}
     >
-      <SessionStatusLoader
-        loaderVariant={session.loaderVariant}
-        state={session.state}
-        projectId={session.projectId}
-        size={12}
-      />
+      {/* Nested under the project emblem — small status, not a monogram. */}
+      <span
+        aria-hidden
+        style={{
+          width: RAIL_MARK_COL,
+          minWidth: RAIL_MARK_COL,
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          // Pull status slightly right so it reads as a child of the disc above
+          paddingLeft: 6,
+        }}
+      >
+        <SessionStatusLoader
+          loaderVariant={session.loaderVariant}
+          state={session.state}
+          projectId={session.projectId}
+          size={11}
+          // Live only — quiet 24h jump-backs keep a resting glyph.
+          active={session.state === 'running'}
+        />
+      </span>
+
+      {/* Label column — revealed when parent shell expands */}
       <span
         style={{
           flex: 1,
           minWidth: 0,
+          height: '100%',
           display: 'flex',
-          flexDirection: 'column',
-          gap: 1,
+          alignItems: 'center',
+          gap: 6,
+          paddingRight: 10,
+          overflow: 'hidden',
         }}
       >
         <span
           style={{
-            fontSize: 11.5,
-            fontWeight: 500,
-            color: 'var(--text-secondary)',
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            gap: 0,
             overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
           }}
         >
-          {session.name}
-        </span>
-        {snippet && (
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: selected ? 560 : 450,
+              lineHeight: 1.25,
+              color: selected ? 'var(--text-primary)' : 'var(--text-muted)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {session.name}
+          </span>
           <span
             style={{
               fontSize: 10,
+              lineHeight: 1.2,
               color: 'var(--text-muted)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
               fontVariantNumeric: 'tabular-nums',
+              minHeight: 12,
             }}
           >
-            {snippet}
+            {snippet || '\u00a0'}
           </span>
-        )}
-      </span>
-      {attention && (
-        <span
-          aria-hidden
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 15,
-            height: 15,
-            flexShrink: 0,
-            borderRadius: 'var(--radius-pill)',
-            background: 'var(--glass-bg-strong)',
-            color: 'var(--accent-amber)',
-            border: '1px solid var(--accent-amber)',
-            animation: 'mt-pulse 1.6s ease-in-out infinite',
-          }}
-        >
-          <Bell size={8} />
         </span>
-      )}
+        {attention ? (
+          <span
+            aria-hidden
+            style={{
+              flexShrink: 0,
+              color: 'var(--accent-amber)',
+              display: 'inline-flex',
+            }}
+          >
+            <Bell size={9} />
+          </span>
+        ) : null}
+      </span>
     </button>
   );
 }

@@ -133,22 +133,31 @@
   --font-size-prose: 13.5px;
   --font-size-mono: 12.5px;
 
-  /* ── Glass material tier (glass-design) ──────────────────────────────
-     Translucent frosted surfaces over the ambient backdrop. The opacity
-     ladder is load-bearing: each layer is MORE opaque than the one behind
-     it so text stays legible. blur is reserved for floating overlays —
-     repeated/content-heavy surfaces use the *-flat (no-blur) recipe. */
-  --glass-bg:        oklch(22% 0.012 280 / 0.55);   /* default chrome panels   */
-  --glass-bg-strong: oklch(24% 0.012 280 / 0.72);   /* modals/palette/dense text */
-  --glass-bg-opaque: oklch(24% 0.012 280);           /* fully opaque sheet — no bleed-through, no blur needed */
-  --glass-bg-soft:   oklch(22% 0.012 280 / 0.38);   /* shell/large areas/inputs */
-  --glass-border:    oklch(100% 0 0 / 0.10);
-  --glass-highlight: oklch(100% 0 0 / 0.06);         /* inset top-lit hairline  */
-  --blur: 18px;
-  --blur-strong: 26px;
+  /* ── Glass material tier (metallic-glass + glass-design) ─────────────
+     Translucent frosted surfaces over the living metal ambient (Paper
+     Shaders MeshGradient). Opacity ladder is load-bearing: each layer is
+     MORE opaque than the one behind so text stays legible. blur is reserved
+     for the shell + floating overlays — chrome uses the *-flat recipe. */
+  --glass-bg:        oklch(22% 0.01 280 / 0.90);    /* mostly solid plate */
+  --glass-bg-strong: oklch(24% 0.012 280 / 0.96);   /* modals/palette/dense text */
+  --glass-bg-opaque: oklch(24% 0.012 280);
+  --glass-bg-soft:   oklch(22% 0.01 280 / 0.78);    /* large plate / hover wash */
+  --glass-border:    oklch(100% 0 0 / 0.08);
+  --glass-highlight: oklch(100% 0 0 / 0.06);
+  --blur: 16px;
+  --blur-strong: 22px;
   --glass-shadow:
     0 18px 50px -12px oklch(0% 0 0 / 0.55),
     inset 0 1px 0 var(--glass-highlight);
+
+  /* Metallic specular language — cheap CSS, no extra WebGL. */
+  --metal-specular: oklch(100% 0 0 / 0.14);
+  --metal-specular-soft: oklch(100% 0 0 / 0.06);
+  --metal-shadow: oklch(0% 0 0 / 0.45);
+  --metal-edge: oklch(100% 0 0 / 0.12);
+  --metal-depth:
+    inset 0 1px 0 var(--metal-specular),
+    inset 0 -1px 0 oklch(0% 0 0 / 0.22);
 
   /* Back-compat: the prior minimal seed mapped here. Existing .mt-glass /
      var(--glass-tint) / var(--blur-glass) call sites pick up the new look. */
@@ -158,15 +167,14 @@
   /* ── Floating shell — the app window inset from the viewport edge. ───── */
   --shell-inset: 10px;
   --shell-radius: 20px;
-  --shell-bg: oklch(22% 0.012 280 / 0.40);
+  --shell-bg: oklch(18% 0.01 280 / 0.88);
 
-  /* ── Ambient backdrop — opaque canvas + corner blooms. --space-accent is
-     overwritten at runtime per active project (useAmbientAccent); the
-     fallback is the lavender ring accent so first paint isn't gray. ────── */
-  --ambient-base: oklch(16% 0.012 280);
+  /* ── Ambient backdrop — base + soft blooms under the WebGL metal field.
+     --space-accent is rewritten per project (useAmbientAccent). ──────── */
+  --ambient-base: oklch(12% 0.014 280);
   --space-accent: oklch(74% 0.10 285);
-  --bloom:   color-mix(in oklch, var(--space-accent) 22%, transparent);
-  --bloom-2: color-mix(in oklch, var(--space-accent) 10%, transparent);
+  --bloom:   color-mix(in oklch, var(--space-accent) 18%, transparent);
+  --bloom-2: color-mix(in oklch, var(--space-accent) 8%, transparent);
 
   /* ── Brand coral — the single filled primary action. Deliberate off-band
      exception (not registered with assertBandDiscipline). ─────────────── */
@@ -247,30 +255,37 @@
     0 1px 2px oklch(20% 0.01 280 / 0.08),
     0 10px 26px oklch(20% 0.01 280 / 0.12);
 
-  /* Glass over a light bloom must be a *light* panel (higher alpha, bright
-     inset highlight) or text turns muddy. */
-  --glass-bg:        oklch(99% 0.004 80 / 0.62);
-  --glass-bg-strong: oklch(99% 0.004 80 / 0.80);
+  /* Glass over light ambient — mostly solid plates. */
+  --glass-bg:        oklch(99% 0.004 80 / 0.92);
+  --glass-bg-strong: oklch(99% 0.004 80 / 0.97);
   --glass-bg-opaque: oklch(99% 0.004 80);
-  --glass-bg-soft:   oklch(98% 0.004 80 / 0.45);
+  --glass-bg-soft:   oklch(98% 0.004 80 / 0.82);
   --glass-border:    oklch(20% 0.01 280 / 0.10);
-  --glass-highlight: oklch(100% 0 0 / 0.60);
-  --blur: 18px;
-  --blur-strong: 26px;
+  --glass-highlight: oklch(100% 0 0 / 0.55);
+  --blur: 16px;
+  --blur-strong: 22px;
   --glass-shadow:
-    0 18px 50px -12px oklch(20% 0.01 280 / 0.18),
+    0 18px 50px -12px oklch(20% 0.01 280 / 0.16),
     inset 0 1px 0 var(--glass-highlight);
   --glass-tint: var(--glass-bg);
   --blur-glass: var(--blur);
 
+  --metal-specular: oklch(100% 0 0 / 0.55);
+  --metal-specular-soft: oklch(100% 0 0 / 0.35);
+  --metal-shadow: oklch(20% 0.01 280 / 0.12);
+  --metal-edge: oklch(20% 0.01 280 / 0.10);
+  --metal-depth:
+    inset 0 1px 0 var(--metal-specular),
+    inset 0 -1px 0 oklch(20% 0.01 280 / 0.06);
+
   --shell-inset: 10px;
   --shell-radius: 20px;
-  --shell-bg: oklch(98% 0.004 80 / 0.50);
+  --shell-bg: oklch(98% 0.004 80 / 0.92);
 
-  --ambient-base: oklch(94% 0.008 80);
+  --ambient-base: oklch(92% 0.01 80);
   --space-accent: oklch(48% 0.12 285);
-  --bloom:   color-mix(in oklch, var(--space-accent) 16%, transparent);
-  --bloom-2: color-mix(in oklch, var(--space-accent) 8%, transparent);
+  --bloom:   color-mix(in oklch, var(--space-accent) 14%, transparent);
+  --bloom-2: color-mix(in oklch, var(--space-accent) 6%, transparent);
 
   --brand-coral: oklch(58% 0.19 32);
   --brand-coral-hover: oklch(54% 0.19 32);
@@ -622,48 +637,205 @@ select:focus-visible,
  */
 .mt-sidebar-item {
   contain: layout style;
-  /* Soft corners so hover/selection reads as a rounded pill-row, not a full
-     edge-to-edge band — matches the glass-design soft geometry. */
-  border-radius: var(--radius-soft);
-  /* No bg/border transitions on the row itself — selection should SNAP
-     instantly; hover changes feel quicker without easing through. */
+  /* Soft luminous pool — depth via box-shadow, not a hard frame. */
+  border-radius: 6px;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 .mt-sidebar-item:not(.is-selected):not(.is-multi):hover {
-  background-color: var(--bg-hover);
+  background: color-mix(in oklch, var(--text-primary) 5%, transparent);
+  box-shadow: none;
+}
+/* Selected / docked sessions: always open on the right — never a closed card.
+ * Inline styles set the L/T/B strokes; this is the CSS safety net so radius,
+ * borders, or hover rules can't re-close the right edge. */
+.mt-sidebar-item.is-selected,
+.mt-sidebar-item.is-docked-open,
+.mt-rail-session.is-docked,
+.mt-rail-session.is-docked-open {
+  border-right: none !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+  border-radius: 0 !important;
+}
+
+/* Section add affordance — quiet until the section is hovered / focused. */
+.mt-section-add {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.mt-sidebar-section:hover .mt-section-add,
+.mt-sidebar-section:focus-within .mt-section-add {
+  opacity: 1;
+}
+@media (hover: none) {
+  .mt-section-add {
+    opacity: 0.7;
+  }
 }
 /* Metrics text fades smoothly when its content changes. */
 .mt-sidebar-item-meta {
   transition: opacity var(--dur-fast) var(--ease-out);
 }
-/* The loader icon doubles as a "Rename with AI" shortcut. On hover it grows
-   and gains an amber ring so it reads as a clickable action, not just status. */
+/* ── AI rename affordance on the session status loader ───────────────────
+ * Hover: a slow orbital "rewrite spark" — not a dumb scale + ring.
+ * The loader lifts slightly while a conic shard orbits and a soft bloom
+ * breathes, reading as "this will rewrite the name" without shouting. */
 .mt-loader-rename {
+  position: relative;
+  width: 18px;
+  height: 18px;
   border-radius: 999px;
-  transition:
-    transform var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  isolation: isolate;
+  transition: transform 280ms var(--ease-out);
 }
-.mt-loader-rename:hover {
-  transform: scale(1.35);
-  box-shadow: 0 0 0 3px var(--accent-amber-dim);
+/* Soft bloom under the glyph */
+.mt-loader-rename::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--space-accent) 35%, transparent) 0%,
+    transparent 70%
+  );
+  opacity: 0;
+  transform: scale(0.6);
+  transition:
+    opacity 320ms var(--ease-out),
+    transform 320ms var(--ease-out);
+  z-index: -1;
+  pointer-events: none;
+}
+/* Orbital rewrite ring — thin conic shard that spins on hover */
+.mt-loader-rename::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    transparent 240deg,
+    color-mix(in oklch, var(--space-accent) 70%, white) 280deg,
+    color-mix(in oklch, var(--accent-amber) 80%, transparent) 320deg,
+    transparent 360deg
+  );
+  opacity: 0;
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
+  transition: opacity 280ms var(--ease-out);
+  z-index: -1;
+  pointer-events: none;
+}
+.mt-loader-rename > * {
+  position: relative;
+  z-index: 1;
+  transition: transform 320ms var(--ease-out), filter 320ms var(--ease-out);
+}
+.mt-loader-rename:hover,
+.mt-loader-rename:focus-visible {
+  transform: translateY(-1px);
+}
+.mt-loader-rename:hover::before,
+.mt-loader-rename:focus-visible::before {
+  opacity: 1;
+  transform: scale(1);
+  animation: mt-rename-breathe 1.6s var(--ease-out) infinite;
+}
+.mt-loader-rename:hover::after,
+.mt-loader-rename:focus-visible::after {
+  opacity: 0.9;
+  animation: mt-rename-orbit 1.1s linear infinite;
+}
+.mt-loader-rename:hover > *,
+.mt-loader-rename:focus-visible > * {
+  transform: scale(1.12);
+  filter: brightness(1.15) saturate(1.1);
+}
+/* Busy state while the rename request is in flight */
+.mt-loader-rename.is-renaming::before {
+  opacity: 1;
+  transform: scale(1);
+  animation: mt-rename-breathe 1.1s var(--ease-out) infinite;
+}
+.mt-loader-rename.is-renaming::after {
+  opacity: 1;
+  animation: mt-rename-orbit 0.7s linear infinite;
+}
+@keyframes mt-rename-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes mt-rename-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.95);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mt-loader-rename:hover,
+  .mt-loader-rename:focus-visible {
+    transform: none;
+  }
+  .mt-loader-rename:hover::before,
+  .mt-loader-rename:focus-visible::before,
+  .mt-loader-rename.is-renaming::before {
+    opacity: 0.7;
+    transform: scale(1);
+    animation: none;
+  }
+  .mt-loader-rename:hover::after,
+  .mt-loader-rename:focus-visible::after,
+  .mt-loader-rename.is-renaming::after {
+    opacity: 0.5;
+    animation: none;
+    /* Static arc hint instead of spin */
+    background: conic-gradient(
+      from 200deg,
+      transparent 0deg,
+      color-mix(in oklch, var(--space-accent) 60%, transparent) 60deg,
+      transparent 120deg
+    );
+  }
+  .mt-loader-rename:hover > *,
+  .mt-loader-rename:focus-visible > * {
+    transform: none;
+    filter: brightness(1.1);
+  }
 }
 
 /* ---------- Resizable panel handle ----------
- * Zen: 3px slim seam at rest (was 6px), visible only on hover. The hit zone
- * stays generous via padding inset so users don't have to aim precisely.
+ * Zen: slim seam at rest, visible only on hover. The hit zone stays
+ * generous so users don't have to aim precisely.
+ * Only separator that remains: dual-sidebar vs main pane (not rail vs sections).
  */
 .mt-resize-handle {
   position: relative;
-  flex: 0 0 3px;
+  flex: 0 0 4px;
   background: transparent;
   cursor: col-resize;
-  transition: flex-basis var(--dur-med) var(--ease-out),
-              background-color var(--dur-fast) var(--ease-out);
+  transition: flex-basis var(--dur-med) var(--ease-out);
 }
 .mt-resize-handle::after {
   content: '';
   position: absolute;
-  inset: 0 1px;
+  top: 20%;
+  bottom: 20%;
+  left: 1.5px;
+  width: 1px;
+  border-radius: 1px;
   background: transparent;
   transition: background-color var(--dur-med) var(--ease-out);
 }
@@ -673,7 +845,7 @@ select:focus-visible,
 }
 .mt-resize-handle:hover::after,
 .mt-resize-handle[data-resize-handle-active]::after {
-  background: var(--border-strong);
+  background: color-mix(in oklch, var(--space-accent) 35%, transparent);
 }
 
 /* ---------- Edge rails (visible only when a side panel is collapsed) ----------
@@ -1011,10 +1183,10 @@ select:focus-visible,
  * The inset top highlight is baked into --glass-shadow so every glass surface
  * reads "lit from above" automatically. */
 
-/* Ambient root — opaque canvas + two corner blooms that follow --space-accent
- * (re-tinted per active project at runtime). The radial blooms never read as a
- * solid fill; the transition cross-fades the hue on project switch. */
+/* Ambient root — opaque canvas + soft blooms (first paint / WebGL fallback).
+ * Living metal is layered on top via .mt-ambient-metal (Paper MeshGradient). */
 .mt-ambient {
+  position: relative;
   background-color: var(--ambient-base);
   background-image:
     radial-gradient(120vh 120vh at 100% 0%, var(--bloom) 0%, transparent 60%),
@@ -1022,18 +1194,61 @@ select:focus-visible,
   transition: background-image var(--dur-slow) var(--ease-out);
 }
 
-/* Floating app window — inset from the edge, big radius, faint accent edge-glow. */
+/* Single WebGL field — pointer-events none, sits under .mt-shell. */
+.mt-ambient-metal {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity var(--dur-slow) var(--ease-out);
+  /* Slight scale so edge mesh doesn't clip hard against the shell radius. */
+  transform: scale(1.02);
+}
+.mt-ambient-metal canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Shell stacks above ambient metal; position so z-index works. */
+.mt-ambient > .mt-shell {
+  position: relative;
+  z-index: 1;
+}
+
+/* Floating app window — single frosted plate (the only blur under the cursor). */
 .mt-shell {
   background: var(--shell-bg);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.2);
-  backdrop-filter: blur(var(--blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.15);
+  backdrop-filter: blur(var(--blur)) saturate(1.15);
   border: 1px solid var(--glass-border);
   border-radius: var(--shell-radius);
   box-shadow:
     var(--glass-shadow),
-    0 0 0 1px color-mix(in oklch, var(--space-accent) 14%, transparent),
-    0 0 60px -20px var(--bloom);
+    0 0 0 1px color-mix(in oklch, var(--space-accent) 12%, transparent),
+    0 0 80px -24px var(--bloom),
+    var(--metal-depth);
   overflow: hidden;
+}
+
+/* Continuous metal plate — flat translucent chrome (no extra backdrop-filter). */
+.mt-metal-plate {
+  background: var(--glass-bg);
+  border: 1px solid transparent;
+  box-shadow: var(--metal-depth);
+}
+
+/* Shape-shifting selection / hover capsule — shared rail pill + session row. */
+.mt-metal-capsule {
+  border-radius: var(--radius-soft);
+  box-shadow: var(--metal-depth);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-med) var(--ease-out),
+    border-color var(--dur-med) var(--ease-out),
+    border-radius var(--dur-med) var(--ease-out);
 }
 
 /* Default chrome panel — translucent + blurred + hairline border + top sheen. */
@@ -1428,14 +1643,135 @@ select:focus-visible,
   );
 }
 /* Barely-there variant over the primary canvas — the project fingerprint on
- * large surfaces (chat scroll area, sidebar sections column) where 7% over
- * --bg-elevated would read heavy. */
+ * large surfaces (chat scroll area) where 7% over --bg-elevated would read
+ * heavy. */
 .mt-workspace-washed {
   background-color: color-mix(
     in oklch,
     var(--workspace-from, transparent) 4%,
     var(--bg-primary)
   );
+}
+
+/* ── One dual-sidebar instrument ─────────────────────────────────────────
+ * Rail + agents share a single plate, single flex cluster, zero internal
+ * borders. The rail is a gutter of content, not a second panel. */
+.mt-sidebar-unity {
+  background: color-mix(
+    in oklch,
+    var(--space-accent) 4%,
+    oklch(22% 0.01 280 / 0.94)
+  );
+  transition: background var(--dur-slow) var(--ease-out);
+}
+[data-theme='light'] .mt-sidebar-unity {
+  background: color-mix(
+    in oklch,
+    var(--space-accent) 3%,
+    oklch(98% 0.004 80 / 0.96)
+  );
+}
+
+.mt-sidebar-cluster {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  /* No gap — columns of content, not columns of chrome. */
+  gap: 0;
+}
+
+.mt-sidebar-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: transparent;
+  /* Hairline? Never. */
+  border: none;
+  box-shadow: none;
+}
+
+/* Sections panel outline is painted with straight div segments in
+ * ProjectSectionsColumn — no CSS frame, no curves.
+ * --open-*     : left gap for rail-session dock
+ * --right-open-*: right gap for selected session dock into main pane */
+.mt-sections-panel {
+  --open-top: 0px;
+  --open-bot: 40px;
+  --right-open-top: 0px;
+  --right-open-bot: 40px;
+}
+
+/* Legacy fused class kept inert. */
+.mt-workspace-fused {
+  background-color: transparent;
+  padding-left: 0;
+}
+.mt-workspace-fused::before,
+.mt-workspace-fused::after {
+  display: none;
+}
+
+/* Seam connector fade-in — the fused pill's throat/bloom pieces mount fresh
+ * on selection; fade instead of popping. */
+@keyframes mt-seam-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Docking motion — only on a real project switch (not hover-close re-fuses). */
+@keyframes mt-tab-dock {
+  0% {
+    transform: translateX(-2px);
+  }
+  70% {
+    transform: translateX(0.5px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+@keyframes mt-fillet-dock {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+/* Rail gutter — zero chrome; lives inside .mt-sidebar-cluster. */
+.mt-rail-gutter {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Hover labels only — soft lift over the body, same hue family as the plate. */
+.mt-rail-sheet {
+  background: color-mix(
+    in oklch,
+    var(--space-accent) 3%,
+    var(--glass-bg-opaque)
+  );
+  box-shadow: 12px 0 28px -16px oklch(0% 0 0 / 0.45);
+  border: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .mt-rail-sheet {
+    background: var(--glass-bg-opaque);
+  }
+}
+
+/* Rail pill press feedback — respond on pointer-down (apple-design §1). */
+.mt-rail-pill:active {
+  transform: scale(0.97);
+  transition: transform 100ms var(--ease-out);
 }
 
 /* Prose helper — opt-in humanist-sans block (default body inherits it now,

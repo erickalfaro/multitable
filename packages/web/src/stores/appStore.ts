@@ -47,6 +47,7 @@ import {
 } from '../lib/themes';
 import { loadSnapshot, saveSnapshot } from '../lib/persistedStore';
 import { dominantAlertForSessions } from '../lib/alertVisuals';
+import { isSessionOnRail, sessionRecencyMs } from '../lib/sessionVisibility';
 import type { AlertCategory } from '../lib/types';
 
 // Wall layout persistence — write localStorage synchronously (keeps cold-load
@@ -83,6 +84,15 @@ function persistProjectNav(nav: ProjectNavPrefs) {
   }, 400);
 }
 
+// crypto.randomUUID only exists in secure contexts; the daemon serves plain
+// HTTP, so non-localhost origins (LAN access) must fall back or the divider
+// insert throws mid-set().
+const newDividerId = () =>
+  'div-' +
+  (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Date.now().toString(36) + Math.random().toString(36).slice(2));
+
 interface AppState {
   // Projects
   projects: Project[];
@@ -103,6 +113,7 @@ interface AppState {
   addDividerAfter: (projectId: string) => void;
   removeDivider: (dividerId: string) => void;
   setProjectColorOverride: (projectId: string, hueName: string | null) => void;
+  setProjectGlyphOverride: (projectId: string, glyphId: string | null) => void;
   hydrateProjectNav: (nav: ProjectNavPrefs) => void;
   setProjects: (projects: Project[]) => void;
   addProject: (project: Project) => void;
@@ -160,6 +171,11 @@ interface AppState {
   // whenever a plain (un-modified) click sets a new primary selection.
   multiSelectedSessionIds: string[];
   sidebarCollapsed: boolean;
+  // Vertical center of the rail's docked session row, relative to the
+  // sections panel top — the column aligns its left-edge gap to it. Null when
+  // no session is docked. The consumer writes --open-top/--open-bot
+  // imperatively; only null↔number flips should trigger React renders.
+  railSeamY: number | null;
   // Zen Pinned Session Wall (plan §5.3) — ordered list of session ids the
   // user has pinned to the homepage. Mirrored to localStorage for instant
   // cold-load and to `GlobalConfig.pinnedSessionIds` for cross-browser sync.
@@ -196,6 +212,7 @@ interface AppState {
   toggleMultiSelectedSession: (id: string) => void;
   clearMultiSelectedSessions: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  setRailSeamY: (y: number | null) => void;
   togglePinSession: (id: string) => void;
   reorderPinnedSessions: (ids: string[]) => void;
   setFocusedPane: (id: string | null) => void;
@@ -580,7 +597,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const entries = materializeNavEntries(s.projects, s.projectNav);
       const idx = entries.findIndex((e) => e.kind === 'project' && e.id === projectId);
       if (idx === -1) return {};
-      entries.splice(idx + 1, 0, { kind: 'divider', id: `div-${crypto.randomUUID()}` });
+      entries.splice(idx + 1, 0, { kind: 'divider', id: newDividerId() });
       const next: ProjectNavPrefs = { ...s.projectNav, entries: normalizeNavEntries(entries) };
       persistProjectNav(next);
       return { projectNav: next };
@@ -610,10 +627,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       persistProjectNav(next);
       return { projectNav: next };
     }),
+  setProjectGlyphOverride: (projectId, glyphId) =>
+    set((s) => {
+      const glyphs = { ...(s.projectNav.glyphs ?? {}) };
+      if (glyphId) glyphs[projectId] = glyphId;
+      else delete glyphs[projectId];
+      const next: ProjectNavPrefs = {
+        ...s.projectNav,
+        glyphs: Object.keys(glyphs).length > 0 ? glyphs : undefined,
+      };
+      persistProjectNav(next);
+      return { projectNav: next };
+    }),
   hydrateProjectNav: (nav) => {
     const next: ProjectNavPrefs = {
       entries: Array.isArray(nav.entries) ? nav.entries : [],
       colors: nav.colors,
+      glyphs: nav.glyphs,
     };
     // Came FROM the server — mirror to localStorage only, no PATCH echo.
     try {
@@ -633,19 +663,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeProject: (id) =>
     set((s) => {
       const remaining = s.projects.filter((p) => p.id !== id);
-      // Prune the project from the nav prefs (order entry + color override),
+      // Prune the project from the nav prefs (order + color + glyph),
       // collapsing any dividers left adjacent by the removal.
       let projectNav = s.projectNav;
       const hadEntry = s.projectNav.entries.some((e) => e.kind === 'project' && e.id === id);
       const hadColor = !!s.projectNav.colors?.[id];
-      if (hadEntry || hadColor) {
+      const hadGlyph = !!s.projectNav.glyphs?.[id];
+      if (hadEntry || hadColor || hadGlyph) {
         const colors = { ...(s.projectNav.colors ?? {}) };
         delete colors[id];
+        const glyphs = { ...(s.projectNav.glyphs ?? {}) };
+        delete glyphs[id];
         projectNav = {
           entries: normalizeNavEntries(
             s.projectNav.entries.filter((e) => e.kind !== 'project' || e.id !== id),
           ),
           colors: Object.keys(colors).length > 0 ? colors : undefined,
+          glyphs: Object.keys(glyphs).length > 0 ? glyphs : undefined,
         };
         setProjectColorOverrides(projectNav.colors);
         persistProjectNav(projectNav);
@@ -776,6 +810,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   fileViewerRefreshKey: {},
   multiSelectedSessionIds: [],
   sidebarCollapsed: false,
+  railSeamY: null,
   pinnedSessionIds: (() => {
     // Read localStorage synchronously so the Wall paints on first frame
     // without a hydration flash. The daemon GET /api/config will reconcile
@@ -928,6 +963,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   clearMultiSelectedSessions: () => set({ multiSelectedSessionIds: [] }),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+  setRailSeamY: (y) =>
+    set((s) => {
+      const cur = s.railSeamY;
+      if (y === cur) return {};
+      // Sub-pixel jitter guard — scroll measurements arrive per frame.
+      if (y != null && cur != null && Math.abs(y - cur) < 0.5) return {};
+      return { railSeamY: y };
+    }),
   togglePinSession: (id) =>
     set((s) => {
       const next = s.pinnedSessionIds.includes(id)
@@ -1798,35 +1841,51 @@ export function useProjectDominantCategory(projectId: string): AlertCategory | n
 }
 
 // ── Rail session previews ────────────────────────────────────────────────────
-// Live "what would I jump to" rows under each project in the expanded rail:
-// sessions that are mid-turn or need the user (permission / unread). Both
-// hooks return scalars (joined string / string) so Zustand's reference
-// equality short-circuits the rail on unrelated store ticks; neither ever
-// touches messagesBySession.
+// Jump-back rows under each project on the left rail (see lib/sessionVisibility):
+//   1. live / needs-user (permission, unread, mid-turn)
+//   2. quiet activity in the last 24 hours
+//   3. never older than 1 week
+// Soft safety cap keeps a pathological project from stretching the rail forever.
 
-const MAX_RAIL_PREVIEWS = 3;
+/** Soft cap — real projects rarely hit this; guards multi-hundred session repos. */
+const MAX_RAIL_PREVIEWS = 20;
 const EMPTY_IDS: string[] = [];
 
+/**
+ * Sessions to surface under a project in the rail. Always computed when
+ * `enabled` — collapsed rail shows compact glyphs; expanded sheet shows name.
+ */
 export function useRailPreviewSessionIds(projectId: string, enabled: boolean): string[] {
   const joined = useAppStore((s) => {
-    // Collapsed rail pays nothing for streaming ticks.
     if (!enabled) return '';
+    const now = Date.now();
+    const forceIds = new Set<string>();
+    if (s.selectedProcessId) forceIds.add(s.selectedProcessId);
+    for (const id of s.multiSelectedSessionIds) forceIds.add(id);
+
     const rows: Array<{ id: string; score: number; recency: number }> = [];
     for (const sess of Object.values(s.sessions)) {
       if (sess.projectId !== projectId) continue;
       const hasPermission = s.pendingPermissions.some((p) => p.sessionId === sess.id);
-      const unread = (s.unreadBySession[sess.id] ?? 0) > 0;
-      const active =
+      const hasUnread = (s.unreadBySession[sess.id] ?? 0) > 0;
+      const isLive =
         sess.state === 'running' ||
         !!s.streamingBySession[sess.id] ||
         !!s.toolProgressBySession[sess.id] ||
         (s.statusBySession[sess.id]?.status ?? null) !== null;
-      if (!hasPermission && !unread && !active) continue;
-      rows.push({
-        id: sess.id,
-        score: hasPermission ? 2 : unread ? 1 : 0,
-        recency: sess.claudeState?.lastActivity ?? sess.lastActiveAt ?? sess.createdAt ?? 0,
-      });
+      if (
+        !isSessionOnRail(
+          sess,
+          { forceIds, hasPermission, hasUnread, isLive },
+          now,
+        )
+      ) {
+        continue;
+      }
+      const recency = sessionRecencyMs(sess);
+      // Attention first, then live work, then quiet recent jump-backs.
+      const score = hasPermission ? 3 : hasUnread ? 2 : isLive ? 1 : 0;
+      rows.push({ id: sess.id, score, recency });
     }
     rows.sort((a, b) => b.score - a.score || b.recency - a.recency);
     return rows
@@ -1851,6 +1910,21 @@ export function useRailSessionSnippet(sessionId: string): string {
     if (s.sessions[sessionId]?.state === 'running') return 'Working…';
     const unread = s.unreadBySession[sessionId] ?? 0;
     if (unread > 0) return `${unread} unread alert${unread === 1 ? '' : 's'}`;
+    // Quiet recent jump-back — show how long since last activity.
+    const sess = s.sessions[sessionId];
+    if (sess) {
+      const recency = sessionRecencyMs(sess);
+      if (recency > 0) {
+        const diff = Date.now() - recency;
+        const sec = Math.floor(diff / 1000);
+        if (sec < 60) return 'just now';
+        const min = Math.floor(sec / 60);
+        if (min < 60) return `${min}m ago`;
+        const hr = Math.floor(min / 60);
+        if (hr < 24) return `${hr}h ago`;
+        return `${Math.floor(hr / 24)}d ago`;
+      }
+    }
     return '';
   });
 }

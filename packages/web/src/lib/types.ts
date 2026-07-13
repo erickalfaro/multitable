@@ -368,6 +368,8 @@ export interface ProjectNavPrefs {
   entries: ProjectNavEntry[];
   /** Manual hue override by project id → RING hue name; absent key = auto. */
   colors?: Record<string, string>;
+  /** Manual glyph override by project id → glyph id; absent key = auto initials. */
+  glyphs?: Record<string, string>;
 }
 
 // ── Wall layout ────────────────────────────────────────────────────────────
