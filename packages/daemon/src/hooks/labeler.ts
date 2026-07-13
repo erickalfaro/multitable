@@ -1,4 +1,15 @@
+/**
+ * Session labeling / commit-message generation.
+ *
+ * Hot path (rename-ai): Anthropic Messages API directly — no `claude` CLI
+ * spawn. Measured ~1–2s with OAuth (vs multi-second CLI cold-start that
+ * frequently hit the 60s timeout through corporate TLS). Falls back to the
+ * CLI only when no API key / OAuth token is available.
+ */
+
 import { spawn } from 'child_process';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import os from 'os';
 
 export interface LabelAndTagsResult {
@@ -18,25 +29,44 @@ export interface LabelError {
 }
 
 // A curated, standardized tag vocabulary offered to the model as SUGGESTIONS
-// so labels stay consistent across sessions. The model is explicitly free to
-// coin its own tag when none of these fit (e.g. a specific feature, file, or
-// product name). Keep these short (1 word where possible) and lowercase.
+// so labels stay consistent across sessions. The model is free to coin its own.
 const SUGGESTED_TAGS = [
-  // work type
-  'feature', 'bugfix', 'refactor', 'debugging', 'testing', 'docs', 'cleanup',
-  'review', 'research', 'config', 'optimization', 'migration', 'setup',
-  // area / layer
-  'frontend', 'backend', 'ui', 'ux', 'api', 'database', 'auth', 'cli',
-  'infra', 'ci/cd', 'devops', 'networking', 'styling', 'state', 'build',
-  // cross-cutting
-  'security', 'performance', 'git', 'deployment', 'dependencies', 'logging',
+  'feature',
+  'bugfix',
+  'refactor',
+  'debugging',
+  'testing',
+  'docs',
+  'cleanup',
+  'review',
+  'research',
+  'config',
+  'optimization',
+  'migration',
+  'setup',
+  'frontend',
+  'backend',
+  'ui',
+  'ux',
+  'api',
+  'database',
+  'auth',
+  'cli',
+  'infra',
+  'ci/cd',
+  'devops',
+  'networking',
+  'styling',
+  'state',
+  'build',
+  'security',
+  'performance',
+  'git',
+  'deployment',
+  'dependencies',
+  'logging',
 ];
 
-// Title + tags in ONE call. rename-ai used to fire two concurrent claude.exe
-// processes (a title call and a tags call); each pays a ~2.5s cold-start plus a
-// variable API round-trip that occasionally balloons on retries through the
-// corporate TLS proxy. Asking Haiku for both in a single JSON object halves the
-// process spawns and the round-trips — the biggest practical latency win here.
 const LABEL_SYSTEM_PROMPT = [
   'You label coding-agent sessions from the user prompts.',
   'Output ONLY a JSON object with exactly two keys: "title" and "tags".',
@@ -62,24 +92,124 @@ const COMMIT_MESSAGE_SYSTEM_PROMPT = [
   'Omit the body when the change is trivial. Output the commit message and nothing else — no preamble, no markdown fences, no quotes.',
 ].join(' ');
 
-// With FAST_FLAGS + FAST_ENV a solo call settles at ~5s, but the corporate TLS
-// proxy occasionally forces the CLI to retry a dropped request, pushing a single
-// call to 20-30s. 60s is deliberate headroom over that tail — a slow rename
-// beats a failed one.
-const TIMEOUT_MS = 60_000;
+const HAIKU_MODEL = 'claude-haiku-4-5';
+/** Direct API should finish in ~1–2s; 12s is hard fail for a "super fast" feature. */
+const API_TIMEOUT_MS = 12_000;
+/** CLI fallback only — cold start + TLS can drag; still tighter than the old 60s. */
+const CLI_TIMEOUT_MS = 25_000;
+const MAX_PROMPTS = 5;
+const MAX_PROMPT_CHARS = 280;
+const LABEL_MAX_TOKENS = 80;
+const COMMIT_MAX_TOKENS = 200;
 
-// These are one-shot text-generation calls — they never need the agent harness.
-// `--setting-sources ''` skips user/project settings (hooks, permissions),
-// `--strict-mcp-config` (with no --mcp-config) boots zero MCP servers, and
-// `--disallowed-tools '*'` drops tool definitions. On a TLS-inspected corporate
-// network this cut a cold `claude --print` from ~22s to ~8s; the rest is the
-// Haiku round-trip itself.
-const FAST_FLAGS = ['--setting-sources', '', '--strict-mcp-config', '--disallowed-tools', '*'];
+// ── Credentials ──────────────────────────────────────────────────────────────
 
-// The CLI's non-essential background traffic (autoupdater poll, telemetry,
-// error reporting) fires extra requests that each pay the corporate-TLS tax and
-// add wild variance — solo calls swung 5s→22s depending on whether those hung.
-// Disabling them pinned a solo call to a steady ~5s.
+type AuthMode =
+  | { kind: 'api-key'; key: string }
+  | { kind: 'oauth'; token: string }
+  | null;
+
+function readAuth(): AuthMode {
+  const envKey = process.env.ANTHROPIC_API_KEY;
+  if (typeof envKey === 'string' && envKey.length > 0) {
+    return { kind: 'api-key', key: envKey };
+  }
+  const envTok = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (typeof envTok === 'string' && envTok.length > 0) {
+    return { kind: 'oauth', token: envTok };
+  }
+  try {
+    const raw = readFileSync(join(os.homedir(), '.claude', '.credentials.json'), 'utf8');
+    const tok = (JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } })?.claudeAiOauth
+      ?.accessToken;
+    if (typeof tok === 'string' && tok.length > 0) return { kind: 'oauth', token: tok };
+  } catch {
+    /* no subscription credentials */
+  }
+  return null;
+}
+
+// ── Direct Messages API (preferred) ──────────────────────────────────────────
+
+async function runMessagesApi(
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number,
+  logTag: string,
+): Promise<{ ok: true; stdout: string } | LabelError | null> {
+  const auth = readAuth();
+  if (!auth) return null; // signal caller to try CLI
+
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'anthropic-version': '2023-06-01',
+  };
+  if (auth.kind === 'api-key') {
+    headers['x-api-key'] = auth.key;
+  } else {
+    headers.authorization = `Bearer ${auth.token}`;
+    // Required for Claude Code subscription OAuth against the Messages API.
+    headers['anthropic-beta'] = 'oauth-2025-04-20';
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_TIMEOUT_MS);
+  const t0 = Date.now();
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers,
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        model: HAIKU_MODEL,
+        max_tokens: maxTokens,
+        temperature: 0,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      console.error(`[${logTag}] API ${res.status} in ${Date.now() - t0}ms:`, text.slice(0, 240));
+      // Fall back to CLI for auth/rate-limit — user may have CLI logged in differently.
+      if (res.status === 401 || res.status === 403 || res.status === 429) return null;
+      return { ok: false, error: `Anthropic API ${res.status}: ${text.slice(0, 160)}` };
+    }
+    let parsed: { content?: Array<{ type?: string; text?: string }> };
+    try {
+      parsed = JSON.parse(text) as typeof parsed;
+    } catch {
+      return { ok: false, error: 'Anthropic API returned non-JSON body' };
+    }
+    const out = (parsed.content ?? [])
+      .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text!)
+      .join('')
+      .trim();
+    if (!out) return { ok: false, error: 'Anthropic API returned empty content' };
+    console.log(`[${logTag}] API ok in ${Date.now() - t0}ms (${out.length} chars)`);
+    return { ok: true, stdout: out };
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return { ok: false, error: `Anthropic API timed out after ${API_TIMEOUT_MS / 1000}s` };
+    }
+    console.error(`[${logTag}] API error in ${Date.now() - t0}ms:`, err?.message || err);
+    return null; // network blip — try CLI
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── CLI fallback (cold start; avoid when possible) ───────────────────────────
+
+const FAST_FLAGS = [
+  '--setting-sources',
+  '',
+  '--strict-mcp-config',
+  '--disallowed-tools',
+  '*',
+];
+
 const FAST_ENV = {
   ...process.env,
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -88,17 +218,10 @@ const FAST_ENV = {
   DISABLE_AUTOUPDATER: '1',
 };
 
-// Cap how much we send to Haiku so a long-running session doesn't blow past
-// argv limits or pad the prompt with stale context that drowns out the topic.
-const MAX_PROMPTS = 8;
-const MAX_PROMPT_CHARS = 500;
-
-// Single spawn path shared by every labeler call — the timeout, stdio, env, and
-// error handling were identical across three functions before this.
-async function runClaude(
+async function runClaudeCli(
   systemPrompt: string,
   prompt: string,
-  logTag: string
+  logTag: string,
 ): Promise<{ ok: true; stdout: string } | LabelError> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
@@ -112,20 +235,25 @@ async function runClaude(
     const timeout = setTimeout(() => {
       try {
         child?.kill();
-      } catch {}
-      finish({ ok: false, error: `claude CLI timed out after ${TIMEOUT_MS / 1000}s` });
-    }, TIMEOUT_MS);
+      } catch {
+        /* ignore */
+      }
+      finish({ ok: false, error: `claude CLI timed out after ${CLI_TIMEOUT_MS / 1000}s` });
+    }, CLI_TIMEOUT_MS);
 
     try {
-      // Spawn from os.tmpdir() so the project's CLAUDE.md isn't injected and
-      // tilt the agent toward conversational responses. --system-prompt
-      // replaces the default coding-agent prompt with the task-only one.
       child = spawn(
         'claude',
-        ['--model', 'claude-haiku-4-5', ...FAST_FLAGS, '--system-prompt', systemPrompt, '--print', prompt],
-        // stdin: 'ignore' = `< /dev/null`. Without it, `claude --print` blocks
-        // ~3s waiting on stdin it'll never get — the prompt is fully in argv.
-        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'], env: FAST_ENV }
+        [
+          '--model',
+          HAIKU_MODEL,
+          ...FAST_FLAGS,
+          '--system-prompt',
+          systemPrompt,
+          '--print',
+          prompt,
+        ],
+        { cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'], env: FAST_ENV },
       );
     } catch (err: any) {
       clearTimeout(timeout);
@@ -162,9 +290,21 @@ async function runClaude(
   });
 }
 
-// Clean an array of raw tag strings: whitespace-normalize, strip stray
-// brackets/quotes, drop trailing punctuation, clamp to 24 chars, dedupe (case-
-// insensitive), cap at 5.
+/** Prefer API; fall back to CLI only when no credentials or transient API fail. */
+async function runHaiku(
+  systemPrompt: string,
+  prompt: string,
+  maxTokens: number,
+  logTag: string,
+): Promise<{ ok: true; stdout: string } | LabelError> {
+  const api = await runMessagesApi(systemPrompt, prompt, maxTokens, logTag);
+  if (api) return api;
+  console.log(`[${logTag}] falling back to claude CLI`);
+  return runClaudeCli(systemPrompt, prompt, logTag);
+}
+
+// ── Parse helpers ────────────────────────────────────────────────────────────
+
 function normalizeTags(values: unknown[]): string[] {
   const seen = new Set<string>();
   const tags: string[] = [];
@@ -187,24 +327,33 @@ function normalizeTags(values: unknown[]): string[] {
   return tags;
 }
 
+function buildLabelUserPrompt(userMessages: string[]): string {
+  // Prefer the most recent prompts — they define what the session is "about" now.
+  const recent = userMessages.slice(-MAX_PROMPTS);
+  const trimmed = recent.map((m) =>
+    m.length > MAX_PROMPT_CHARS ? m.slice(0, MAX_PROMPT_CHARS) + '…' : m,
+  );
+  return `User prompts:\n- ${trimmed.join('\n- ')}\n\nJSON:`;
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
 export async function generateSessionLabelAndTags(
-  userMessages: string[]
+  userMessages: string[],
 ): Promise<LabelAndTagsResult | LabelError> {
   if (!userMessages || userMessages.length === 0) {
     return { ok: false, error: 'No prompts to summarize' };
   }
 
-  const trimmed = userMessages
-    .slice(0, MAX_PROMPTS)
-    .map((m) => (m.length > MAX_PROMPT_CHARS ? m.slice(0, MAX_PROMPT_CHARS) + '…' : m));
-  const prompt = `User prompts:\n- ${trimmed.join('\n- ')}\n\nJSON:`;
-
-  const res = await runClaude(LABEL_SYSTEM_PROMPT, prompt, 'labeler');
+  const prompt = buildLabelUserPrompt(userMessages);
+  const res = await runHaiku(LABEL_SYSTEM_PROMPT, prompt, LABEL_MAX_TOKENS, 'labeler');
   if (!res.ok) return res;
 
-  // Haiku sometimes wraps the object in a ```json fence or adds prose despite
-  // the prompt — strip fences, then pull the first {...} block and parse it.
-  const unfenced = res.stdout.replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+  // Haiku sometimes wraps the object in a ```json fence or adds prose.
+  const unfenced = res.stdout
+    .replace(/```[a-z]*/gi, '')
+    .replace(/```/g, '')
+    .trim();
   const objMatch = unfenced.match(/\{[\s\S]*\}/);
   let parsed: any = null;
   try {
@@ -222,25 +371,26 @@ export async function generateSessionLabelAndTags(
 }
 
 export async function generateCommitMessage(
-  stagedDiff: string
+  stagedDiff: string,
 ): Promise<CommitMessageResult | LabelError> {
   const trimmed = stagedDiff.trim();
   if (!trimmed) {
     return { ok: false, error: 'Nothing staged to commit' };
   }
 
-  // Cap input again at the labeler boundary as a defense — keep us well under
-  // any argv ceiling on Linux/macOS regardless of what the caller passed.
   const MAX_INPUT = 28_000;
   const clipped =
     trimmed.length > MAX_INPUT ? trimmed.slice(0, MAX_INPUT) + '\n[…truncated…]' : trimmed;
   const prompt = `Staged diff:\n\n${clipped}\n\nCommit message:`;
 
-  const res = await runClaude(COMMIT_MESSAGE_SYSTEM_PROMPT, prompt, 'commit-msg');
+  const res = await runHaiku(
+    COMMIT_MESSAGE_SYSTEM_PROMPT,
+    prompt,
+    COMMIT_MAX_TOKENS,
+    'commit-msg',
+  );
   if (!res.ok) return res;
 
-  // Strip wrapping code fences / quotes occasionally added by the model despite
-  // the prompt. Keep blank lines so a multi-paragraph body survives intact.
   const cleaned = res.stdout
     .replace(/^```[a-z]*\n?/i, '')
     .replace(/\n?```$/, '')

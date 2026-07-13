@@ -637,23 +637,28 @@ export function createSessionsRouter(
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
-    let prompts: string[] = [];
-    if (session.agentProvider === 'codex') {
-      prompts = agentManager.get(req.params.id)?.userMessages ?? [];
-    }
+    // Prefer in-memory prompts (instant). JSONL / project scans are fallbacks
+    // for cold sessions after a daemon restart — never block rename on a huge
+    // parseAllProjectPrompts when we already have recent turns in RAM.
+    let prompts: string[] = agentManager.get(req.params.id)?.userMessages ?? [];
     if (prompts.length === 0 && session.claudeSessionId && session.workingDirectory) {
       try {
-        prompts = parseSessionPrompts(session.workingDirectory, session.claudeSessionId).map((p) => p.text);
-      } catch {}
+        prompts = parseSessionPrompts(session.workingDirectory, session.claudeSessionId).map(
+          (p) => p.text,
+        );
+      } catch {
+        /* ignore */
+      }
     }
     if (prompts.length === 0 && session.workingDirectory) {
       try {
-        prompts = parseAllProjectPrompts(session.workingDirectory).map((p) => p.text);
-      } catch {}
-    }
-    if (prompts.length === 0) {
-      const agent = agentManager.get(req.params.id);
-      prompts = agent?.userMessages ?? [];
+        // Cap: only needed when memory + per-session JSONL both empty.
+        prompts = parseAllProjectPrompts(session.workingDirectory)
+          .map((p) => p.text)
+          .slice(-8);
+      } catch {
+        /* ignore */
+      }
     }
 
     if (prompts.length === 0) {
