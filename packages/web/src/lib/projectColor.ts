@@ -35,6 +35,25 @@ function hashString(s: string): number {
   return h >>> 0;
 }
 
+/** Ring hue names, in wheel order — the palette offered by the color picker. */
+export const RING_NAMES: string[] = RING.map((r) => r.name);
+
+// Manual per-project hue overrides (projectNav.colors). Kept as a module-level
+// map so every getProjectColor call site — store-free ones included — resolves
+// the override without a signature change. The appStore syncs it on init,
+// hydrate, and every setProjectColorOverride before it triggers a re-render.
+let colorOverrides: Record<string, string> = {};
+
+export function setProjectColorOverrides(next: Record<string, string> | undefined): void {
+  colorOverrides = next ?? {};
+}
+
+/** Single swatch color for a named ring hue (color-picker dots). */
+export function getRingSwatch(name: string, dark: boolean): string {
+  const entry = RING.find((r) => r.name === name) ?? RING[0];
+  return dark ? `oklch(74% 0.16 ${entry.hue})` : `oklch(48% 0.19 ${entry.hue})`;
+}
+
 export interface ProjectColor {
   /** Strong fill — sidebar stripe legacy callers. */
   stripe: string;
@@ -51,7 +70,10 @@ export interface ProjectColor {
 }
 
 export function getProjectColor(id: string, dark: boolean): ProjectColor {
-  const entry = RING[hashString(id) % RING.length];
+  const overrideName = colorOverrides[id];
+  const entry =
+    (overrideName && RING.find((r) => r.name === overrideName)) ||
+    RING[hashString(id) % RING.length];
   const H = entry.hue;
   // Band-anchored L per theme (see plan §3.1–§3.4). Chroma bumped to a
   // vivid envelope (was 0.10/0.12) — colors now read clearly across the

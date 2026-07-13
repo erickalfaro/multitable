@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { useAppStore } from '../../stores/appStore';
 import { ProjectMonitor } from './ProjectMonitor';
 import { api } from '../../lib/api';
+import { isSessionListed } from '../../lib/sessionVisibility';
 import type { ManagedProcess, Session, Command, Terminal, Project } from '../../lib/types';
 
 /* ─────────────────────────────────────────────────────────────
@@ -218,7 +219,12 @@ export function DashboardView() {
         >
           {projects.map(project => {
             const procs: (Session | Command | Terminal)[] = [
-              ...Object.values(sessions).filter(s => s.projectId === project.id),
+              ...Object.values(sessions).filter((s) => {
+                if (s.projectId !== project.id) return false;
+                return isSessionListed(s, {
+                  isLive: s.state === 'running',
+                });
+              }),
               ...Object.values(commands).filter(c => c.projectId === project.id),
               ...Object.values(terminals).filter(t => t.projectId === project.id),
             ];

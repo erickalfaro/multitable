@@ -27,13 +27,17 @@ export function SessionFeedCard({ sessionId, session }: Props) {
     const all = [...BUILTIN_THEMES, ...customThemes];
     return all.find((t) => t.id === activeThemeId)?.isDark ?? true;
   }, [activeThemeId, customThemes]);
+  // Manual hue override — subscribing keeps the card live when the user
+  // recolors the project from the rail.
+  const colorOverride = useAppStore((s) => s.projectNav.colors?.[session.projectId] ?? null);
   const workspaceVars = useMemo<CSSProperties>(() => {
+    void colorOverride;
     const c = getProjectColor(session.projectId, isDark);
     return {
       ['--workspace-from' as any]: c.from,
       ['--workspace-to' as any]: c.to,
     };
-  }, [session.projectId, isDark]);
+  }, [session.projectId, isDark, colorOverride]);
 
   return (
     // Not a <button> — SessionPane contains interactive children, and

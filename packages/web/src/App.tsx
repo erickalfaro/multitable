@@ -33,6 +33,7 @@ import { updateTabBadge } from './lib/tabBadge';
 import { loadPrefs, subscribePrefs } from './lib/notificationPrefs';
 import { useTheme, useAmbientAccent } from './hooks/useTheme';
 import { useIsMobile } from './lib/useIsMobile';
+import { AmbientMetal } from './components/theme/AmbientMetal';
 import { ConnectionOverlay } from './components/ConnectionOverlay';
 import { NotificationCenter } from './components/notifications/NotificationCenter';
 import { ElicitationModalHost } from './components/elicitation/ElicitationModal';
@@ -349,6 +350,20 @@ function App() {
 
     loadData();
     hydratePendingPrompts();
+
+    // One-time boot reconcile of the left-nav prefs (project order, dividers,
+    // hue overrides) from the server copy — this is what makes them survive a
+    // browser swap. Server wins at boot; afterwards local edits win via the
+    // debounced PATCH in the store.
+    api.config
+      .get()
+      .then((cfg) => {
+        const nav = cfg.ui?.projectNav;
+        if (nav) useAppStore.getState().hydrateProjectNav(nav);
+      })
+      .catch(() => {
+        // Daemon may not be running yet; localStorage copy already applied.
+      });
 
     // Seed the model catalog from the daemon's cached snapshot so model
     // pickers (AddAgentModal, ModeBadge, ThinkingEffortBadge) render
@@ -1189,6 +1204,9 @@ function App() {
         padding: 'var(--shell-inset)',
       }}
     >
+      {/* Living metal field — single WebGL canvas under the frosted shell. */}
+      <AmbientMetal />
+
       <div
         className="mt-shell"
         style={{
@@ -1232,11 +1250,8 @@ function App() {
         </div>
       ) : (
         <div style={{ position: 'relative', flex: 1, overflow: 'hidden', display: 'flex' }}>
-        {/* Always-visible project rail — lives OUTSIDE the PanelGroup so it can
-            never be collapsed and so the existing 3-panel autoSaveId layout
-            (and Cmd+B / edge-rail logic) stays untouched. */}
-        <ProjectRail />
-        <div style={{ position: 'relative', flex: 1, overflow: 'hidden', display: 'flex' }}>
+        {/* ONE panel, ONE plate: rail is a left gutter inside the sidebar,
+            not a sibling column. That is what makes them feel native-as-one. */}
         <PanelGroup
           direction="horizontal"
           autoSaveId="mt:layout"
@@ -1246,22 +1261,27 @@ function App() {
             id="sidebar"
             order={1}
             ref={sidebarRef}
-            defaultSize={20}
-            minSize={12}
-            maxSize={30}
+            defaultSize={22}
+            minSize={14}
+            maxSize={34}
             collapsible
             collapsedSize={0}
             onCollapse={() => setSidebarCollapsed(true)}
             onExpand={() => setSidebarCollapsed(false)}
             style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
-            <ProjectSectionsColumn />
+            <div className="mt-sidebar-unity mt-sidebar-cluster">
+              <ProjectRail />
+              <div className="mt-sidebar-body">
+                <ProjectSectionsColumn />
+              </div>
+            </div>
           </Panel>
           <PanelResizeHandle className="mt-resize-handle" />
           <Panel
             id="chat"
             order={2}
-            defaultSize={52}
+            defaultSize={50}
             minSize={28}
             style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
@@ -1302,7 +1322,6 @@ function App() {
             <ChevronRight size={14} />
           </button>
         )}
-        </div>
         </div>
       )}
 

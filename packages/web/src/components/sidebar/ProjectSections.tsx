@@ -9,10 +9,9 @@ import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuItem } from '../context-menu/ContextMenu';
 import { api, stopProcessByType } from '../../lib/api';
 import { buildProjectMenuItems } from '../../lib/projectActions';
+import { isSessionListed, sessionRecencyMs } from '../../lib/sessionVisibility';
 import toast from 'react-hot-toast';
 import type { ManagedProcess, Project } from '../../lib/types';
-import { getProjectColor } from '../../lib/projectColor';
-import { useIsDark } from '../../hooks/useIsDark';
 
 function formatMetrics(proc: ManagedProcess): string {
   const parts: string[] = [];
@@ -45,9 +44,6 @@ export function ProjectSections({ project }: Props) {
     setSelectedProcess,
   } = store;
 
-  const dark = useIsDark();
-  const color = getProjectColor(project.id, dark);
-
   const [showAddCommand, setShowAddCommand] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -58,13 +54,24 @@ export function ProjectSections({ project }: Props) {
     process?: ManagedProcess;
   } | null>(null);
 
+  // Agents older than 1 week auto-hide (still visible if selected / live /
+  // pending permission). See lib/sessionVisibility.ts.
+  const forceIds = [
+    selectedProcessId,
+    ...store.multiSelectedSessionIds,
+  ].filter((id): id is string => !!id);
   const projectSessions = Object.values(sessions)
-    .filter((s) => s.projectId === project.id)
-    .sort((a, b) => {
-      const recency = (s: typeof a) =>
-        s.claudeState?.lastActivity || s.lastActiveAt || s.createdAt || 0;
-      return recency(b) - recency(a);
-    });
+    .filter((s) => {
+      if (s.projectId !== project.id) return false;
+      const hasPermission = store.pendingPermissions.some((p) => p.sessionId === s.id);
+      const isLive =
+        s.state === 'running' ||
+        !!store.streamingBySession[s.id] ||
+        !!store.toolProgressBySession[s.id] ||
+        (store.statusBySession[s.id]?.status ?? null) !== null;
+      return isSessionListed(s, { forceIds, hasPermission, isLive });
+    })
+    .sort((a, b) => sessionRecencyMs(b) - sessionRecencyMs(a));
   const projectCommands = Object.values(commands).filter((c) => c.projectId === project.id);
   const projectTerminals = Object.values(terminals).filter((t) => t.projectId === project.id);
 
@@ -318,21 +325,11 @@ export function ProjectSections({ project }: Props) {
     <div
       style={{
         position: 'relative',
-        margin: '10px 0 2px',
+        // No right padding — selected session open-right edges must meet the
+        // panel frame (not float as closed cards inset from the edge).
+        padding: '6px 0 16px 2px',
       }}
     >
-      {/* Project card body — a soft hue-tinted glass card that carries the
-          project's identity (replaces the old edge-to-edge top accent rule). */}
-      <div
-        style={{
-          position: 'relative',
-          borderRadius: 'var(--radius-soft)',
-          overflow: 'hidden',
-          backgroundColor: `color-mix(in oklch, ${color.stripe} 5%, transparent)`,
-          border: `1px solid color-mix(in oklch, ${color.stripe} 30%, var(--glass-border))`,
-          transition: 'border-color var(--dur-med) var(--ease-out), background-color var(--dur-med) var(--ease-out)',
-        }}
-      >
       <ProjectHeader
         project={project}
         expanded
@@ -349,7 +346,7 @@ export function ProjectSections({ project }: Props) {
       />
 
       <SidebarSection
-        title="AGENTS"
+        title="Agents"
         // ~10 most-recent rows visible; older sessions reached by scrolling.
         scrollMaxHeight={440}
         onAdd={() => {
@@ -372,13 +369,13 @@ export function ProjectSections({ project }: Props) {
             />
           ))
         ) : (
-          <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          <div style={{ padding: '4px 12px 6px 28px', fontSize: 12, color: 'var(--text-faint)' }}>
             No agents yet
           </div>
         )}
       </SidebarSection>
 
-      <SidebarSection title="TERMINALS" scrollMaxHeight={340} onAdd={handleAddTerminal}>
+      <SidebarSection title="Terminals" scrollMaxHeight={340} onAdd={handleAddTerminal}>
         {projectTerminals.length > 0 ? (
           projectTerminals.map((term) => (
             <SidebarItem
@@ -394,13 +391,13 @@ export function ProjectSections({ project }: Props) {
             />
           ))
         ) : (
-          <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          <div style={{ padding: '4px 12px 6px 28px', fontSize: 12, color: 'var(--text-faint)' }}>
             No terminals yet
           </div>
         )}
       </SidebarSection>
 
-      <SidebarSection title="COMMANDS" scrollMaxHeight={340} onAdd={() => setShowAddCommand(true)}>
+      <SidebarSection title="Commands" scrollMaxHeight={340} onAdd={() => setShowAddCommand(true)}>
         {projectCommands.length > 0 ? (
           projectCommands.map((cmd) => (
             <SidebarItem
@@ -416,27 +413,14 @@ export function ProjectSections({ project }: Props) {
             />
           ))
         ) : (
-          <div style={{ padding: '6px 16px 8px 34px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          <div style={{ padding: '4px 12px 6px 28px', fontSize: 12, color: 'var(--text-faint)' }}>
             No commands yet
           </div>
         )}
       </SidebarSection>
 
-      </div>
-
-      {/* Workspace EXPLORER — branch row + git-decorated file tree, OUTSIDE
-          the hue-tinted project card in its own neutral glass card, so it
-          reads as a different class of surface than the process sections. */}
-      <div
-        style={{
-          marginTop: 10,
-          borderRadius: 'var(--radius-soft)',
-          overflow: 'hidden',
-          backgroundColor: 'var(--glass-bg-soft)',
-          border: '1px solid var(--glass-border)',
-          paddingBottom: 6,
-        }}
-      >
+      {/* Explorer — same continuous field as agents; air gap only. */}
+      <div style={{ marginTop: 4, paddingBottom: 4 }}>
         <SidebarExplorerSection projectId={project.id} />
       </div>
 

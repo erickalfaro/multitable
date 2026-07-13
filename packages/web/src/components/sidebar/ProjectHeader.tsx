@@ -90,11 +90,10 @@ export function ProjectHeader({
         cursor: editing ? 'text' : 'pointer',
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        backgroundColor: focused
-          ? 'var(--glass-bg)'
-          : hover
-            ? 'var(--bg-hover)'
-            : 'transparent',
+        backgroundColor: hover
+          ? 'color-mix(in oklch, var(--text-primary) 4%, transparent)'
+          : 'transparent',
+        borderRadius: 6,
         transition: 'background-color var(--dur-fast) var(--ease-out)',
       }}
     >

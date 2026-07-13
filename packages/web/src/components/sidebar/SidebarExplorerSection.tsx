@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { FolderOpen, GitBranch } from 'lucide-react';
+import { GitBranch } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useAppStore } from '../../stores/appStore';
 import { validateNewPath } from '../../lib/filePath';
@@ -118,8 +118,7 @@ export function SidebarExplorerSection({ projectId }: Props) {
 
   return (
     <SidebarSection
-      title="EXPLORER"
-      icon={<FolderOpen size={11} />}
+      title="Explorer"
       onAdd={() => {
         setNewFileMode((v) => !v);
         setNewFilePath('');
@@ -155,10 +154,10 @@ export function SidebarExplorerSection({ projectId }: Props) {
             userSelect: 'none',
             WebkitUserSelect: 'none',
             position: 'relative',
-            borderRadius: 'var(--radius-snug)',
+            borderRadius: 6,
             ...(isGitSelected
-              ? emphasisFill('var(--accent-amber)', { fill: 10, ring: 35, on: 'var(--bg-elevated)' })
-              : { backgroundColor: 'transparent' }),
+              ? emphasisFill('var(--accent-amber)', { fill: 12, tone: 'strong' })
+              : { background: 'transparent', boxShadow: 'none' }),
           }}
         >
           <div
@@ -210,20 +209,15 @@ export function SidebarExplorerSection({ projectId }: Props) {
                 display: 'inline-flex',
                 alignItems: 'center',
                 marginLeft: 6,
-                padding: '1px 6px',
-                borderRadius: 'var(--radius-snug)',
-                background: 'transparent',
-                color: conflictedCount > 0 ? 'var(--status-error)' : 'var(--accent-amber)',
-                border: `1px solid ${conflictedCount > 0 ? 'var(--status-error)' : 'var(--accent-amber)'}`,
-                fontSize: 9.5,
+                color: conflictedCount > 0 ? 'var(--status-error)' : 'var(--text-muted)',
+                fontSize: 10,
                 fontWeight: 500,
-                letterSpacing: '0.04em',
                 flexShrink: 0,
                 fontVariantNumeric: 'tabular-nums',
               }}
             >
               {unstagedCount}+{stagedCount}
-              {conflictedCount > 0 ? `!${conflictedCount}` : ''}
+              {conflictedCount > 0 ? ` !${conflictedCount}` : ''}
             </span>
           )}
           {status && totalChanges === 0 && (
@@ -239,10 +233,6 @@ export function SidebarExplorerSection({ projectId }: Props) {
             </span>
           )}
         </div>
-      )}
-
-      {showBranchRow && (
-        <div style={{ height: 1, background: 'var(--border)', margin: '5px 10px' }} />
       )}
 
       {newFileMode && (

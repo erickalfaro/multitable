@@ -6,6 +6,17 @@ interface Props {
   projectId: string | null | undefined;
   /** Render a gradient (135deg, from→to) instead of a flat tint. */
   gradient?: boolean;
+  /**
+   * Tint strength/base: 'tinted' (7% over --bg-elevated, default),
+   * 'gradient' (same as the boolean prop), 'washed' — a barely-there 4%
+   * wash over --bg-primary for large surfaces (chat scroll area), or
+   * 'fused' — the opaque 10% surface the sections column shares with the
+   * rail's docked active pill (SURFACE mix must stay string-equal with
+   * ProjectRailItem's fusedSurface; hairlines intentionally diverge — hot
+   * 55% at the tab vs the column's quiet 22% base + lit-seam overlay).
+   * Takes precedence over `gradient` when set.
+   */
+  variant?: 'tinted' | 'gradient' | 'washed' | 'fused';
   /** Container tag — defaults to <div>. */
   as?: keyof React.JSX.IntrinsicElements;
   className?: string;
@@ -31,6 +42,7 @@ interface Props {
 export function WorkspaceTint({
   projectId,
   gradient,
+  variant,
   as,
   className,
   style,
@@ -46,20 +58,29 @@ export function WorkspaceTint({
     // themes.ts which is more entanglement than this hot path warrants.
     return !themeId.endsWith('-light');
   });
+  // Manual hue override for this project — subscribing to the scalar keeps
+  // the tint live when the user picks a new color from the rail.
+  const overrideName = useAppStore((s) =>
+    projectId ? s.projectNav.colors?.[projectId] ?? null : null,
+  );
 
   const vars = useMemo<React.CSSProperties | null>(() => {
     if (!projectId) return null;
+    // overrideName participates via the module-level override map inside
+    // getProjectColor; referencing it keeps the memo (and the lint) honest.
+    void overrideName;
     const color = getProjectColor(projectId, isDark);
     return {
       ['--workspace-from' as any]: color.from,
       ['--workspace-to' as any]: color.to,
     };
-  }, [projectId, isDark]);
+  }, [projectId, isDark, overrideName]);
 
+  const resolvedVariant = variant ?? (gradient ? 'gradient' : 'tinted');
   const Tag = (as ?? 'div') as React.ElementType;
   const composedClass = [
     className,
-    projectId ? (gradient ? 'mt-workspace-gradient' : 'mt-workspace-tinted') : undefined,
+    projectId ? `mt-workspace-${resolvedVariant}` : undefined,
   ]
     .filter(Boolean)
     .join(' ');

@@ -13,7 +13,9 @@ import {
   CATEGORY_ICON,
   dominantAlertForSession,
 } from '../../lib/alertVisuals';
-import { emphasisFill } from '../../lib/emphasis';
+import { dockOutline, dockPool, emphasisPool } from '../../lib/emphasis';
+import { projectHueCss } from '../../lib/metalPalette';
+import { useIsDark } from '../../hooks/useIsDark';
 
 interface Props {
   process: ManagedProcess;
@@ -83,10 +85,8 @@ export function SidebarItem({
   const upsertSession = useAppStore((s) => s.upsertSession);
   const [aiRenaming, setAiRenaming] = useState(false);
 
-  // Loader-icon shortcut: clicking the loader triggers "Rename with AI"
-  // directly (mirrors the Sparkles button in SessionHeaderBar) without
-  // selecting/opening the row. Sessions only.
-  const handleLoaderRename = async (e: React.MouseEvent) => {
+  // Loader-icon shortcut: activates "Rename with AI" without selecting the row.
+  const handleLoaderRename = async (e: { stopPropagation: () => void }) => {
     e.stopPropagation();
     if (process.type !== 'session' || aiRenaming) return;
     const session = process as Session;
@@ -108,9 +108,14 @@ export function SidebarItem({
   const sessionTags =
     process.type === 'session' ? ((process as Session).tags ?? []) : [];
 
+  // Selected = soft fill + open-right straight outline (never a closed box —
+  // the right edge stays open so the stroke can connect into the panel frame).
+  const dark = useIsDark();
+  const selectHue = projectHueCss(process.projectId, dark);
+
   const className =
     'mt-sidebar-item' +
-    (isSelected ? ' is-selected' : '') +
+    (isSelected ? ' is-selected is-docked-open' : '') +
     (isMultiSelected ? ' is-multi' : '');
 
   return (
@@ -121,32 +126,54 @@ export function SidebarItem({
       style={{
         display: 'flex',
         alignItems: 'center',
-        padding: '4px 10px 4px 12px',
-        margin: '1px 0',
+        padding: '5px 10px 5px 8px',
+        // Selected sessions bleed under the scrollbar gutter so the open-right
+        // top/bottom strokes reach the panel frame (not stop short of it).
+        margin: isSelected ? '0 -14px 0 0' : 0,
+        paddingRight: isSelected ? 24 : 10,
         cursor: 'pointer',
         userSelect: 'none',
         WebkitUserSelect: 'none',
         position: 'relative',
-        borderRadius: 'var(--radius-snug)',
-        // Two-tier tinted-glass emphasis: full-strength amber for the primary
-        // selection, dimmer amber for multi-select companions.
+        borderRadius: 0,
+        zIndex: isSelected ? 1 : undefined,
+        transition:
+          'background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
         ...(isSelected
-          ? emphasisFill('var(--accent-amber)', { fill: 10, ring: 35, on: 'var(--bg-elevated)' })
+          ? {
+              ...dockPool(selectHue, { fill: 12, tone: 'medium' }),
+              ...dockOutline(selectHue),
+            }
           : isMultiSelected
-            ? emphasisFill('var(--accent-amber-dim)', { fill: 6, ring: 25, on: 'var(--bg-hover)' })
-            : { backgroundColor: 'transparent' }),
+            ? emphasisPool(selectHue, { fill: 7, tone: 'soft' })
+            : { background: 'transparent', boxShadow: 'none', border: 'none' }),
       }}
     >
       <div
-        className={process.type === 'session' ? 'mt-loader-rename' : undefined}
+        className={
+          process.type === 'session'
+            ? 'mt-loader-rename' + (aiRenaming ? ' is-renaming' : '')
+            : undefined
+        }
         onClick={process.type === 'session' ? handleLoaderRename : undefined}
         title={process.type === 'session' ? 'Rename with AI' : undefined}
         role={process.type === 'session' ? 'button' : undefined}
+        tabIndex={process.type === 'session' ? 0 : undefined}
+        onKeyDown={
+          process.type === 'session'
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  void handleLoaderRename(e);
+                }
+              }
+            : undefined
+        }
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          width: 12,
+          width: process.type === 'session' ? 18 : 12,
           flexShrink: 0,
           cursor: process.type === 'session' ? 'pointer' : undefined,
         }}
@@ -225,21 +252,16 @@ export function SidebarItem({
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 3,
+                  gap: 2,
                   marginLeft: 6,
-                  padding: '1px 6px',
-                  borderRadius: 'var(--radius-snug)',
-                  background: 'transparent',
                   color: tint,
-                  border: `1px solid ${tint}`,
-                  fontSize: 9.5,
-                  fontWeight: 500,
-                  letterSpacing: '0.06em',
+                  fontSize: 10,
+                  fontWeight: 600,
                   flexShrink: 0,
-                  animation: 'mt-pulse 1.6s ease-in-out infinite',
+                  // Signal only — no border, no chip frame.
                 }}
               >
-                <BadgeIcon size={9} />
+                <BadgeIcon size={10} />
                 {pendingCount}
               </span>
             );
@@ -285,37 +307,21 @@ export function SidebarItem({
             )}
           </div>
         </div>
+        {/* Tags / topics — always visible by default. */}
         {sessionTags.length > 0 && (
           <div
+            title={sessionTags.join(', ')}
             style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 4,
-              marginTop: 4,
+              marginTop: 2,
+              fontSize: 10.5,
+              lineHeight: 1.3,
+              color: 'var(--text-faint)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
-            {sessionTags.map((tag) => (
-              <span
-                key={tag}
-                title={tag}
-                style={{
-                  fontSize: 9.5,
-                  lineHeight: 1.4,
-                  letterSpacing: '0.02em',
-                  color: 'var(--text-secondary)',
-                  background: 'var(--bg-hover)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-snug)',
-                  padding: '0px 5px',
-                  maxWidth: '100%',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {tag}
-              </span>
-            ))}
+            {sessionTags.join(' · ')}
           </div>
         )}
         {subtitle && (
