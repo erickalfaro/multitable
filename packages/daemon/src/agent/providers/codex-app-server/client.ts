@@ -80,6 +80,7 @@ export class CodexAppServerClient {
   // carry NO threadId, so the per-thread `listeners` map can never deliver
   // them — they get their own fan-out. Used for `account/rateLimits/updated`.
   private accountListeners = new Set<ThreadListener>();
+  private exitListeners = new Set<() => void>();
   private knownThreads = new Map<string, KnownThread>();
   private crashTimes: number[] = [];
   private permanentlyDead = false;
@@ -156,6 +157,16 @@ export class CodexAppServerClient {
       t.isResumable = true;
     }
     this.transport = null;
+    // Wake anything blocked on the child (in-flight turn completions). The
+    // transport only rejects pending RPC *requests*; a turn waiting on a
+    // `turn/completed` notification would otherwise hang forever.
+    for (const listener of this.exitListeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error('[codex] exit listener threw', err);
+      }
+    }
   }
 
   /**
@@ -314,6 +325,20 @@ export class CodexAppServerClient {
   }
 
   /**
+   * Register a listener fired when the app-server child exits (crash or
+   * shutdown). Used by the adapter to fail an in-flight turn immediately —
+   * the turn's completion is settled by a notification, not an RPC response,
+   * so transport-level request rejection alone can't unblock it. Returns an
+   * unsubscribe function.
+   */
+  subscribeExit(listener: () => void): () => void {
+    this.exitListeners.add(listener);
+    return () => {
+      this.exitListeners.delete(listener);
+    };
+  }
+
+  /**
    * Pull the current account rate-limit snapshot on demand (vs. waiting for the
    * next `account/rateLimits/updated` push). Used on session provision so the
    * usage-limits indicator has data before the first turn.
@@ -334,6 +359,7 @@ export class CodexAppServerClient {
     this.transport = null;
     this.listeners.clear();
     this.accountListeners.clear();
+    this.exitListeners.clear();
     this.knownThreads.clear();
   }
 

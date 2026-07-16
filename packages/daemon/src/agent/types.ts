@@ -1,4 +1,5 @@
 import type { ProcessState } from '../types.js';
+import type { TrackedTimer } from '../devLog.js';
 
 export type AgentProvider = 'claude' | 'codex' | 'copilot' | 'hermes' | 'grok' | 'cursor';
 
@@ -101,6 +102,15 @@ export interface AgentSession {
     startedAt: number;
     promptPreview: string;
     userMessageId: string;
+    // Manager-owned escape hatch: settles the turn's bookkeeping (state flip,
+    // turn-complete, idle) even if the adapter's runTurn promise never does —
+    // a wedged child or a missed provider end-signal must not pin the session
+    // on "running" forever. Wired to sendTurn's Promise.race.
+    forceSettle: (reason: 'stop-grace' | 'reset') => void;
+    // One-shot grace timer armed by abortTurn (Stop): if the adapter hasn't
+    // unwound runTurn within the grace window, force-settle. Cancelled in
+    // sendTurn's finally.
+    graceTimer: TrackedTimer | null;
   } | null;
   // === stats (replaces the in-memory ClaudeSessionState) ===
   totalCostUsd: number;

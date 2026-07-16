@@ -134,6 +134,12 @@ interface TurnCompletion {
   reject: (err: Error) => void;
   promise: Promise<void>;
   pendingUsage: TokenUsageBreakdown | null;
+  // Turn-scoped notifications that arrived before the `turn/start` RPC
+  // response assigned `turnId`. `turn/completed` can share a stdout chunk
+  // with that response; dropping it (the old behavior) left `promise`
+  // unsettled forever and pinned the session on "running". Stashed here and
+  // re-dispatched right after the turnId assignment.
+  earlyNotifications: RpcNotification[];
 }
 
 export class CodexAdapter implements ProviderAdapter {
@@ -422,6 +428,14 @@ export class CodexAdapter implements ProviderAdapter {
       }
     });
 
+    // The turn's completion is settled by a `turn/completed` notification —
+    // NOT an RPC response — so the transport's fail-all-pending on child
+    // death never reaches it. Without this, an app-server crash mid-turn
+    // leaves runTurn awaiting forever and the session pinned on "running".
+    const offExit = this.client.subscribeExit(() => {
+      completion.reject(new Error('codex app-server exited mid-turn'));
+    });
+
     const onAbort = () => {
       if (completion.turnId) {
         void this.client.interruptTurn({
@@ -456,6 +470,21 @@ export class CodexAdapter implements ProviderAdapter {
         ...(codexEffort ? { effort: codexEffort } : {}),
       });
       completion.turnId = turnId;
+      // Drain notifications that raced the turn/start response (see
+      // TurnCompletion.earlyNotifications). Re-dispatching applies the id
+      // guards, so a straggler from another turn is filtered, not resolved.
+      for (const early of completion.earlyNotifications.splice(0)) {
+        try {
+          this.handleNotification(s, early, cb, completion, buffers);
+        } catch (err) {
+          console.error('[codex] early notification replay threw', {
+            sessionId: s.id,
+            threadId,
+            method: early.method,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       // If the user already aborted before the response landed, fire-and-
       // forget the interrupt now.
       if (ctrl.signal.aborted) onAbort();
@@ -476,6 +505,7 @@ export class CodexAdapter implements ProviderAdapter {
     } finally {
       ctrl.signal.removeEventListener('abort', onAbort);
       off();
+      offExit();
       if (buffers.flushTimer) {
         clearTimeout(buffers.flushTimer);
         buffers.flushTimer = null;
@@ -676,7 +706,12 @@ export class CodexAdapter implements ProviderAdapter {
 
       case 'thread/tokenUsage/updated': {
         const params = n.params as ThreadTokenUsageUpdatedNotification;
-        if (completion.turnId && params.turnId === completion.turnId) {
+        if (!completion.turnId) {
+          // Racing the turn/start response — stash so the usage isn't lost.
+          completion.earlyNotifications.push(n);
+          return;
+        }
+        if (params.turnId === completion.turnId) {
           completion.pendingUsage = params.tokenUsage.last;
         }
         return;
@@ -726,7 +761,16 @@ export class CodexAdapter implements ProviderAdapter {
 
       case 'turn/completed': {
         const params = n.params as TurnCompletedNotification;
-        if (!completion.turnId || params.turn.id !== completion.turnId) return;
+        if (!completion.turnId) {
+          // turn/completed can land in the same stdout chunk as the
+          // turn/start response, i.e. before `completion.turnId` is assigned.
+          // Dropping it here would strand `completion.promise` forever (the
+          // classic stuck-spinner bug) — stash it; runTurn re-dispatches
+          // right after the assignment, when the id guard below can work.
+          completion.earlyNotifications.push(n);
+          return;
+        }
+        if (params.turn.id !== completion.turnId) return;
         // Drain any pending deltas before clearing previews — same reasoning
         // as item/completed.
         this.flushDeltas(buffers, cb);
@@ -1149,11 +1193,18 @@ function makeTurnCompletion(): TurnCompletion {
     resolveFn = resolve;
     rejectFn = reject;
   });
+  // If the turn dies before runTurn reaches `await completion.promise` (e.g.
+  // the child exits while turn/start is still in flight, so both the RPC and
+  // this deferred reject), nothing has attached a handler yet — this no-op
+  // branch keeps that from surfacing as an unhandled rejection. The real
+  // consumer still sees the rejection via its own await.
+  promise.catch(() => {});
   return {
     turnId: null,
     resolve: resolveFn,
     reject: rejectFn,
     promise,
     pendingUsage: null,
+    earlyNotifications: [],
   };
 }

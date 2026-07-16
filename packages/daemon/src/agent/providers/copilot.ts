@@ -79,6 +79,25 @@ interface SessionCacheEntry {
 // exists in the enum but is a TUI passthrough mode, not useful here.
 const AGENT_MODES = new Set(['interactive', 'plan', 'autopilot']);
 
+// session.idle is the ONLY loop-done signal and it is missable: if the shared
+// CLI child dies (or wedges) after send(), nothing ever settles the turn and
+// the session pins on "running" forever. Bounds guarding the idle wait:
+//  - CONNECTION_CHECK_MS: liveness poll cadence. Each tick pings the CLI over
+//    RPC (bounded by PING_TIMEOUT_MS); PING_FAILURE_THRESHOLD consecutive
+//    failures = the child is dead or unresponsive → fail every in-flight
+//    turn. (The SDK exposes no connection-close event or sync connection
+//    state — `client.rpc` is a typed RPC facade — so an active probe is the
+//    only reliable detector.)
+//  - IDLE_WAIT_TIMEOUT_MS: zero-event ceiling. An hour of total silence with
+//    no pending permission/elicitation prompt is a wedge, not live work — the
+//    SDK's own send default (60s) is far too short for agentic turns, so we
+//    bound it ourselves (the manager's post-first-byte watchdog stays
+//    warn-only; this fires only when nothing can arrive anymore).
+const IDLE_WAIT_TIMEOUT_MS = 60 * 60_000;
+const CONNECTION_CHECK_MS = 15_000;
+const PING_TIMEOUT_MS = 20_000;
+const PING_FAILURE_THRESHOLD = 2;
+
 // SessionConfigBase.reasoningEffort has no 'max' — clamp to the top tier.
 function mapEffort(effort: string | null): ReasoningEffort | null {
   if (!effort) return null;
@@ -243,6 +262,9 @@ export class CopilotAdapter implements ProviderAdapter {
   // In-flight turn controllers so mid-turn prompts get a real abort signal
   // (an aborted turn deny-resolves its pending prompt cards).
   private activeTurnCtrls = new Map<string, AbortController>();
+  // Per in-flight turn: reject the turn's idle wait (session.idle never fires
+  // on a dead connection). Keyed by MultiTable session id — one turn each.
+  private idleFailers = new Map<string, (err: Error) => void>();
   private latestQuota: UsageLimitSnapshot | null = null;
 
   constructor(permManager: PermissionManager, elicitManager: ElicitationManager) {
@@ -254,8 +276,9 @@ export class CopilotAdapter implements ProviderAdapter {
     if (!this.client) {
       this.client = new CopilotClient({ logLevel: 'error' });
     }
+    const client = this.client;
     if (!this.clientStart) {
-      this.clientStart = this.client.start().catch((err) => {
+      this.clientStart = client.start().catch((err) => {
         // Failed spawn: reset so the next turn retries instead of reusing a
         // dead client.
         this.client = null;
@@ -264,7 +287,23 @@ export class CopilotAdapter implements ProviderAdapter {
       });
     }
     await this.clientStart;
-    return this.client;
+    return client;
+  }
+
+  /** The CLI child / RPC connection is dead or unresponsive: fail every
+   * in-flight turn now (their session.idle will never arrive) and drop the
+   * dead client so the next turn respawns fresh. Quiet no-op when there's
+   * nothing to do. */
+  private onConnectionLost(reason: string): void {
+    if (this.client === null && this.idleFailers.size === 0) return;
+    console.error(`[copilot] ${reason}`);
+    const failers = [...this.idleFailers.values()];
+    this.idleFailers.clear();
+    for (const fail of failers) fail(new Error(reason));
+    this.sessions.clear();
+    this.mtSessions.clear();
+    this.client = null;
+    this.clientStart = null;
   }
 
   reset(s: AgentSession): void {
@@ -353,10 +392,94 @@ export class CopilotAdapter implements ProviderAdapter {
 
     this.activeTurnCtrls.set(s.id, ctrl);
     const offs: Array<() => void> = [];
+
+    // Track when the last event arrived for the zero-event wedge ceiling.
+    // Every event handler below already calls cb.bumpActivity(), so wrapping
+    // that one callback covers them all.
+    let lastEventAt = Date.now();
+    {
+      const bump = cb.bumpActivity.bind(cb);
+      cb = {
+        ...cb,
+        bumpActivity: () => {
+          lastEventAt = Date.now();
+          bump();
+        },
+      };
+    }
+
     // session.idle is the ONLY loop-done signal. Subscribe before send().
-    const idle = new Promise<void>((resolve) => {
+    // Rejectable: connection loss / the wedge ceiling fail it fast — without
+    // this a dead CLI child leaves the turn awaiting forever (stuck spinner).
+    let failIdle: (err: Error) => void = () => {};
+    const idle = new Promise<void>((resolve, reject) => {
+      failIdle = reject;
       offs.push(session.on('session.idle', () => resolve()));
     });
+    // If send() itself rejects (connection died mid-send) the await below is
+    // never reached — keep a handled branch so the paired idle rejection
+    // can't surface as an unhandled rejection.
+    idle.catch(() => {});
+    this.idleFailers.set(s.id, failIdle);
+
+    // Liveness + wedge poll. Cheap (one ping per CONNECTION_CHECK_MS per
+    // in-flight turn, never overlapping) and self-clearing in the finally.
+    let pingInFlight = false;
+    let pingFailures = 0;
+    const livenessTimer = setInterval(() => {
+      const client = this.client;
+      if (client === null) {
+        // onConnectionLost (or shutdown) already tore the client down; if
+        // this turn somehow wasn't failed there, fail it now.
+        failIdle(new Error('Copilot CLI connection lost mid-turn'));
+        return;
+      }
+
+      // Zero-event wedge ceiling.
+      if (Date.now() - lastEventAt >= IDLE_WAIT_TIMEOUT_MS) {
+        if (this.permManager.hasPending(s.id) || this.elicitManager.hasPending(s.id)) {
+          // Legitimately blocked on the human — re-arm the ceiling.
+          lastEventAt = Date.now();
+        } else {
+          failIdle(
+            new Error(
+              `Copilot produced no events for ${IDLE_WAIT_TIMEOUT_MS / 60_000} minutes — ` +
+                'treating the turn as wedged',
+            ),
+          );
+          return;
+        }
+      }
+
+      // Active liveness probe — the SDK has no connection-close event, so a
+      // dead/unresponsive child is only observable by pinging it.
+      if (pingInFlight) return;
+      pingInFlight = true;
+      let deadline: NodeJS.Timeout | null = null;
+      Promise.race([
+        client.ping('liveness'),
+        new Promise((_, reject) => {
+          deadline = setTimeout(() => reject(new Error('ping timeout')), PING_TIMEOUT_MS);
+        }),
+      ])
+        .then(() => {
+          pingFailures = 0;
+        })
+        .catch((err) => {
+          pingFailures += 1;
+          console.warn(
+            `[copilot] liveness ping failed (${pingFailures}/${PING_FAILURE_THRESHOLD})`,
+            err instanceof Error ? err.message : err,
+          );
+          if (pingFailures >= PING_FAILURE_THRESHOLD) {
+            this.onConnectionLost('Copilot CLI dead or unresponsive mid-turn (ping failed)');
+          }
+        })
+        .finally(() => {
+          if (deadline) clearTimeout(deadline);
+          pingInFlight = false;
+        });
+    }, CONNECTION_CHECK_MS);
 
     offs.push(
       session.on('assistant.message_delta', (e) => {
@@ -518,6 +641,7 @@ export class CopilotAdapter implements ProviderAdapter {
           title: 'Copilot session error',
           body: message,
         });
+        cb.bumpActivity();
       }),
     );
 
@@ -595,6 +719,8 @@ export class CopilotAdapter implements ProviderAdapter {
       this.sessions.delete(s.id);
       throw err;
     } finally {
+      clearInterval(livenessTimer);
+      this.idleFailers.delete(s.id);
       ctrl.signal.removeEventListener('abort', onAbort);
       this.activeTurnCtrls.delete(s.id);
       for (const off of offs) off();

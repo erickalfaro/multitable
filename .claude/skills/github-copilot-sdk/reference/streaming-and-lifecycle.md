@@ -165,9 +165,11 @@ idle
 
 The Copilot equivalent of "always clear streaming state in `finally`" (which is the rule for Claude/Codex) is: **always do final cleanup in the `session.idle` handler.** Belt-and-braces: also do it in your local `try/catch` around the `send()` call in case the connection breaks before `idle` fires.
 
-## Polling: don't
+**And bound the idle wait itself** (pitfall #21): if the CLI child dies or wedges *after* `send()` resolved, `session.idle` simply never arrives — nothing throws. There is no connection-close hook (`client.rpc` is a typed RPC facade, not a raw `MessageConnection`), so the adapter runs an active `client.ping(...)` liveness probe per in-flight turn plus a zero-event inactivity ceiling, either of which rejects the idle wait. An unbounded `await idle` is a stuck-forever turn.
 
-There is no polling endpoint, no `getTurnStatus()`. Everything is push. The only "queue state" surfacing is the `user.pending_messages_modified` event for steering/enqueue tracking. If you ever feel the need to poll, you've forgotten to subscribe to `session.idle`.
+## Polling: don't (for turn progress)
+
+There is no polling endpoint, no `getTurnStatus()`. Everything is push. The only "queue state" surfacing is the `user.pending_messages_modified` event for steering/enqueue tracking. If you ever feel the need to poll for *progress*, you've forgotten to subscribe to `session.idle`. (The one legitimate poll is the *liveness* ping above — detecting a dead transport, not turn progress.)
 
 ## What's NOT delivered when a turn aborts
 
