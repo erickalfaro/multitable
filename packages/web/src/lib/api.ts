@@ -315,10 +315,10 @@ export const api = {
       prompts: Array<{ text: string; timestamp: number | null }>;
       source: 'jsonl' | 'jsonl-project' | 'memory';
     }>(`/api/sessions/${id}/prompts`),
-    messages: (id: string) => get<{
+    messages: (id: string, opts?: { tail?: number }) => get<{
       messages: Message[];
       endOffset: number;
-    }>(`/api/sessions/${id}/messages`),
+    }>(`/api/sessions/${id}/messages${opts?.tail ? `?tail=${opts.tail}` : ''}`),
   },
   commands: {
     list: (projectId: string) => get<Command[]>(`/api/projects/${projectId}/commands`),

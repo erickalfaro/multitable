@@ -385,6 +385,15 @@ export function createSessionsRouter(
   router.get('/:id/messages', (req: Request, res: Response) => {
     const session = getSessionById(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
+    // Optional ?tail=N — return only the last N messages. Glanceable
+    // surfaces (wall/card tiles) hydrate with a tail so a 12-tile wall
+    // doesn't ship 12 full transcripts. Absent = full transcript.
+    const tailRaw = Number(req.query.tail);
+    const tail = Number.isFinite(tailRaw)
+      ? Math.min(Math.max(Math.trunc(tailRaw), 1), 1000)
+      : null;
+    const applyTail = <T,>(msgs: T[]): T[] =>
+      tail !== null && msgs.length > tail ? msgs.slice(msgs.length - tail) : msgs;
     if (session.agentProvider === 'codex') {
       const agent = agentManager.get(req.params.id);
       let messages = agent?.messages ?? [];
@@ -402,7 +411,7 @@ export function createSessionsRouter(
           console.error('[sessions] codex re-hydration failed for', session.id, err);
         }
       }
-      return res.json({ messages, endOffset: 0 });
+      return res.json({ messages: applyTail(messages), endOffset: 0 });
     }
     if (session.agentProvider === 'hermes') {
       // Hermes persists each ACP session at `~/.hermes/sessions/session_<id>.json`
@@ -423,7 +432,7 @@ export function createSessionsRouter(
           console.error('[sessions] hermes re-hydration failed for', session.id, err);
         }
       }
-      return res.json({ messages, endOffset: 0 });
+      return res.json({ messages: applyTail(messages), endOffset: 0 });
     }
     if (session.agentProvider === 'grok') {
       // Grok persists its session/update replay log under
@@ -446,7 +455,7 @@ export function createSessionsRouter(
           console.error('[sessions] grok re-hydration failed for', session.id, err);
         }
       }
-      return res.json({ messages, endOffset: 0 });
+      return res.json({ messages: applyTail(messages), endOffset: 0 });
     }
     if (session.agentProvider === 'cursor') {
       // Cursor persists each headless session at
@@ -469,7 +478,7 @@ export function createSessionsRouter(
           console.error('[sessions] cursor re-hydration failed for', session.id, err);
         }
       }
-      return res.json({ messages, endOffset: 0 });
+      return res.json({ messages: applyTail(messages), endOffset: 0 });
     }
     if (session.agentProvider === 'copilot') {
       // Copilot persists the full event log at
@@ -489,7 +498,7 @@ export function createSessionsRouter(
           console.error('[sessions] copilot re-hydration failed for', session.id, err);
         }
       }
-      return res.json({ messages, endOffset: 0 });
+      return res.json({ messages: applyTail(messages), endOffset: 0 });
     }
     if (!session.claudeSessionId || !session.workingDirectory) {
       return res.json({ messages: [], endOffset: 0 });
@@ -522,7 +531,7 @@ export function createSessionsRouter(
         );
       }
 
-      res.json({ messages, endOffset });
+      res.json({ messages: applyTail(messages), endOffset });
     } catch (err) {
       console.error(`[sessions] /messages failed for ${session.id}:`, err);
       res.json({ messages: [], endOffset: 0 });

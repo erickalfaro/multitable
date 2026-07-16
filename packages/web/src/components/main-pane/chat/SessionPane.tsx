@@ -46,6 +46,12 @@ interface DensityConfig {
 // streaming frame.
 const COMFORTABLE_TAIL = 150;
 
+// Hydration fetch size for glanceable tiles (wall/card densities). They
+// render at most a dozen messages, so pulling the full transcript per tile
+// (12 pinned tiles × a long session = megabytes) is pure waste. The store
+// keeps `truncated` set for these so a comfortable open still full-fetches.
+const TILE_FETCH_TAIL = 50;
+
 const DENSITY: Record<SessionPaneDensity, DensityConfig> = {
   comfortable: {
     showHeader: true,
@@ -143,14 +149,15 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
     const hasCached =
       (useAppStore.getState().messagesBySession[sessionId]?.length ?? 0) > 0;
     if (!hasCached) setLoading(true);
+    const full = density === 'comfortable';
     api.sessions
-      .messages(sessionId)
+      .messages(sessionId, full ? undefined : { tail: TILE_FETCH_TAIL })
       .then((res) => {
-        mergeMessages(sessionId, res.messages, { complete: true });
+        mergeMessages(sessionId, res.messages, { complete: full });
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [sessionId, agentSessionId, mergeMessages, clearMessages]);
+  }, [sessionId, agentSessionId, density, mergeMessages, clearMessages]);
 
   // Subscribe the WS client so we receive session events. Sessions have no
   // PTY, so no dims are sent.
@@ -179,13 +186,14 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
   useEffect(() => {
     const off = wsClient.on('ws:reconnected', () => {
       if (!agentSessionId) return;
+      const full = density === 'comfortable';
       api.sessions
-        .messages(sessionId)
-        .then((res) => mergeMessages(sessionId, res.messages, { complete: true }))
+        .messages(sessionId, full ? undefined : { tail: TILE_FETCH_TAIL })
+        .then((res) => mergeMessages(sessionId, res.messages, { complete: full }))
         .catch(() => {});
     });
     return off;
-  }, [sessionId, agentSessionId, mergeMessages]);
+  }, [sessionId, agentSessionId, density, mergeMessages]);
 
   useEffect(() => {
     if (session.state === 'running') return;
