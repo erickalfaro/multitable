@@ -278,16 +278,22 @@ interface AppState {
 
   // Session transcript messages (chat view)
   messagesBySession: Record<string, Message[]>;
-  /** Per-session "last touched" timestamps, used by the LRU snapshot persister
-      (lib/persistedStore.ts) to decide which sessions to keep when the
-      working set exceeds the localStorage budget. Maintained automatically by
-      the message reducers; not consumed by any UI. */
-  messagesMeta: Record<string, { lastTouchedAt: number }>;
+  /** Per-session transcript metadata. `lastTouchedAt` feeds the LRU snapshot
+      persister (lib/persistedStore.ts); `truncated` means the in-memory list
+      may be missing older messages (background tail cap or eviction) and a
+      full REST fetch is required before treating it as complete. Maintained
+      automatically by the message reducers. */
+  messagesMeta: Record<string, { lastTouchedAt: number; truncated?: boolean }>;
   setMessages: (sessionId: string, messages: Message[]) => void;
   appendMessages: (sessionId: string, messages: Message[]) => void;
-  /** Merge a fetched batch with already-stored messages; dedupes by id, sorts by ts. */
-  mergeMessages: (sessionId: string, messages: Message[]) => void;
+  /** Merge a fetched batch with already-stored messages; dedupes by id, sorts by ts.
+      `complete: true` (the default) marks the transcript fully hydrated; pass
+      `complete: false` for tail fetches so `truncated` is preserved. */
+  mergeMessages: (sessionId: string, messages: Message[], opts?: { complete?: boolean }) => void;
   clearMessages: (sessionId: string) => void;
+  /** Trim a non-retained session's in-memory transcript to the background
+      tail. No-op for retained (selected/pinned/multi-selected) sessions. */
+  evictSessionMessages: (sessionId: string) => void;
   /**
    * Rename a message id in place. Fired by the daemon's `session:message-rekeyed`
    * event when an optimistic message is reconciled to its canonical id —
@@ -443,6 +449,17 @@ export interface AttentionEvent {
 // unbounded. 500 covers very long turns; older entries get FIFO-trimmed.
 const MAX_ATTENTION_PER_SESSION = 500;
 
+// Cap per-session task history the same way — a long-lived orchestrator
+// session can emit task events indefinitely.
+const MAX_TASKS_PER_SESSION = 100;
+
+// In-memory transcript cap for sessions that aren't retained (see
+// isSessionRetained). The daemon broadcasts every session's events to every
+// client, so without a cap each running session's full transcript accumulates
+// in the store whether or not it's ever viewed. Background sessions keep only
+// this tail; the full history is refetched on open (SessionPane mount effect).
+const BACKGROUND_TAIL_MESSAGES = 50;
+
 export type TaskState = 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'stopped' | 'unknown';
 
 export interface TaskEntry {
@@ -552,6 +569,46 @@ function dedupById(messages: Message[]): Message[] {
     out.push(m);
   }
   return out;
+}
+
+// A retained session is one whose transcript must stay whole in memory: the
+// foregrounded chat, wall tiles (pinned), and multi-selected sessions the
+// user is actively working with. Everything else is a background session
+// subject to the BACKGROUND_TAIL_MESSAGES cap.
+function isSessionRetained(
+  s: Pick<AppState, 'selectedProcessId' | 'pinnedSessionIds' | 'multiSelectedSessionIds'>,
+  id: string,
+): boolean {
+  return (
+    s.selectedProcessId === id ||
+    s.pinnedSessionIds.includes(id) ||
+    s.multiSelectedSessionIds.includes(id)
+  );
+}
+
+// State patch that trims a session's in-memory transcript to the background
+// tail, or null when there's nothing to trim. Callers are responsible for the
+// retained check (against the selection state that will hold AFTER their own
+// state change).
+function evictionPatch(
+  s: Pick<AppState, 'messagesBySession' | 'messagesMeta'>,
+  sessionId: string,
+): Pick<AppState, 'messagesBySession' | 'messagesMeta'> | null {
+  const list = s.messagesBySession[sessionId];
+  if (!list || list.length <= BACKGROUND_TAIL_MESSAGES) return null;
+  return {
+    messagesBySession: {
+      ...s.messagesBySession,
+      [sessionId]: list.slice(list.length - BACKGROUND_TAIL_MESSAGES),
+    },
+    messagesMeta: {
+      ...s.messagesMeta,
+      [sessionId]: {
+        lastTouchedAt: s.messagesMeta[sessionId]?.lastTouchedAt ?? Date.now(),
+        truncated: true,
+      },
+    },
+  };
 }
 
 // Synchronous snapshot read — runs at module init, before React mounts.
@@ -770,15 +827,44 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const sessions = { ...s.sessions };
       delete sessions[id];
-      // Drop cached messages + meta so the LRU snapshot doesn't waste budget
-      // on a session the user just deleted.
-      const messagesBySession = { ...s.messagesBySession };
-      delete messagesBySession[id];
-      const messagesMeta = { ...s.messagesMeta };
-      delete messagesMeta[id];
-      const gitBySession = { ...s.gitBySession };
-      delete gitBySession[id];
-      return { sessions, messagesBySession, messagesMeta, gitBySession };
+      // Purge EVERY session-keyed slice — leaving residue in any of these
+      // maps leaks one entry per deleted session for the tab's lifetime.
+      // Maps that don't contain the id keep their reference (no subscriber
+      // invalidation).
+      const del = <T,>(map: Record<string, T>): Record<string, T> => {
+        if (!(id in map)) return map;
+        const next = { ...map };
+        delete next[id];
+        return next;
+      };
+      return {
+        sessions,
+        messagesBySession: del(s.messagesBySession),
+        messagesMeta: del(s.messagesMeta),
+        gitBySession: del(s.gitBySession),
+        attentionBySession: del(s.attentionBySession),
+        attentionFilters: del(s.attentionFilters),
+        tasksBySession: del(s.tasksBySession),
+        streamingBySession: del(s.streamingBySession),
+        toolStreamingBySession: del(s.toolStreamingBySession),
+        reasoningStreamingBySession: del(s.reasoningStreamingBySession),
+        idleBySession: del(s.idleBySession),
+        statusBySession: del(s.statusBySession),
+        toolProgressBySession: del(s.toolProgressBySession),
+        usageLimitsBySession: del(s.usageLimitsBySession),
+        unreadBySession: del(s.unreadBySession),
+        optionsBySession: del(s.optionsBySession),
+        pendingSendsBySession: del(s.pendingSendsBySession),
+        selectedFilesBySession: del(s.selectedFilesBySession),
+        composerRecallBySession: del(s.composerRecallBySession),
+        composerOriginNoteBySession: del(s.composerOriginNoteBySession),
+        alerts: s.alerts.some((a) => a.sessionId === id)
+          ? s.alerts.filter((a) => a.sessionId !== id)
+          : s.alerts,
+        multiSelectedSessionIds: s.multiSelectedSessionIds.includes(id)
+          ? s.multiSelectedSessionIds.filter((x) => x !== id)
+          : s.multiSelectedSessionIds,
+      };
     }),
   upsertCommand: (command) =>
     set((s) => ({ commands: { ...s.commands, [command.id]: command } })),
@@ -900,11 +986,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   setSelectedProcess: (id) =>
     set((s) => {
-      if (id === null) return { selectedProcessId: null };
+      // Release the outgoing session's transcript: once it's no longer
+      // selected (and isn't pinned/multi-selected), keep only the background
+      // tail in memory. The full history is refetched on the next open.
+      const prev = s.selectedProcessId;
+      const evicted =
+        prev && prev !== id && prev in s.sessions && !isSessionRetained({ ...s, selectedProcessId: id }, prev)
+          ? evictionPatch(s, prev)
+          : null;
+      if (id === null) return { ...evicted, selectedProcessId: null };
       const proc = s.sessions[id] || s.commands[id] || s.terminals[id];
       if (!proc)
-        return { selectedProcessId: id, selectedGitProjectId: null, selectedFileViewerProjectId: null };
+        return { ...evicted, selectedProcessId: id, selectedGitProjectId: null, selectedFileViewerProjectId: null };
       return {
+        ...evicted,
         selectedProcessId: id,
         focusedProjectId: proc.projectId,
         // Keep the rail/sections on the owning project so notification- or
@@ -973,7 +1068,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   togglePinSession: (id) =>
     set((s) => {
-      const next = s.pinnedSessionIds.includes(id)
+      const wasPinned = s.pinnedSessionIds.includes(id);
+      const next = wasPinned
         ? s.pinnedSessionIds.filter((x) => x !== id)
         : [...s.pinnedSessionIds, id];
       try {
@@ -987,7 +1083,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       void import('../lib/api').then(({ api }) =>
         api.config.patch({ pinnedSessionIds: next }).catch(() => {}),
       );
-      return { pinnedSessionIds: next };
+      // Unpinning drops the session out of the retained set — release its
+      // transcript down to the background tail unless it's still foregrounded.
+      const evicted =
+        wasPinned && !isSessionRetained({ ...s, pinnedSessionIds: next }, id)
+          ? evictionPatch(s, id)
+          : null;
+      return { ...evicted, pinnedSessionIds: next };
     }),
   reorderPinnedSessions: (ids) =>
     set(() => {
@@ -1232,40 +1334,69 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Messages
   messagesBySession: __snapshot?.messagesBySession ?? {},
-  messagesMeta: __snapshot?.messagesMeta ?? {},
+  // Snapshot transcripts are LRU-trimmed on write (persistedStore), so
+  // anything restored may be missing older messages — mark truncated so the
+  // full-fetch-on-open path knows the list isn't complete.
+  messagesMeta: Object.fromEntries(
+    Object.entries(__snapshot?.messagesMeta ?? {}).map(([id, m]) => [
+      id,
+      { ...m, truncated: true },
+    ]),
+  ),
   setMessages: (sessionId, messages) =>
     set((s) => ({
       messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
-      messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now() } },
+      messagesMeta: {
+        ...s.messagesMeta,
+        [sessionId]: { lastTouchedAt: Date.now(), truncated: false },
+      },
     })),
   appendMessages: (sessionId, messages) =>
     set((s) => {
       if (messages.length === 0) return s;
       const existing = s.messagesBySession[sessionId] ?? [];
       const merged = appendDeduped(existing, messages);
+      const prevMeta = s.messagesMeta[sessionId];
       if (merged.length === existing.length) {
         // No new messages, but still mark the session as recently touched so
         // it doesn't fall out of the LRU window while it's actively in view.
         return {
-          messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now() } },
+          messagesMeta: {
+            ...s.messagesMeta,
+            [sessionId]: { ...prevMeta, lastTouchedAt: Date.now() },
+          },
         };
+      }
+      let final = merged;
+      let truncated = prevMeta?.truncated ?? false;
+      if (!isSessionRetained(s, sessionId) && merged.length > BACKGROUND_TAIL_MESSAGES) {
+        final = merged.slice(merged.length - BACKGROUND_TAIL_MESSAGES);
+        truncated = true;
       }
       return {
         messagesBySession: {
           ...s.messagesBySession,
-          [sessionId]: merged,
+          [sessionId]: final,
         },
-        messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now() } },
+        messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now(), truncated } },
       };
     }),
-  mergeMessages: (sessionId, messages) =>
+  mergeMessages: (sessionId, messages, opts) =>
     set((s) => {
+      // A complete merge (full-transcript fetch, the default) clears the
+      // truncated flag; a tail merge preserves whatever it was.
+      const complete = opts?.complete ?? true;
+      const nextMeta = {
+        lastTouchedAt: Date.now(),
+        truncated: complete ? false : s.messagesMeta[sessionId]?.truncated ?? false,
+      };
       const existing = s.messagesBySession[sessionId] ?? [];
       if (existing.length === 0) {
         // Even on a cold merge, dedup by id — defensive against any
         // upstream parser that might emit two records with the same id.
         return {
           messagesBySession: { ...s.messagesBySession, [sessionId]: dedupById(messages) },
+          messagesMeta: { ...s.messagesMeta, [sessionId]: nextMeta },
         };
       }
 
@@ -1332,7 +1463,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       return {
         messagesBySession: { ...s.messagesBySession, [sessionId]: finalList },
-        messagesMeta: { ...s.messagesMeta, [sessionId]: { lastTouchedAt: Date.now() } },
+        messagesMeta: { ...s.messagesMeta, [sessionId]: nextMeta },
       };
     }),
   clearMessages: (sessionId) =>
@@ -1345,6 +1476,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const nextMeta = { ...s.messagesMeta };
       delete nextMeta[sessionId];
       return { messagesBySession: next, messagesMeta: nextMeta };
+    }),
+  evictSessionMessages: (sessionId) =>
+    set((s) => {
+      if (isSessionRetained(s, sessionId)) return s;
+      return evictionPatch(s, sessionId) ?? s;
     }),
   rekeyMessage: (sessionId, oldId, newId) =>
     set((s) => {
@@ -1551,6 +1687,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         };
         if (idx >= 0) list[idx] = patch(list[idx], upd);
         else list.push({ taskId, description: upd.summary ?? 'Task', state: finalState, startedAt: now, ...upd });
+      }
+
+      // FIFO-cap the history so long-lived orchestrator sessions don't grow
+      // it unbounded (same discipline as MAX_ATTENTION_PER_SESSION).
+      if (list.length > MAX_TASKS_PER_SESSION) {
+        list.splice(0, list.length - MAX_TASKS_PER_SESSION);
       }
 
       return { tasksBySession: { ...s.tasksBySession, [sessionId]: list } };

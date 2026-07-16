@@ -11,30 +11,43 @@ import { PinnedFeed } from './wall/PinnedFeed';
 import type { Session } from '../../lib/types';
 
 export function MainPane() {
-  const store = useAppStore();
-  const { selectedProcessId } = store;
+  // Narrow selectors only — a whole-store subscription here re-renders the
+  // entire main pane on every store write, including every streaming delta
+  // of every session (one per frame per active session).
+  const selectedProcessId = useAppStore((s) => s.selectedProcessId);
+  const selectedFileViewerProjectId = useAppStore((s) => s.selectedFileViewerProjectId);
+  const selectedGitProjectId = useAppStore((s) => s.selectedGitProjectId);
+  const projectOverviewOpen = useAppStore((s) => s.projectOverviewOpen);
+  const focusedProjectId = useAppStore((s) => s.focusedProjectId);
+  const process = useAppStore((s) =>
+    selectedProcessId
+      ? s.sessions[selectedProcessId] ||
+        s.commands[selectedProcessId] ||
+        s.terminals[selectedProcessId]
+      : undefined,
+  );
   const isMobile = useIsMobile();
 
-  if (store.selectedFileViewerProjectId) {
+  if (selectedFileViewerProjectId) {
     return (
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <FileViewerMainView projectId={store.selectedFileViewerProjectId} />
+        <FileViewerMainView projectId={selectedFileViewerProjectId} />
       </div>
     );
   }
 
-  if (store.selectedGitProjectId) {
+  if (selectedGitProjectId) {
     return (
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <GitMainView projectId={store.selectedGitProjectId} />
+        <GitMainView projectId={selectedGitProjectId} />
       </div>
     );
   }
 
-  if (!selectedProcessId && store.projectOverviewOpen && store.focusedProjectId) {
+  if (!selectedProcessId && projectOverviewOpen && focusedProjectId) {
     return (
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <ProjectOverview projectId={store.focusedProjectId} />
+        <ProjectOverview projectId={focusedProjectId} />
       </div>
     );
   }
@@ -49,11 +62,6 @@ export function MainPane() {
       </div>
     );
   }
-
-  const process =
-    store.sessions[selectedProcessId] ||
-    store.commands[selectedProcessId] ||
-    store.terminals[selectedProcessId];
 
   if (process?.type === 'session') {
     return (

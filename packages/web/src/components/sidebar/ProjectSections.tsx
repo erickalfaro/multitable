@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../stores/appStore';
 import { ProjectHeader } from './ProjectHeader';
 import { SidebarSection } from './SidebarSection';
@@ -36,14 +37,13 @@ interface Props {
  * verbatim from the original component.
  */
 export function ProjectSections({ project }: Props) {
-  const store = useAppStore();
-  const {
-    sessions,
-    commands,
-    terminals,
-    selectedProcessId,
-    setSelectedProcess,
-  } = store;
+  // Narrow selectors only — this component is the always-mounted sidebar
+  // body; a whole-store subscription made it (and every SidebarItem row)
+  // re-render on every streaming delta of every session. The useShallow
+  // selectors below recompute per store tick but bail the render whenever
+  // the resulting list is shallow-equal — i.e. almost every streaming frame.
+  const selectedProcessId = useAppStore((s) => s.selectedProcessId);
+  const multiSelectedSessionIds = useAppStore((s) => s.multiSelectedSessionIds);
 
   const [showAddCommand, setShowAddCommand] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -57,32 +57,47 @@ export function ProjectSections({ project }: Props) {
 
   // Agents older than 1 week auto-hide (still visible if selected / live /
   // pending permission). See lib/sessionVisibility.ts.
-  const forceIds = [
-    selectedProcessId,
-    ...store.multiSelectedSessionIds,
-  ].filter((id): id is string => !!id);
-  const projectSessions = Object.values(sessions)
-    .filter((s) => {
-      if (s.projectId !== project.id) return false;
-      const hasPermission = store.pendingPermissions.some((p) => p.sessionId === s.id);
-      const isLive =
-        s.state === 'running' ||
-        !!store.streamingBySession[s.id] ||
-        !!store.toolProgressBySession[s.id] ||
-        (store.statusBySession[s.id]?.status ?? null) !== null;
-      return isSessionListed(s, { forceIds, hasPermission, isLive });
-    })
-    .sort((a, b) => sessionRecencyMs(b) - sessionRecencyMs(a));
-  const projectCommands = Object.values(commands).filter((c) => c.projectId === project.id);
-  const projectTerminals = Object.values(terminals).filter((t) => t.projectId === project.id);
+  const projectSessions = useAppStore(
+    useShallow((s) => {
+      const forceIds = [s.selectedProcessId, ...s.multiSelectedSessionIds].filter(
+        (id): id is string => !!id,
+      );
+      return Object.values(s.sessions)
+        .filter((sess) => {
+          if (sess.projectId !== project.id) return false;
+          const hasPermission = s.pendingPermissions.some((p) => p.sessionId === sess.id);
+          const isLive =
+            sess.state === 'running' ||
+            !!s.streamingBySession[sess.id] ||
+            !!s.toolProgressBySession[sess.id] ||
+            (s.statusBySession[sess.id]?.status ?? null) !== null;
+          return isSessionListed(sess, { forceIds, hasPermission, isLive });
+        })
+        .sort((a, b) => sessionRecencyMs(b) - sessionRecencyMs(a));
+    }),
+  );
+  const projectCommands = useAppStore(
+    useShallow((s) => Object.values(s.commands).filter((c) => c.projectId === project.id)),
+  );
+  const projectTerminals = useAppStore(
+    useShallow((s) => Object.values(s.terminals).filter((t) => t.projectId === project.id)),
+  );
+
+  // Stable across renders so memoized SidebarItem rows don't invalidate on
+  // handler identity; live state is read via getState() at call time.
+  const projectSessionsRef = useRef(projectSessions);
+  projectSessionsRef.current = projectSessions;
 
   const handleSelectProject = () => {
+    const store = useAppStore.getState();
     store.setFocusedProject(project.id);
     store.setSelectedProcess(null);
     store.setProjectOverviewOpen(true);
   };
 
-  const handleSelectProcess = (proc: ManagedProcess, e?: React.MouseEvent) => {
+  const handleSelectProcess = useCallback((proc: ManagedProcess, e?: React.MouseEvent) => {
+    const store = useAppStore.getState();
+    const { selectedProcessId, sessions, setSelectedProcess } = store;
     // Modifier-aware selection for sessions only. Cmd/Ctrl+click toggles the
     // session in the multi-select set; Shift+click selects a range within
     // this project's session list; a plain click clears multi-select and
@@ -126,7 +141,7 @@ export function ProjectSections({ project }: Props) {
       }
 
       if (shift && selectedProcessId) {
-        const ids = projectSessions.map((s) => s.id);
+        const ids = projectSessionsRef.current.map((s) => s.id);
         const startIdx = ids.indexOf(selectedProcessId);
         const endIdx = ids.indexOf(proc.id);
         if (startIdx >= 0 && endIdx >= 0) {
@@ -152,10 +167,16 @@ export function ProjectSections({ project }: Props) {
 
     // Sessions are SDK-driven now: there's no "start" or "resume" action —
     // the first user turn auto-starts the work. Clicking simply selects.
-  };
+  }, []);
+
+  const handleShowMenu = useCallback((proc: ManagedProcess, e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ type: proc.type, id: proc.id, x: e.clientX, y: e.clientY, process: proc });
+  }, []);
 
   const routeAwayIfSelected = (deletedId: string) => {
-    if (selectedProcessId !== deletedId) return;
+    const store = useAppStore.getState();
+    if (store.selectedProcessId !== deletedId) return;
     store.setSelectedProcess(null);
     store.setProjectOverviewOpen(false);
   };
@@ -163,6 +184,7 @@ export function ProjectSections({ project }: Props) {
   const handleAddTerminal = async () => {
     try {
       const t = await api.terminals.create(project.id, {});
+      const store = useAppStore.getState();
       store.upsertTerminal(t);
       store.setSelectedProcess(t.id);
     } catch {
@@ -193,7 +215,7 @@ export function ProjectSections({ project }: Props) {
         action: async () => {
           try {
             await api.commands.delete(process.id);
-            store.removeCommand(process.id);
+            useAppStore.getState().removeCommand(process.id);
             routeAwayIfSelected(process.id);
             toast.success('Command deleted');
           } catch {
@@ -225,7 +247,7 @@ export function ProjectSections({ project }: Props) {
         action: async () => {
           try {
             await api.terminals.delete(process.id);
-            store.removeTerminal(process.id);
+            useAppStore.getState().removeTerminal(process.id);
             routeAwayIfSelected(process.id);
             toast.success('Terminal closed');
           } catch {
@@ -291,6 +313,7 @@ export function ProjectSections({ project }: Props) {
         // ~10 most-recent rows visible; older sessions reached by scrolling.
         scrollMaxHeight={440}
         onAdd={() => {
+          const store = useAppStore.getState();
           store.setFocusedProject(project.id);
           store.setAddAgentModalOpen(true);
         }}
@@ -301,12 +324,9 @@ export function ProjectSections({ project }: Props) {
               key={session.id}
               process={session}
               isSelected={selectedProcessId === session.id}
-              isMultiSelected={store.multiSelectedSessionIds.includes(session.id)}
-              onClick={(e) => handleSelectProcess(session, e)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setContextMenu({ type: 'session', id: session.id, x: e.clientX, y: e.clientY, process: session });
-              }}
+              isMultiSelected={multiSelectedSessionIds.includes(session.id)}
+              onClick={handleSelectProcess}
+              onContextMenu={handleShowMenu}
             />
           ))
         ) : (
@@ -323,12 +343,9 @@ export function ProjectSections({ project }: Props) {
               key={term.id}
               process={term}
               isSelected={selectedProcessId === term.id}
-              onClick={() => handleSelectProcess(term)}
+              onClick={handleSelectProcess}
               // terminals don't participate in session multi-select
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setContextMenu({ type: 'terminal', id: term.id, x: e.clientX, y: e.clientY, process: term });
-              }}
+              onContextMenu={handleShowMenu}
             />
           ))
         ) : (
@@ -346,11 +363,8 @@ export function ProjectSections({ project }: Props) {
               process={cmd}
               metrics={formatMetrics(cmd)}
               isSelected={selectedProcessId === cmd.id}
-              onClick={() => handleSelectProcess(cmd)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setContextMenu({ type: 'command', id: cmd.id, x: e.clientX, y: e.clientY, process: cmd });
-              }}
+              onClick={handleSelectProcess}
+              onContextMenu={handleShowMenu}
             />
           ))
         ) : (

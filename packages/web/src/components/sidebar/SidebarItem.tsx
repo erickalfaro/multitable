@@ -23,11 +23,17 @@ interface Props {
   metrics?: string;
   isSelected: boolean;
   isMultiSelected?: boolean;
-  onClick: (e: React.MouseEvent) => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  // Handlers receive the row's process so parents can pass one stable
+  // callback for every row — required for the React.memo below to hold.
+  onClick: (process: ManagedProcess, e: React.MouseEvent) => void;
+  onContextMenu: (process: ManagedProcess, e: React.MouseEvent) => void;
 }
 
-export function SidebarItem({
+// Memoized: the sidebar renders one row per visible process and the parent
+// list re-renders on live-state changes; rows whose props are unchanged must
+// not re-run. Live indicators (streaming/permission/unread) come from the
+// internal per-session selectors below, so memo can't hide them.
+export const SidebarItem = React.memo(function SidebarItem({
   process,
   subtitle,
   metrics,
@@ -121,8 +127,8 @@ export function SidebarItem({
   return (
     <div
       className={className}
-      onClick={onClick}
-      onContextMenu={onContextMenu}
+      onClick={(e) => onClick(process, e)}
+      onContextMenu={(e) => onContextMenu(process, e)}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -341,4 +347,4 @@ export function SidebarItem({
       </div>
     </div>
   );
-}
+});

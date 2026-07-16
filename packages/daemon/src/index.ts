@@ -183,7 +183,6 @@ async function main() {
       if (session.worktreePath) {
         gitWatcher.watchSession(session.id, session.worktreePath);
       }
-      console.log(`Registered session: ${session.name} (${session.id})`);
     }
 
     // Start autostart commands
