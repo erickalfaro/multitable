@@ -22,7 +22,9 @@ import {
 //        ↓
 //   on-disk cache (~/.cache/multitable/models.json)
 //        ↓
-//   live discovery (runs in background at boot + on user-triggered refresh)
+//   live discovery (runs in background at boot, on user-triggered refresh,
+//   and periodically — see PERIODIC_REFRESH_INTERVAL_MS — so long-running
+//   daemons pick up new models after provider CLIs self-update)
 //
 // API endpoints + the WS broadcaster always read from the in-memory state.
 // Per-request CLI calls / SDK probes are gone — the cache is the canonical
@@ -51,9 +53,14 @@ const CACHE_SCHEMA_VERSION = 1 as const;
 // Monotonic sequence for unique temp filenames during concurrent persist().
 let persistSeq = 0;
 
+// Periodic re-discovery cadence. Provider CLIs (esp. the system `claude`)
+// self-update; without this a long-running daemon never notices new models.
+const PERIODIC_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+
 interface CatalogOptions {
   getDaemonEnv: () => NodeJS.ProcessEnv;
   resolveClaudeExecutable: () => string | undefined;
+  resolveSystemClaudeExecutable: () => string | undefined;
   discoveryCwd: string;
 }
 
@@ -62,6 +69,7 @@ export class ProviderCatalog extends EventEmitter {
   private inFlight: Map<Provider, Promise<void>> = new Map();
   private opts: CatalogOptions;
   private cachePath: string;
+  private refreshTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: CatalogOptions) {
     super();
@@ -170,6 +178,25 @@ export class ProviderCatalog extends EventEmitter {
     ]);
   }
 
+  /**
+   * Periodic background re-discovery. Idempotent; the timer is unref'd so it
+   * can never hold the process open. Ticks coinciding with a user-triggered
+   * refresh coalesce via refresh()'s in-flight dedup.
+   */
+  startPeriodicRefresh(intervalMs = PERIODIC_REFRESH_INTERVAL_MS): void {
+    if (this.refreshTimer) return;
+    this.refreshTimer = setInterval(() => {
+      void this.refreshAll();
+    }, intervalMs);
+    this.refreshTimer.unref();
+  }
+
+  stopPeriodicRefresh(): void {
+    if (!this.refreshTimer) return;
+    clearInterval(this.refreshTimer);
+    this.refreshTimer = null;
+  }
+
   private async runDiscovery(provider: Provider): Promise<void> {
     const before = this.state.get(provider);
     try {
@@ -185,7 +212,11 @@ export class ProviderCatalog extends EventEmitter {
       } else if (provider === 'copilot') {
         models = await discoverCopilot();
       } else {
-        models = await discoverClaude(this.opts.discoveryCwd, this.opts.resolveClaudeExecutable);
+        models = await discoverClaude(
+          this.opts.discoveryCwd,
+          this.opts.resolveClaudeExecutable,
+          this.opts.resolveSystemClaudeExecutable,
+        );
       }
       // If discovery returned no live data but we have a baseline (e.g. Hermes
       // until `hermes models --json` lands), keep the baseline so the picker

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { BaselineModel } from './baselines.js';
 import { CLAUDE_SUPPLEMENTAL } from './baselines.js';
@@ -8,9 +9,9 @@ import { resolveCursorCli } from '../agent/providers/cursor-cli/index.js';
 // as DiscoveredModel-shaped objects, or throws on failure (the caller — the
 // catalog module — handles errors by falling back to baseline/cache).
 //
-// Discovery is run in the background at boot and on user-triggered refresh.
-// The catalog module is the only consumer; nothing else should call these
-// directly.
+// Discovery is run in the background at boot, on user-triggered refresh, and
+// on the catalog's periodic timer. The catalog module is the only consumer;
+// nothing else should call these directly.
 
 export type DiscoveredModel = BaselineModel;
 
@@ -372,15 +373,53 @@ export async function discoverCopilot(): Promise<DiscoveredModel[]> {
 // actually run a turn — it just spins up the session, hands us the metadata,
 // and we tear down.
 //
+// The catch: a single binary's model list is only as fresh as that binary.
+// The SDK-bundled `claude` is pinned by the npm dep, while the user's system
+// `claude` self-updates — so we probe BOTH and union the lists, letting the
+// newer binary drive ordering/default. A brand-new model then appears as soon
+// as either binary knows it, with no code or dep change.
+//
 // Requires either ANTHROPIC_API_KEY or a valid ~/.claude/auth.json. On
-// failure, the caller falls back to the baseline alias triple.
+// failure of both probes, the caller falls back to the baseline alias triple.
 
-export async function discoverClaude(
+interface ClaudeProbe {
+  models: DiscoveredModel[]; // no isDefault, no supplementals — merge owns those
+  version: [number, number, number] | null; // parsed claude_code_version
+}
+
+function parseClaudeVersion(raw: string | undefined): ClaudeProbe['version'] {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(raw ?? '');
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+// Strictly newer only — ties, unparseable, and missing versions all return
+// false, biasing the merge toward the bundled binary (current behavior).
+function isNewerVersion(a: ClaudeProbe['version'], b: ClaudeProbe['version']): boolean {
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
+
+function samePath(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return a === b;
+  }
+}
+
+async function probeClaudeBinary(
   cwd: string,
-  resolveExecutable: () => string | undefined,
-): Promise<DiscoveredModel[]> {
-  const pathToClaudeCodeExecutable = resolveExecutable();
+  pathToClaudeCodeExecutable: string | undefined,
+  timeoutMs = 30_000,
+): Promise<ClaudeProbe> {
   const ctrl = new AbortController();
+  // Hard timeout: a hung probe would otherwise occupy the catalog's inFlight
+  // slot forever, permanently blocking refreshes for the provider.
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  timer.unref();
   const it = query({
     prompt: ' ',
     options: {
@@ -397,10 +436,14 @@ export async function discoverClaude(
   // don't leak a long-running iterator if the SDK changes its message order.
   try {
     let iterations = 0;
+    let versionRaw: string | undefined;
     for await (const msg of it) {
       iterations += 1;
-      const m = msg as { type?: string; subtype?: string };
-      if (m.type === 'system' && m.subtype === 'init') break;
+      const m = msg as { type?: string; subtype?: string; claude_code_version?: string };
+      if (m.type === 'system' && m.subtype === 'init') {
+        versionRaw = m.claude_code_version;
+        break;
+      }
       if (iterations >= 8) break;
     }
     const initResult = await (it as unknown as {
@@ -414,14 +457,12 @@ export async function discoverClaude(
         }>;
       }>;
     }).initializationResult();
-    ctrl.abort();
     const raw = Array.isArray(initResult?.models) ? initResult.models : [];
     // Trust the SDK's ordering — `ModelInfo[]` from `initializationResult()`
     // is the same shape Claude's own UIs consume. No pattern-matching on id
     // or display name; if the SDK ranks Sonnet above Opus tomorrow, that's
-    // Anthropic's call and we surface it. The first model is treated as the
-    // recommended default.
-    const models: DiscoveredModel[] = raw.map((m, idx) => {
+    // Anthropic's call and we surface it.
+    const models: DiscoveredModel[] = raw.map((m) => {
       const effortLevels = (m.supportedEffortLevels ?? [])
         .map(clampEffort)
         .filter((x): x is EffortLevel => !!x);
@@ -430,29 +471,95 @@ export async function discoverClaude(
         id: m.value,
         displayName: m.displayName || m.value,
         description: m.description || undefined,
-        ...(idx === 0 ? { isDefault: true } : {}),
         supportsEffort,
         ...(supportsEffort ? { effortLevels } : {}),
       };
     });
-    // Append supplemental models (e.g. Fable) the SDK doesn't list but the
-    // account can still use. Dedup by id so a future SDK that surfaces one
-    // natively wins over the supplemental stub. See CLAUDE_SUPPLEMENTAL.
-    const present = new Set(models.map((m) => m.id));
-    for (const extra of CLAUDE_SUPPLEMENTAL) {
-      if (present.has(extra.id)) continue;
-      models.push({
-        id: extra.id,
-        displayName: extra.displayName,
-        description: extra.description,
-        supportsEffort: extra.supportsEffort ?? false,
-        ...(extra.effortLevels ? { effortLevels: extra.effortLevels } : {}),
-      });
-    }
-    return models;
-  } catch (err) {
+    return { models, version: parseClaudeVersion(versionRaw) };
+  } finally {
+    clearTimeout(timer);
     ctrl.abort();
-    throw err;
   }
+}
+
+export async function discoverClaude(
+  cwd: string,
+  resolveExecutable: () => string | undefined,
+  resolveSystemExecutable: () => string | undefined,
+): Promise<DiscoveredModel[]> {
+  const bundledPath = resolveExecutable();
+  let systemPath: string | undefined = resolveSystemExecutable();
+  let systemNote: string | null = systemPath ? null : 'not found';
+  if (systemPath && bundledPath && samePath(systemPath, bundledPath)) {
+    systemPath = undefined;
+    systemNote = 'same as bundled';
+  }
+
+  const settled = await Promise.allSettled([
+    probeClaudeBinary(cwd, bundledPath),
+    ...(systemPath ? [probeClaudeBinary(cwd, systemPath)] : []),
+  ]);
+  const errMsg = (r: PromiseRejectedResult) =>
+    r.reason instanceof Error ? r.reason.message : String(r.reason);
+  const bundled = settled[0].status === 'fulfilled' ? settled[0].value : null;
+  const system = settled[1]?.status === 'fulfilled' ? settled[1].value : null;
+  if (settled[1]?.status === 'rejected') systemNote = `probe failed (${errMsg(settled[1])})`;
+
+  if (!bundled && !system) {
+    throw new Error(
+      `claude discovery failed — bundled: ${errMsg(settled[0] as PromiseRejectedResult)}; system: ${systemNote}`,
+    );
+  }
+
+  // Union by id: the strictly-newer binary is primary (drives ordering,
+  // default, per-model metadata); models only the other binary knows are
+  // appended after, verbatim.
+  let models: DiscoveredModel[];
+  let appendNote = '';
+  if (bundled && system) {
+    const systemIsPrimary = isNewerVersion(system.version, bundled.version);
+    const primary = systemIsPrimary ? system : bundled;
+    const secondary = systemIsPrimary ? bundled : system;
+    models = [...primary.models];
+    const seen = new Set(models.map((m) => m.id));
+    let appended = 0;
+    for (const m of secondary.models) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      models.push(m);
+      appended += 1;
+    }
+    if (appended > 0) {
+      appendNote = ` (${appended} ${systemIsPrimary ? 'bundled' : 'system'}-only)`;
+    }
+  } else {
+    models = [...(bundled ?? system)!.models];
+  }
+  if (models.length > 0) models[0] = { ...models[0], isDefault: true };
+
+  // Append supplemental models (e.g. Fable) the SDK doesn't list but the
+  // account can still use. Dedup by id so a future SDK that surfaces one
+  // natively wins over the supplemental stub. See CLAUDE_SUPPLEMENTAL.
+  const present = new Set(models.map((m) => m.id));
+  for (const extra of CLAUDE_SUPPLEMENTAL) {
+    if (present.has(extra.id)) continue;
+    models.push({
+      id: extra.id,
+      displayName: extra.displayName,
+      description: extra.description,
+      supportsEffort: extra.supportsEffort ?? false,
+      ...(extra.effortLevels ? { effortLevels: extra.effortLevels } : {}),
+    });
+  }
+
+  const fmt = (v: ClaudeProbe['version']) => (v ? v.join('.') : 'unknown');
+  const bundledPart = bundled ? `bundled ${fmt(bundled.version)}` : 'bundled: probe failed';
+  const systemPart = system
+    ? `system ${fmt(system.version)} (${systemPath})`
+    : `system: ${systemNote}`;
+  console.log(
+    `[catalog] claude discovery: ${bundledPart}, ${systemPart}, ${models.length} models${appendNote}`,
+  );
+  return models;
 }
 
