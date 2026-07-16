@@ -45,7 +45,11 @@ declare class CopilotClient {
   start(): Promise<void>;
   stop(): Promise<Error[]>;        // resolves with per-session shutdown errors
   forceStop(): Promise<void>;
-  getState(): ConnectionState;     // 'idle' | 'starting' | 'running' | 'stopping' | 'stopped' (inferred names)
+  // NOTE (verified v1.0.x): the connection `state` field is PRIVATE — there is
+  // no public sync connection-state getter. getStatus() below is itself an RPC
+  // round-trip (useless for detecting a dead transport). Liveness must be
+  // probed actively via ping() — see pitfalls #21.
+  getStatus(): Promise<GetStatusResponse>;
 
   // Sessions
   createSession(config: SessionConfig): Promise<CopilotSession>;
@@ -61,11 +65,16 @@ declare class CopilotClient {
   listModels(): Promise<ModelInfo[]>;     // overridable via onListModels option
 
   // Misc
-  ping(message?: string): Promise<unknown>;
+  ping(message?: string): Promise<{ message: string; timestamp: string; protocolVersion?: number }>;
   on(eventType: SessionLifecycleEventType, handler: (e: any) => void): () => void;
+  // SessionLifecycleEventType is just `string` — no typed union, and no
+  // connection-level (close/error) events are documented.
 
-  // Escape hatch — vscode-jsonrpc MessageConnection
-  get rpc(): MessageConnection;
+  // Escape hatch — a TYPED RPC-NAMESPACE FACADE, not a raw vscode-jsonrpc
+  // MessageConnection (verified v1.0.x): { ping, models.list, account.getQuota,
+  // …13 more namespaces…, agentRegistry }. It has NO onClose/onError hooks —
+  // do not design connection-loss detection around them (see pitfalls #21).
+  get rpc(): CopilotRpcFacade;
 }
 ```
 

@@ -200,3 +200,12 @@ Right (Copilot SDK): `CopilotClient`, `CopilotSession`, `session.send`, `sendAnd
 - **`@github/copilot-sdk` ships a CJS build** (`dist/cjs` + `require` export condition) — the
   daemon's Node16/CJS `import` works directly; no dynamic-import hack (unlike codex).
 - **Sub-agent events carry `agentId`** — filter them out of the main transcript.
+
+## 21. `session.idle` NEVER fires if the CLI dies after `send()` — bound the wait or hang forever
+
+`session.idle` is the only loop-done signal (pitfall #1) and it is an in-memory push event: if the shared CLI child dies or wedges after `send()` resolves, no error is thrown and no idle ever arrives — an unbounded `await idle` hangs the turn forever (stuck "running" spinner). `session.error` is an event, not a throw, and does not imply the loop ended. There is **no connection-close hook to subscribe to**: `client.rpc` is a typed RPC-namespace facade (not a raw vscode-jsonrpc `MessageConnection` — no `onClose`/`onError`), and the client's connection `state` is private (`getStatus()` is itself an RPC, useless for detecting a dead transport).
+
+**Fix pattern (implemented in [`copilot.ts`](../../../packages/daemon/src/agent/providers/copilot.ts)):**
+- Make the idle promise **rejectable** and register the rejecter per in-flight turn (`idleFailers` map).
+- **Active liveness probe**: every `CONNECTION_CHECK_MS` (15s), `client.ping(...)` raced against a `PING_TIMEOUT_MS` deadline; consecutive failures ⇒ the child is dead/unresponsive ⇒ fail every in-flight turn, clear the session cache, and null the client so the next turn respawns.
+- **Zero-event ceiling** (`IDLE_WAIT_TIMEOUT_MS`, 60 min): if no session event arrived for the whole window and no permission/elicitation prompt is pending (those re-arm the ceiling), reject the idle wait — an hour of total silence is a wedge, not live work.

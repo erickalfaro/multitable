@@ -41,6 +41,9 @@ import type {
 //     auth/network diagnostic warning; a long quiet stretch (extended thinking,
 //     subagents) surfaces a soft warning. Live agent work is never thrown away
 //     on a timer — only the user (clicking Stop) terminates a turn.
+//   - Force-settle escape hatch: user-initiated Stop and /reset ALWAYS land,
+//     even when an adapter's runTurn promise is wedged (dead child, missed
+//     provider end-signal). See TurnForceSettledError + abortTurn.
 //   - Cross-cutting side effects (auto-rename, option detection)
 //   - Capability advertisement (UI gating via session:capabilities)
 //
@@ -64,6 +67,22 @@ function titleFromFirstPrompt(prompt: string, maxLen = 60): string {
   if (cleaned.length <= maxLen) return cleaned;
   return cleaned.slice(0, maxLen - 1).trimEnd() + '…';
 }
+
+// A turn ended by the manager's escape hatch instead of the adapter settling
+// its own runTurn promise. Thrown through sendTurn's Promise.race so the
+// try/catch/finally there — the ONLY code path that flips state back to
+// stopped and emits turn-complete/idle — is guaranteed to run even when an
+// adapter is wedged.
+class TurnForceSettledError extends Error {
+  constructor(readonly reason: 'stop-grace' | 'reset') {
+    super(`turn force-settled (${reason})`);
+    this.name = 'TurnForceSettledError';
+  }
+}
+
+// How long Stop waits for the adapter to unwind runTurn on its own (the
+// normal, graceful path) before force-settling the turn's bookkeeping.
+const ABORT_GRACE_MS = 12_000;
 
 type RegisterInput = Omit<
   AgentSession,
@@ -567,12 +586,27 @@ export class AgentSessionManager extends EventEmitter {
     const ctrl = new AbortController();
     const turnStartedAt = Date.now();
     const userMessageId = `turn-${turnStartedAt}-${Math.random().toString(36).slice(2, 8)}`;
+    // Manager-owned escape hatch. adapter.runTurn below is raced against this
+    // deferred so a wedged adapter (dead child, missed provider end-signal)
+    // can never pin the session on "running" — abortTurn's grace timer and
+    // resetSession reject it, which lands in the same catch/finally as a
+    // normal adapter failure.
+    let forceSettleReject: (err: TurnForceSettledError) => void = () => {};
+    const forcePromise = new Promise<never>((_, reject) => {
+      forceSettleReject = reject;
+    });
+    // The race below is this promise's real consumer; this no-op branch just
+    // guards against an unhandled rejection if runTurn throws synchronously.
+    forcePromise.catch(() => {});
     s.currentTurn = {
       abortController: ctrl,
       startedAt: turnStartedAt,
       promptPreview: text.slice(0, 80),
       userMessageId,
+      forceSettle: (reason) => forceSettleReject(new TurnForceSettledError(reason)),
+      graceTimer: null,
     };
+    const turn = s.currentTurn;
     s.state = 'running';
     s.lastActivity = Date.now();
     s.userMessages.push(text);
@@ -599,25 +633,28 @@ export class AgentSessionManager extends EventEmitter {
     s.messages.push(userMsg);
     this.emit('user-message', { sessionId, messages: [userMsg] });
 
-    // Two-phase watchdog. The whole point: never throw away live agent work
-    // the user can't recover. The user can always click Stop themselves.
+    // Two-phase watchdog. WARN-ONLY in both phases — it never terminates a
+    // turn. The whole point: never throw away live agent work the user can't
+    // recover. The user can always click Stop themselves (and Stop is
+    // guaranteed to land via the force-settle grace timer in abortTurn, even
+    // when the adapter is wedged).
     //
     //   Phase 1 — HANDSHAKE (before any SDK message has arrived):
     //     If the daemon sees zero bytes from the SDK/RPC after HANDSHAKE_MS,
-    //     hard-kill the turn. This is the auth/network/CA diagnostic path —
-    //     a bad ANTHROPIC_API_KEY, missing NODE_EXTRA_CA_CERTS, dead DNS,
+    //     surface an auth/network/CA diagnostic warning — a bad
+    //     ANTHROPIC_API_KEY, missing NODE_EXTRA_CA_CERTS, dead DNS,
     //     unreachable codex app-server, etc. all manifest as "iterator opens
-    //     and silently never yields." Without this kill the session pins on
-    //     "Running…" forever and the user has no signal that creds are wrong.
+    //     and silently never yields." Without the warning the session pins on
+    //     "Running…" with no signal that creds are wrong.
     //
     //   Phase 2 — STEADY STATE (after the first SDK message):
-    //     The connection works. From here on the watchdog NEVER aborts. A
-    //     long extended-thinking turn, a subagent thinking after its last
-    //     tool returned, or a Hermes terminal tool that emits nothing mid-
-    //     stream are all legitimate work, and indistinguishable from a hang
-    //     at any timer boundary we pick. Instead we emit a single soft
-    //     warning alert once the quiet window stretches past WARN_MS, so
-    //     the user knows the watchdog noticed — and can choose to Stop.
+    //     The connection works. A long extended-thinking turn, a subagent
+    //     thinking after its last tool returned, or a Hermes terminal tool
+    //     that emits nothing mid-stream are all legitimate work, and
+    //     indistinguishable from a hang at any timer boundary we pick. We
+    //     emit a single soft warning alert once the quiet window stretches
+    //     past WARN_MS, so the user knows the watchdog noticed — and can
+    //     choose to Stop.
     //
     // Re-arm conditions skip the kill even in phase 1: permission/elicitation
     // pending (legitimately waiting on the human) and currentTool in flight
@@ -687,12 +724,30 @@ export class AgentSessionManager extends EventEmitter {
     // message both clears `warnedThisQuietStretch` (so the next quiet stretch
     // can warn again) and re-arms the timer (so a warning fires only after
     // WARN_MS of true silence, not on first byte after a long quiet).
+    //
+    // Once the turn's bookkeeping has settled (`turnSettled`, set first thing
+    // in the finally — including after a force-settle), the wrapper turns
+    // sticky-terminal: late emissions must not restart the UI's live
+    // indicators or re-arm the (already cancelled) watchdog. Only NON-CLEARING
+    // preview payloads are dropped; canonical messages, rekeys, reconciles and
+    // usage keep flowing — Codex legitimately reconciles from disk ~250ms
+    // after runTurn returns and blanket-dropping would break it.
+    let turnSettled = false;
     const baseCb = this.makeAdapterCallbacks(sessionId);
     const cb: AdapterCallbacks = new Proxy(baseCb, {
       get: (target, prop, receiver) => {
         const fn = Reflect.get(target, prop, receiver);
         if (typeof fn !== 'function') return fn;
         return (...args: unknown[]) => {
+          if (turnSettled) {
+            const restartsSpinner =
+              (prop === 'emitAssistantDelta' && Boolean(args[0])) ||
+              (prop === 'emitReasoningDelta' && Boolean(args[0])) ||
+              (prop === 'emitToolDelta' && args[0] != null) ||
+              (prop === 'setCurrentTool' && args[0] != null);
+            if (restartsSpinner) return undefined;
+            return (fn as (...a: unknown[]) => unknown).apply(target, args);
+          }
           sawAnyMessage = true;
           warnedThisQuietStretch = false;
           armStuckTimer();
@@ -703,7 +758,11 @@ export class AgentSessionManager extends EventEmitter {
 
     armStuckTimer();
     try {
-      await adapter.runTurn(s, text, ctrl, cb);
+      // Race the adapter against the manager's force-settle deferred. The
+      // race keeps a handler attached to the real runTurn promise, so a
+      // late settlement after a force-settle is observed (and ignored), not
+      // an unhandled rejection.
+      await Promise.race([adapter.runTurn(s, text, ctrl, cb), forcePromise]);
     } catch (err: unknown) {
       const baseMessage = err instanceof Error ? err.message : String(err);
 
@@ -713,6 +772,9 @@ export class AgentSessionManager extends EventEmitter {
       // The watchdog never aborts (warn-only), so a set abort signal always
       // means the user clicked Stop.
       const isUserAbort = ctrl.signal.aborted;
+      // Force-settled turns (Stop grace-timeout, /reset) arrive here with the
+      // signal already aborted, so they ride the soft-cancel branch below.
+      const forcedReason = err instanceof TurnForceSettledError ? err.reason : null;
 
       // Adapter-specific recovery: only on real errors. A user cancel doesn't
       // need a thread reset (codex thread is still resumable for the next turn).
@@ -723,14 +785,18 @@ export class AgentSessionManager extends EventEmitter {
         // happened, transition back to stopped (NOT errored), and skip the
         // error alert. The session:idle event with outcome='aborted' (fired
         // in the finally block) is the canonical signal for the UI.
-        const cancelMsg: import('../transcripts/parser.js').Message = {
-          id: `turn-cancelled:${sessionId}:${turnStartedAt}`,
-          ts: Date.now(),
-          kind: 'system',
-          text: 'Turn cancelled.',
-        };
-        s.messages.push(cancelMsg);
-        this.emit('tool-event', { sessionId, messages: [cancelMsg] });
+        // Exception: a /reset force-settle wipes the conversation in the same
+        // tick — don't push a "Turn cancelled." note into the fresh session.
+        if (forcedReason !== 'reset') {
+          const cancelMsg: import('../transcripts/parser.js').Message = {
+            id: `turn-cancelled:${sessionId}:${turnStartedAt}`,
+            ts: Date.now(),
+            kind: 'system',
+            text: 'Turn cancelled.',
+          };
+          s.messages.push(cancelMsg);
+          this.emit('tool-event', { sessionId, messages: [cancelMsg] });
+        }
         s.state = 'stopped';
         this.emit('state-changed', { sessionId, state: 'stopped' as ProcessState });
         // No alert — the user *initiated* the cancel; toasting them about it
@@ -770,11 +836,16 @@ export class AgentSessionManager extends EventEmitter {
         });
       }
     } finally {
+      // Flip the cb proxy to sticky-terminal FIRST — anything a late-settling
+      // adapter emits from here on must not restart spinners or re-arm the
+      // watchdog (see the proxy above).
+      turnSettled = true;
       // Cast: TS narrows `stuckTimer` to `null` here because all reassignments
       // happen inside closures (armStuckTimer + the proxy handler). The actual
       // runtime value is TrackedTimer | null.
       (stuckTimer as TrackedTimer | null)?.cancel();
-      s.currentTurn = null;
+      turn.graceTimer?.cancel();
+      if (s.currentTurn === turn) s.currentTurn = null;
       // Belt-and-braces: clear any lingering streaming preview the adapter
       // might have left around (success path normally clears it itself).
       if (s.streamingText !== '' || s.streamingBlockIndex !== null) {
@@ -936,16 +1007,51 @@ export class AgentSessionManager extends EventEmitter {
   /**
    * Abort an in-flight turn. The adapter's runTurn loop unwinds and the
    * `finally` block in sendTurn handles state cleanup + turn-complete + idle.
+   *
+   * Belt-and-braces: a healthy adapter settles runTurn within moments of the
+   * abort, but a wedged one (dead child, missed provider end-signal) never
+   * will — so Stop also arms a one-shot grace timer that force-settles the
+   * turn's bookkeeping and drops the adapter's cached child/session. Stop
+   * ALWAYS lands; the user is never left with a spinner they can't clear.
    */
   abortTurn(sessionId: string): void {
     const s = this.sessions.get(sessionId);
     if (!s) return;
-    if (!s.currentTurn) return;
+    const turn = s.currentTurn;
+    if (!turn) return;
     try {
-      s.currentTurn.abortController.abort();
+      turn.abortController.abort();
     } catch (err) {
       console.error('[agent] abortTurn failed:', err);
     }
+    if (turn.graceTimer) return; // second Stop while already counting down
+    turn.graceTimer = trackedTimeout(
+      () => {
+        const current = this.sessions.get(sessionId);
+        // Settled on its own (the normal path) or the session is gone.
+        if (!current || current.currentTurn !== turn) return;
+        console.warn(
+          `[agent] turn did not unwind within ${ABORT_GRACE_MS / 1000}s of Stop — force-settling`,
+          { sessionId, provider: current.provider },
+        );
+        const adapter = this.adapters[current.provider];
+        try {
+          // Drop the wedged child/session cache so the NEXT turn starts from
+          // a clean resume instead of re-hitting the same dead transport.
+          adapter?.reset?.(current);
+        } catch (err) {
+          console.error('[agent] force-settle adapter.reset failed:', err);
+        }
+        turn.forceSettle('stop-grace');
+      },
+      {
+        label: 'stop grace force-settle',
+        ms: ABORT_GRACE_MS,
+        category: 'watchdog',
+        detail: `session ${sessionId.slice(0, 8)}`,
+        logFire: true,
+      },
+    );
   }
 
   /** Remove a session entirely. Aborts any in-flight turn, clears prompts. */
@@ -1038,7 +1144,14 @@ export class AgentSessionManager extends EventEmitter {
   }
 
   resetSession(sessionId: string): void {
+    // The user asked for a wipe — don't wait out the Stop grace window. Abort
+    // first (healthy adapters unwind from that alone), then force-settle so a
+    // wedged turn's bookkeeping (currentTurn, state, turn-complete, idle)
+    // unwinds immediately and the next send can never hit "turn already in
+    // flight" on a session the user just reset.
+    const wedged = this.sessions.get(sessionId)?.currentTurn ?? null;
     this.abortTurn(sessionId);
+    wedged?.forceSettle('reset');
     const s = this.sessions.get(sessionId);
     if (!s) return;
     const adapter = this.adapters[s.provider];

@@ -523,6 +523,26 @@ function App() {
           } else {
             console.warn(`[sessions] failed to sync messages for ${sessionId} (${reason})`, messagesRes.reason);
           }
+          // Authoritative reconcile of the LIVE indicators. The sidebar/rail
+          // spinners read the transient maps (streaming / toolProgress /
+          // status) which are normally cleared by the session:turn-complete
+          // WS handler — a single missed frame (reconnect gap, backgrounded
+          // tab) used to strand them forever, since no poll or focus path
+          // ever touched them. If the daemon says the session is not
+          // running, the turn is over: sweep them all. Runs in the same
+          // handler as the canonical message merge above so the clear and
+          // the merge commit in one React batch (no streaming-bubble gap).
+          if (sessionRes.status === 'fulfilled' && sessionRes.value.state !== 'running') {
+            const now = useAppStore.getState();
+            assistantDeltaBatch.remove(sessionId);
+            reasoningDeltaBatch.remove(sessionId);
+            toolDeltaBatch.remove(sessionId);
+            now.setToolProgress(sessionId, null);
+            now.setSessionStatus(sessionId, { status: null });
+            now.setToolStreaming(sessionId, null);
+            now.setReasoningStreaming(sessionId, '');
+            now.setStreamingText(sessionId, '');
+          }
         })
         .finally(() => {
           syncInFlight.delete(sessionId);
@@ -546,23 +566,8 @@ function App() {
       return [...ids];
     };
 
-    const runningSessionIds = () => {
-      const live = useAppStore.getState();
-      const ids: string[] = [];
-      for (const session of Object.values(live.sessions)) {
-        if (session.state === 'running') ids.push(session.id);
-      }
-      return ids;
-    };
-
     const syncActiveSessions = (reason: string) => {
       for (const sessionId of activeSessionIds()) {
-        syncSession(sessionId, reason);
-      }
-    };
-
-    const syncRunningSessions = (reason: string) => {
-      for (const sessionId of runningSessionIds()) {
         syncSession(sessionId, reason);
       }
     };
@@ -852,6 +857,11 @@ function App() {
               text: `Send failed: ${message}`,
             },
           ]);
+          // The composer/wsClient flipped the session to 'running'
+          // optimistically on send. Re-derive from the daemon rather than
+          // blindly forcing 'stopped' — a "turn already in flight" rejection
+          // means a real turn IS running and must keep its loader.
+          syncSession(pid, 'send-error');
         }
       }),
       wsClient.on('session:alert', (msg: any) => {
@@ -917,6 +927,11 @@ function App() {
         const sessionId = msg.processId;
         if (typeof sessionId === 'string') {
           const live = useAppStore.getState();
+          // Cancel queued rAF stragglers FIRST — a delta already scheduled
+          // for the next frame would otherwise repopulate the maps one frame
+          // after the clears below and re-strand the sidebar spinner.
+          reasoningDeltaBatch.remove(sessionId);
+          toolDeltaBatch.remove(sessionId);
           live.setToolProgress(sessionId, null);
           live.setSessionStatus(sessionId, { status: null });
           live.setToolStreaming(sessionId, null);
@@ -933,6 +948,15 @@ function App() {
         if (typeof sessionId !== 'string') return;
         const live = useAppStore.getState();
         live.setSessionIdle(sessionId, outcome);
+        // Same transient-indicator cleanup the session:turn-complete handler
+        // does (idempotent — both fire on every turn end; if one frame is
+        // dropped the other still clears the sidebar/rail spinners).
+        reasoningDeltaBatch.remove(sessionId);
+        toolDeltaBatch.remove(sessionId);
+        live.setToolProgress(sessionId, null);
+        live.setSessionStatus(sessionId, { status: null });
+        live.setToolStreaming(sessionId, null);
+        live.setReasoningStreaming(sessionId, '');
         // Belt-and-braces: if the turn ended WITHOUT a final assistant
         // message (aborts, errors, tool-only turns), the streaming text
         // wasn't cleared by the assistant-message microtask. Drop any
@@ -940,6 +964,19 @@ function App() {
         if (outcome !== 'completed') {
           assistantDeltaBatch.remove(sessionId);
           live.setStreamingText(sessionId, '');
+        } else {
+          // Completed turns: the assistant-message microtask owns the instant
+          // clear so the canonical swap commits in one render (see that
+          // handler). If that final assistant-message frame never arrived
+          // (dropped mid-burst), the "typing" bubble would strand forever —
+          // sweep it shortly after, once it's clear no swap is coming.
+          window.setTimeout(() => {
+            const now = useAppStore.getState();
+            if (now.sessions[sessionId]?.state !== 'running' && now.streamingBySession[sessionId]) {
+              assistantDeltaBatch.remove(sessionId);
+              now.setStreamingText(sessionId, '');
+            }
+          }, 2000);
         }
       }),
       // session:mode-changed — broadcast when the operating mode flips.
@@ -1011,12 +1048,15 @@ function App() {
       }),
     ];
 
-    // Slow safety-net poll: only fires for sessions stuck in `running`. The
-    // primary correctness path is event-driven (turn-complete, reconciled,
-    // ws-reconnected, focus, visibility); this just guards against a daemon
-    // hang where no events ever arrive. At idle this issues zero requests.
+    // Slow safety-net poll: fires for sessions stuck in `running` OR with
+    // stranded live-indicator residue (streaming / toolProgress / status —
+    // the sidebar spinner's other inputs). The primary correctness path is
+    // event-driven (turn-complete, reconciled, ws-reconnected, focus,
+    // visibility); this guards against missed frames and daemon hangs. Each
+    // synced session that comes back non-running has its residue cleared by
+    // syncSession, so the poll self-quenches back to zero requests at idle.
     const syncTimer = window.setInterval(() => {
-      syncRunningSessions('running-safety-poll');
+      syncActiveSessions('running-safety-poll');
     }, RUNNING_SAFETY_POLL_MS);
 
     const syncOnVisible = () => {

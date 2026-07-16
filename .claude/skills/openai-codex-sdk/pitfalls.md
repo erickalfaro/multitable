@@ -95,3 +95,15 @@ After a session removal, the daemon may still emit a few in-flight WS events for
 - Consume the **generated** `RateLimitSnapshot`/`RateLimitWindow` types; never hand-edit `codex-protocol/*`.
 
 If you're touching usage limits, read [`reference/usage-limits.md`](reference/usage-limits.md) and the cross-provider spec [`docs/reference/USAGE_LIMITS.md`](../../../docs/reference/USAGE_LIMITS.md).
+
+## 22. The turn completion deferred settles ONLY on notifications — a dead child strands it
+
+`runTurn` awaits a `TurnCompletion` deferred that is resolved by the `turn/completed` **notification** and rejected by the `error` notification — never by an RPC response. On child death the transport's `failAllPending` rejects pending RPC *requests* only, so without extra wiring the turn deferred hangs forever, `runTurn` never settles, and the manager's `finally` (state flip, `turn-complete`, `idle`) never runs → the session pins on "running" with a spinner that never stops.
+
+**Fix pattern (implemented):** `CodexAppServerClient.subscribeExit(listener)` fires on transport exit; the adapter subscribes per turn ([`codex.ts` `runTurn`](../../../packages/daemon/src/agent/providers/codex.ts)) and rejects the deferred with `codex app-server exited mid-turn`, unsubscribing in the turn's `finally`. Also attach a no-op `.catch()` branch to the deferred at creation — if the child dies while `turn/start` is still in flight, both the RPC and the deferred reject, and nothing has awaited the deferred yet.
+
+## 23. `turn/completed` can arrive BEFORE the `turn/start` response assigns `turnId`
+
+Notifications and RPC responses share one stdout pipe. For sub-second turns, `turn/started` + items + `turn/completed` can land **in the same readline chunk** as the `turn/start` response — the notification handler then runs before `completion.turnId = turnId` executes, and a guard like `if (!completion.turnId || …) return;` silently drops the completion → the turn hangs even though the full answer rendered (the classic stuck-spinner bug).
+
+**Fix pattern (implemented):** never drop turn-scoped notifications while `completion.turnId` is null — stash them on `completion.earlyNotifications` and re-dispatch through `handleNotification` immediately after the assignment (the id guard then filters stragglers from other turns correctly). Applied to `turn/completed` and `thread/tokenUsage/updated`; the `error` handler is already null-safe (rejects when the id is unknown — failing defensively is fine, dropping is not).
