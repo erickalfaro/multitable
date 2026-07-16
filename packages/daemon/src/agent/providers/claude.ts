@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   HookCallback,
@@ -81,6 +81,34 @@ export function resolveClaudeCodeExecutable(): string | undefined {
   for (const specifier of [preferred, fallback]) {
     try {
       return requireFromHere.resolve(specifier);
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return undefined;
+}
+
+// The user's own auto-updating `claude` install, as opposed to the pinned
+// SDK-bundled binary above. Model discovery probes both so the catalog is as
+// fresh as whichever binary is newer — a new model reaches the picker as soon
+// as the system CLI self-updates, without waiting for an SDK dep bump.
+export function resolveSystemClaudeExecutable(): string | undefined {
+  // Windows installs are PATH shims (.cmd/.exe) the probe can't spawn as-is;
+  // bundled-only there.
+  if (process.platform === 'win32') return undefined;
+  const pathDirs = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
+  const candidates = [
+    ...pathDirs.map((dir) => join(dir, 'claude')),
+    // Fallbacks for daemons launched with a trimmed PATH (systemd, launchd).
+    join(homedir(), '.local', 'bin', 'claude'),
+    join(homedir(), '.claude', 'local', 'claude'),
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+  ];
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      return candidate;
     } catch {
       /* try next candidate */
     }

@@ -13,7 +13,10 @@ import { loadProjectConfig } from './config/loader.js';
 import { TelegramBridge } from './notifications/telegramBridge.js';
 import { getTelegramToken } from './config/secrets.js';
 import { ProviderCatalog } from './providers/catalog.js';
-import { resolveClaudeCodeExecutable } from './agent/providers/claude.js';
+import {
+  resolveClaudeCodeExecutable,
+  resolveSystemClaudeExecutable,
+} from './agent/providers/claude.js';
 import os from 'node:os';
 import type { SpawnConfig, ProcessConfig } from './types.js';
 
@@ -124,6 +127,7 @@ async function main() {
   const catalog = new ProviderCatalog({
     getDaemonEnv: () => process.env,
     resolveClaudeExecutable: resolveClaudeCodeExecutable,
+    resolveSystemClaudeExecutable,
     discoveryCwd: os.tmpdir(),
   });
   await catalog.hydrate();
@@ -260,6 +264,10 @@ async function main() {
     // are isolated; WS broadcast lets any open UI rerender model dropdowns
     // when fresh results land.
     void catalog.refreshAll();
+    // Periodic re-discovery (unref'd timer) — provider CLIs self-update, so a
+    // long-running daemon re-probes for new models every few hours. Started
+    // only after a successful bind, same rule as the Telegram bridge.
+    catalog.startPeriodicRefresh();
     // Background adapter warmup — pre-spawns long-lived provider children
     // (codex app-server) so the first session that uses them doesn't eat the
     // ~2-5s cold-start. Errors per adapter are isolated inside warmupAll.
@@ -282,6 +290,7 @@ async function main() {
     setTimeout(() => process.exit(code), 2000);
     fileWatcher.unwatchAll();
     gitWatcher.unwatchAll();
+    catalog.stopPeriodicRefresh();
     manager.destroy();
     void agentManager.shutdown();
     serverInstance.closeAllClients();

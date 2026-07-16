@@ -57,7 +57,7 @@ const OPTIONS: Option[] = [
   {
     value: 'max',
     label: 'Max',
-    description: 'Maximum effort — Opus 4.6 / 4.7 only.',
+    description: 'Maximum effort — deepest reasoning, only on models that support it.',
     tone: 'danger',
   },
 ];
