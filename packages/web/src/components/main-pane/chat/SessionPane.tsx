@@ -8,7 +8,7 @@ import { SessionHeaderBar } from '../SessionHeaderBar';
 import { ProcessBanner } from '../ProcessBanner';
 import { PermissionBar } from '../../permission/PermissionBar';
 import { MessageList } from './MessageList';
-import { ChatScroller } from './ChatScroller';
+import { ChatScroller, useChatScroller } from './ChatScroller';
 import { ChatInputCM } from './ChatInputCM';
 import { PinnedUserPrompt } from './PinnedUserPrompt';
 import { WorkspaceTint } from '../../theme/WorkspaceTint';
@@ -39,6 +39,13 @@ interface DensityConfig {
   proseOnly: boolean;
 }
 
+// DOM render cap for the main-pane chat. Long transcripts render only the
+// last N messages plus a "Show earlier messages" affordance — every message
+// block is a live (non-virtualized) subtree, so an uncapped 1000-message
+// session means 1000 mounted markdown/tool-card trees reconciling on every
+// streaming frame.
+const COMFORTABLE_TAIL = 150;
+
 const DENSITY: Record<SessionPaneDensity, DensityConfig> = {
   comfortable: {
     showHeader: true,
@@ -46,7 +53,7 @@ const DENSITY: Record<SessionPaneDensity, DensityConfig> = {
     showPinnedPrompt: true,
     showComposer: true,
     showPermissionBar: true,
-    tailLimit: null,
+    tailLimit: COMFORTABLE_TAIL,
     proseOnly: false,
   },
   wall: {
@@ -106,6 +113,9 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
   const reasoningStreaming = useAppStore((s) => s.reasoningStreamingBySession[sessionId] ?? '');
 
   const [loading, setLoading] = useState(false);
+  // Comfortable density renders only the last COMFORTABLE_TAIL messages until
+  // the user asks for the rest; reset per session.
+  const [showAll, setShowAll] = useState(false);
   const isMobile = useIsMobile();
   const agentSessionId = session.agentSessionId ?? session.claudeState?.agentSessionId ?? null;
   const lastLoadedKeyRef = useRef<string | null>(null);
@@ -119,6 +129,7 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
     const previousKey = lastLoadedKeyRef.current;
     if (previousKey === key) return;
     lastLoadedKeyRef.current = key;
+    setShowAll(false);
 
     if (!agentSessionId) {
       clearMessages(sessionId);
@@ -135,7 +146,7 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
     api.sessions
       .messages(sessionId)
       .then((res) => {
-        mergeMessages(sessionId, res.messages);
+        mergeMessages(sessionId, res.messages, { complete: true });
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -170,7 +181,7 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
       if (!agentSessionId) return;
       api.sessions
         .messages(sessionId)
-        .then((res) => mergeMessages(sessionId, res.messages))
+        .then((res) => mergeMessages(sessionId, res.messages, { complete: true }))
         .catch(() => {});
     });
     return off;
@@ -185,26 +196,49 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
 
   const showBanner = cfg.showBanner && session.state === 'errored';
 
-  // Apply density transforms (prose-only filter, tail limit).
-  const displayMessages = useMemo<Message[]>(() => {
+  // Apply density transforms (prose-only filter, tail limit). "Show earlier
+  // messages" lifts the tail cap for this pane until the session changes.
+  const tailLimit = showAll ? null : cfg.tailLimit;
+  const { displayMessages, hiddenCount } = useMemo<{
+    displayMessages: Message[];
+    hiddenCount: number;
+  }>(() => {
     let out = messages;
     if (cfg.proseOnly) {
       out = out.filter((m) => m.kind === 'user' || m.kind === 'assistant');
     }
-    if (cfg.tailLimit !== null && out.length > cfg.tailLimit) {
-      out = out.slice(-cfg.tailLimit);
+    let hidden = 0;
+    if (tailLimit !== null && out.length > tailLimit) {
+      hidden = out.length - tailLimit;
+      out = out.slice(-tailLimit);
     }
-    return out;
-  }, [messages, cfg.proseOnly, cfg.tailLimit]);
+    return { displayMessages: out, hiddenCount: hidden };
+  }, [messages, cfg.proseOnly, tailLimit]);
 
+  // Derived from displayMessages (not messages) so the pinned prompt's
+  // prev/next navigation only targets user messages that are actually in the
+  // DOM — MessageList indexes `data-user-message-index` over the sliced list.
   const userMessages = useMemo(() => {
     if (!cfg.showPinnedPrompt) return [];
     const list: Array<{ id: string; text: string }> = [];
-    for (const m of messages) {
+    for (const m of displayMessages) {
       if (m.kind === 'user') list.push({ id: m.id, text: m.text });
     }
     return list;
-  }, [messages, cfg.showPinnedPrompt]);
+  }, [displayMessages, cfg.showPinnedPrompt]);
+
+  // Expand the tail; if the in-memory transcript itself is truncated (a
+  // background-capped session whose full mount fetch failed, e.g. offline),
+  // refetch the whole history so "earlier" actually has the messages.
+  const handleShowEarlier = () => {
+    setShowAll(true);
+    if (useAppStore.getState().messagesMeta[sessionId]?.truncated) {
+      api.sessions
+        .messages(sessionId)
+        .then((res) => mergeMessages(sessionId, res.messages, { complete: true }))
+        .catch(() => {});
+    }
+  };
 
   // Wall / card streams: for compactness, suppress the in-flight reasoning
   // text from showing inside a tile — reasoning is usually long and floods
@@ -256,6 +290,9 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
             userMessages.length > 0 ? <PinnedUserPrompt userMessages={userMessages} /> : null
           }
         >
+          {density === 'comfortable' && hiddenCount > 0 && (
+            <ShowEarlierMessages hiddenCount={hiddenCount} onExpand={handleShowEarlier} />
+          )}
           <MessageList
             messages={displayMessages}
             loading={loading}
@@ -292,6 +329,57 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
           ))}
         {cfg.showPermissionBar && <PermissionBar sessionId={sessionId} />}
       </WorkspaceTint>
+    </div>
+  );
+}
+
+// Top-of-transcript affordance revealing the messages hidden by the
+// COMFORTABLE_TAIL cap. Must live inside <ChatScroller> so it can anchor the
+// viewport across the expansion: prepending hundreds of messages would
+// otherwise shove the user's reading position off-screen (ChatScroller only
+// auto-corrects when stuck to the bottom).
+function ShowEarlierMessages({
+  hiddenCount,
+  onExpand,
+}: {
+  hiddenCount: number;
+  onExpand: () => void;
+}) {
+  const { scrollRoot } = useChatScroller();
+  const handleClick = () => {
+    const prevHeight = scrollRoot?.scrollHeight ?? 0;
+    const prevTop = scrollRoot?.scrollTop ?? 0;
+    onExpand();
+    // React flushes the discrete-event update synchronously, so by the time
+    // this frame callback runs the earlier messages have laid out.
+    requestAnimationFrame(() => {
+      if (!scrollRoot) return;
+      scrollRoot.scrollTop = prevTop + (scrollRoot.scrollHeight - prevHeight);
+    });
+  };
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0 10px' }}>
+      <button
+        type="button"
+        onClick={handleClick}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '3px 10px',
+          fontSize: 10.5,
+          borderRadius: 'var(--radius-snug)',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border)',
+          color: 'var(--text-secondary)',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+        }}
+      >
+        Show earlier messages ({hiddenCount})
+      </button>
     </div>
   );
 }

@@ -466,9 +466,17 @@ function App() {
     const syncSession = (sessionId: string, reason: string) => {
       if (syncInFlight.has(sessionId)) return;
       syncInFlight.add(sessionId);
+      // Only pull the transcript for sessions the user can actually see
+      // (foregrounded chat or pinned wall tile). Background sessions keep
+      // their WS-fed tail (appStore caps it) and do a full fetch when opened
+      // — refetching the whole transcript on every background turn-end was
+      // the main browser-memory + daemon-parse hog with many live sessions.
+      const live = useAppStore.getState();
+      const visible =
+        live.selectedProcessId === sessionId || live.pinnedSessionIds.includes(sessionId);
       Promise.allSettled([
         api.sessions.get(sessionId),
-        api.sessions.messages(sessionId),
+        visible ? api.sessions.messages(sessionId) : Promise.resolve(null),
       ])
         .then(([sessionRes, messagesRes]) => {
           if (sessionRes.status === 'fulfilled') {
@@ -495,7 +503,11 @@ function App() {
             }
           }
           if (messagesRes.status === 'fulfilled') {
-            useAppStore.getState().mergeMessages(sessionId, messagesRes.value.messages);
+            if (messagesRes.value) {
+              useAppStore
+                .getState()
+                .mergeMessages(sessionId, messagesRes.value.messages, { complete: true });
+            }
           } else {
             console.warn(`[sessions] failed to sync messages for ${sessionId} (${reason})`, messagesRes.reason);
           }
