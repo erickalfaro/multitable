@@ -126,10 +126,22 @@ function App() {
     }
 
     // Subscribe to store changes; resolve as soon as the relevant data lands.
+    // Re-entrancy guard: tryResolve calls setSelectedProcess, and Zustand
+    // notifies subscribers SYNCHRONOUSLY — without the guard this callback
+    // re-enters itself (set → notify → tryResolve → set → …) before unsub()
+    // is reached, overflowing the stack on any cold-boot deep link whose
+    // session arrives via loadData rather than the snapshot.
+    let resolving = false;
     const unsub = useAppStore.subscribe(() => {
-      if (tryResolve(target)) {
-        clearHash();
-        unsub();
+      if (resolving) return;
+      resolving = true;
+      try {
+        if (tryResolve(target)) {
+          clearHash();
+          unsub();
+        }
+      } finally {
+        resolving = false;
       }
     });
     const timeout = setTimeout(() => {
