@@ -83,12 +83,23 @@ export function ProjectSectionsColumn() {
     window.addEventListener('resize', schedule);
     const ro = new ResizeObserver(schedule);
     ro.observe(host);
+    // Re-measure when the list reorders (agents are recency-sorted, so any
+    // other session streaming re-sorts the list) or when a row is added /
+    // removed above the selected one. `selectedProcessId` is unchanged in
+    // those cases, no scroll fires, and `host` is fixed-size so the
+    // ResizeObserver stays quiet — without this the notch would stay pinned
+    // to the selected row's old Y and appear on the wrong row. childList
+    // (not characterData) keeps this off streaming text updates; it fires
+    // only on real node moves / adds / removes that can shift layout.
+    const mo = new MutationObserver(schedule);
+    if (scrollEl) mo.observe(scrollEl, { childList: true, subtree: true });
     return () => {
       cancelled = true;
       if (raf) cancelAnimationFrame(raf);
       scrollEl?.removeEventListener('scroll', schedule);
       window.removeEventListener('resize', schedule);
       ro.disconnect();
+      mo.disconnect();
       setRightOpen(false);
     };
   }, [selectedProcessId, sidebarProjectId, activeProject?.id]);
