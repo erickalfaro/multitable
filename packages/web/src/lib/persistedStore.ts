@@ -46,7 +46,7 @@ export interface Snapshot {
   commands: Record<string, Command>;
   terminals: Record<string, Terminal>;
   messagesBySession: Record<string, Message[]>;
-  messagesMeta: Record<string, { lastTouchedAt: number }>;
+  messagesMeta: Record<string, { lastTouchedAt: number; truncated?: boolean }>;
   selectedProcessId: string | null;
   expandedProjectIds: string[];
   sidebarProjectId: string | null;
@@ -61,7 +61,7 @@ export interface PersistableState {
   commands: Record<string, Command>;
   terminals: Record<string, Terminal>;
   messagesBySession: Record<string, Message[]>;
-  messagesMeta?: Record<string, { lastTouchedAt: number }>;
+  messagesMeta?: Record<string, { lastTouchedAt: number; truncated?: boolean }>;
   selectedProcessId: string | null;
   expandedProjectIds: string[];
   sidebarProjectId: string | null;
@@ -111,7 +111,7 @@ function trimForSnapshot(
   maxSessions: number,
 ): {
   messagesBySession: Record<string, Message[]>;
-  messagesMeta: Record<string, { lastTouchedAt: number }>;
+  messagesMeta: Record<string, { lastTouchedAt: number; truncated?: boolean }>;
 } {
   const meta = state.messagesMeta ?? {};
   const ids = Object.keys(state.messagesBySession);
@@ -119,7 +119,7 @@ function trimForSnapshot(
   ids.sort((a, b) => (meta[b]?.lastTouchedAt ?? 0) - (meta[a]?.lastTouchedAt ?? 0));
   const kept = ids.slice(0, maxSessions);
   const trimmedMessages: Record<string, Message[]> = {};
-  const trimmedMeta: Record<string, { lastTouchedAt: number }> = {};
+  const trimmedMeta: Record<string, { lastTouchedAt: number; truncated?: boolean }> = {};
   for (const id of kept) {
     const arr = state.messagesBySession[id];
     if (!arr || arr.length === 0) continue;
