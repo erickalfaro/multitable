@@ -647,8 +647,16 @@ function App() {
         store.removeSession(msg.payload.sessionId);
       }),
       wsClient.on('permission:prompt', (msg: any) => {
-        store.addPermission(msg.payload.prompt);
+        const prompt = msg.payload.prompt;
+        store.addPermission(prompt);
         playPermissionChime();
+        // Auto-surface: dock the picker in the right panel's Ask tab when a
+        // blocking prompt targets the session the user is currently viewing.
+        const live = useAppStore.getState();
+        if (prompt?.sessionId && prompt.sessionId === live.selectedProcessId) {
+          live.setDetailPanelOpen(true);
+          live.setDetailPanelTab('ask');
+        }
       }),
       wsClient.on('permission:resolved', (msg: any) => {
         store.removePermission(msg.payload.id);

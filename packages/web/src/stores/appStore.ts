@@ -434,7 +434,7 @@ interface AppState {
   setModelCatalog: (provider: AgentProvider, models: DiscoveredModel[]) => void;
 }
 
-export type DetailPanelTab = 'activity' | 'cost' | 'notes' | 'info';
+export type DetailPanelTab = 'activity' | 'cost' | 'notes' | 'info' | 'ask';
 
 export type AttentionKind = 'read' | 'edit' | 'command' | 'search' | 'mcp' | 'reasoning';
 
@@ -961,7 +961,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   detailPanelTab: (() => {
     try {
       const t = localStorage.getItem('mt:detailPanelTab');
-      return t === 'activity' || t === 'cost' || t === 'notes' || t === 'info' ? t : 'activity';
+      return t === 'activity' || t === 'cost' || t === 'notes' || t === 'info' || t === 'ask'
+        ? t
+        : 'activity';
     } catch {
       return 'activity';
     }
