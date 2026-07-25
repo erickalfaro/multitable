@@ -250,6 +250,8 @@ export const api = {
       };
     },
     openFile: (id: string, filePath: string) => post<void>(`/api/projects/${id}/open-file`, { path: filePath }),
+    openInDefaultApp: (id: string, filePath: string) =>
+      post<void>(`/api/projects/${id}/open-in-default-app`, { path: filePath }),
     diff: (id: string) => get<{ diff: string }>(`/api/projects/${id}/diff`),
     slashCommands: (id: string) =>
       get<{ commands: Array<{ name: string; scope: 'project' | 'user'; description: string }> }>(

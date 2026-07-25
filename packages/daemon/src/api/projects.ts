@@ -1125,6 +1125,37 @@ export function createProjectsRouter(
     res.json({ ok: true });
   });
 
+  // POST /api/projects/:id/open-in-default-app — hand the file to the OS's
+  // registered default application (PDF viewer, image viewer, Excel, …).
+  router.post('/:id/open-in-default-app', (req: Request, res: Response) => {
+    const project = getProjectById(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const { path: filePath } = req.body || {};
+    if (!filePath) return res.status(400).json({ error: 'path is required' });
+
+    const normalizedProjectPath = path.resolve(project.path);
+    const resolved = path.resolve(normalizedProjectPath, filePath);
+    if (!resolved.startsWith(normalizedProjectPath)) {
+      return res.status(403).json({ error: 'Path is outside project directory' });
+    }
+    if (!fs.existsSync(resolved)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const opts = { detached: true, stdio: 'ignore' as const };
+    // Fire and forget with the per-OS opener.
+    const child =
+      process.platform === 'win32'
+        ? spawn('cmd', ['/c', 'start', '', resolved], opts) // '' is start's title arg
+        : process.platform === 'darwin'
+          ? spawn('open', [resolved], opts)
+          : spawn('xdg-open', [resolved], opts);
+    child.unref();
+
+    res.json({ ok: true });
+  });
+
   // GET /api/projects/:id/slash-commands — discover Claude Code custom slash
   // commands from `.claude/commands/*.md` (project) and `~/.claude/commands/*.md`
   // (user-global). Markdown frontmatter `description:` is surfaced in the

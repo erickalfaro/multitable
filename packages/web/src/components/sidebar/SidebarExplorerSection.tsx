@@ -301,7 +301,11 @@ export function SidebarExplorerSection({ projectId }: Props) {
         }}
         onUploadHere={(dir) => openPicker(dir)}
         fileActions={(entry) => (
-          <SidebarFileTreeActions filePath={entry.path} targetSessionId={activeSessionId} />
+          <SidebarFileTreeActions
+            projectId={projectId}
+            filePath={entry.path}
+            targetSessionId={activeSessionId}
+          />
         )}
       />
     </SidebarSection>
