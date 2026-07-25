@@ -26,7 +26,6 @@ import { useIsMobile } from '../../lib/useIsMobile';
 // their fixed section heights; the past-agents list flexes to fill whatever
 // vertical space remains and scrolls internally.
 const PRESETS_HEIGHT = 118;
-const MODEL_SECTION_HEIGHT = 120;
 // Mode picker sits between the model picker and past-sessions. Single row of
 // small chips + a label; only shown when the provider declares > 1 mode.
 const MODE_SECTION_HEIGHT = 58;
@@ -397,7 +396,10 @@ export function AgentComposer({ onClose, projectId }: Props) {
           />
 
           {showModelSection && (
-            <div style={{ height: MODEL_SECTION_HEIGHT, flexShrink: 0 }}>
+            // The model picker is the primary action, so it grows to take the
+            // bulk of the free space (flex:2 vs past-agents' flex:1) — Cursor
+            // lists 100+ models, which the old fixed 120px well couldn't show.
+            <div style={{ flex: 2, minHeight: 200, display: 'flex', flexDirection: 'column' }}>
               <ModelPicker
                 provider={agentProvider!}
                 state={modelsState}
@@ -617,6 +619,7 @@ interface ModelPickerProps {
 
 function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPickerProps) {
   const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState('');
   const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
@@ -627,6 +630,17 @@ function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPi
     }
   };
   const isBusy = refreshing || state.status === 'loading';
+
+  const allModels = state.status === 'ready' ? state.models : [];
+  const q = query.trim().toLowerCase();
+  // Match against both the human label and the raw id — the id (e.g.
+  // `gpt-5.3-codex-xhigh`) is what carries effort/variant info, so users
+  // search by it as much as by the display name.
+  const filtered = q
+    ? allModels.filter((m) => `${cleanModelLabel(m)} ${m.id}`.toLowerCase().includes(q))
+    : allModels;
+  const showSearch = state.status === 'ready' && allModels.length > 0;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div
@@ -643,7 +657,21 @@ function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPi
           flexShrink: 0,
         }}
       >
-        <span>Model · {provider}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 8 }}>
+          <span>Model · {provider}</span>
+          {allModels.length > 0 && (
+            <span
+              style={{
+                color: 'var(--text-muted)',
+                textTransform: 'none',
+                letterSpacing: 0,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {q ? `${filtered.length} of ${allModels.length}` : allModels.length}
+            </span>
+          )}
+        </span>
         <button
           type="button"
           onClick={handleRefresh}
@@ -678,6 +706,25 @@ function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPi
         </button>
       </div>
 
+      {showSearch && (
+        <div style={{ marginBottom: 8, flexShrink: 0 }}>
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            // Esc clears the query rather than closing the whole composer
+            // (which the body's onKeyDown would otherwise do).
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && query) {
+                e.stopPropagation();
+                setQuery('');
+              }
+            }}
+            placeholder={`Filter ${allModels.length} models…`}
+            leftIcon={<Search size={13} />}
+          />
+        </div>
+      )}
+
       {/* Content well. Always present, always full height, opacity-driven
           state swaps so provider changes feel like a soft crossfade rather
           than a structural rerender. */}
@@ -685,6 +732,8 @@ function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPi
         <ModelPickerState
           state={state}
           provider={provider}
+          models={filtered}
+          hasQuery={!!q}
           selected={selected}
           onSelect={onSelect}
         />
@@ -696,11 +745,16 @@ function ModelPicker({ provider, state, selected, onSelect, onRefresh }: ModelPi
 function ModelPickerState({
   state,
   provider,
+  models,
+  hasQuery,
   selected,
   onSelect,
 }: {
   state: ModelsState;
   provider: 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot';
+  // Filtered list to render (the parent applies the search query).
+  models: DiscoveredModel[];
+  hasQuery: boolean;
   selected: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -753,7 +807,9 @@ function ModelPickerState({
     );
   }
 
-  if (state.models.length === 0) {
+  // Ready. Distinguish "no matches for the current filter" from "provider
+  // reported no models at all".
+  if (models.length === 0) {
     return (
       <div
         style={{
@@ -763,9 +819,10 @@ function ModelPickerState({
           justifyContent: 'center',
           fontSize: 11.5,
           color: 'var(--text-muted)',
+          textAlign: 'center',
         }}
       >
-        No models reported by {provider}.
+        {hasQuery ? 'No models match your filter.' : `No models reported by ${provider}.`}
       </div>
     );
   }
@@ -781,19 +838,22 @@ function ModelPickerState({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
           gap: 6,
           animation: 'mt-fade-in var(--dur-fast) var(--ease-out)',
         }}
       >
-        {state.models.map((m) => {
+        {models.map((m) => {
           const isSelected = selected === m.id;
           const cleanedName = cleanModelLabel(m);
+          // Show the raw id as a faint mono subline when it adds information
+          // beyond the label (common for Cursor's effort-encoded ids).
+          const showId = m.id.toLowerCase() !== cleanedName.toLowerCase();
           return (
             <button
               key={m.id}
               onClick={() => onSelect(m.id)}
-              title={cleanedName}
+              title={showId ? `${cleanedName}\n${m.id}` : cleanedName}
               style={{
                 padding: '8px 10px',
                 borderRadius: 'var(--radius-md)',
@@ -823,6 +883,21 @@ function ModelPickerState({
               >
                 {cleanedName}
               </span>
+              {showId && (
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 400,
+                    fontFamily: 'var(--font-mono, monospace)',
+                    color: isSelected ? 'var(--accent-amber)' : 'var(--text-faint)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {m.id}
+                </span>
+              )}
             </button>
           );
         })}

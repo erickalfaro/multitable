@@ -314,6 +314,19 @@ export async function discoverCursor(env: NodeJS.ProcessEnv): Promise<Discovered
       supportsEffort: false,
     });
   }
+  // `cursor-agent models` exited 0 but nothing parsed as a model row. Cursor
+  // always lists many models, so an empty parse means the command emitted
+  // something else — an update/auth banner, a truncated stream under cold-boot
+  // contention, etc. Treat it as a failure (throw) rather than returning [],
+  // which the catalog would silently accept and re-seed the 2-model baseline
+  // over. Throwing routes through runDiscovery's retry + preserves the last
+  // good catalog and records lastError. Include a stdout snippet for triage.
+  if (models.length === 0) {
+    // JSON.stringify so line endings are visible (\n vs one glued line) — the
+    // cold-boot failure mode we're chasing hinges on exactly that.
+    const raw = JSON.stringify(stdout).slice(0, 400);
+    throw new Error(`cursor-agent models returned no parseable models (raw: ${raw || '""'})`);
+  }
   return models;
 }
 
@@ -343,7 +356,7 @@ export async function discoverCopilot(): Promise<DiscoveredModel[]> {
         setTimeout(() => reject(new Error('copilot discovery timed out')), 30000),
       ),
     ]);
-    return models
+    const mapped = models
       .filter((m) => m && typeof m.id === 'string')
       .map((m, idx) => {
         const raw = m as unknown as {
@@ -366,6 +379,14 @@ export async function discoverCopilot(): Promise<DiscoveredModel[]> {
           ...(defaultEffort && defaultEffort !== 'max' ? { defaultEffort } : {}),
         };
       });
+    // Same reasoning as discoverCursor: Copilot always lists models, so an
+    // empty result is a failed probe (auth/handshake hiccup), not a real empty
+    // catalog. Throw so the catalog retries + preserves last-good instead of
+    // silently re-seeding the baseline.
+    if (mapped.length === 0) {
+      throw new Error('copilot listModels returned no models');
+    }
+    return mapped;
   } catch (err) {
     throw err instanceof Error ? err : new Error(String(err));
   } finally {
