@@ -82,9 +82,17 @@ function Preview({ text }: { text: string }) {
 export function AskQuestionCard({
   prompt,
   compact = false,
+  onSubmit,
+  onSkip,
 }: {
   prompt: PermissionPrompt;
   compact?: boolean;
+  // Override resolution. Detected-option cards (post-turn numbered lists) reply
+  // by sending a new turn instead of answering a blocking tool call, so the
+  // unified panel injects its own submit/skip. Defaults keep the blocking
+  // AskUserQuestion behavior.
+  onSubmit?: (selections: string[][]) => void;
+  onSkip?: () => void;
 }) {
   const removePermission = useAppStore((s) => s.removePermission);
   const questions = prompt.questions ?? [];
@@ -108,11 +116,19 @@ export function AskQuestionCard({
   const allAnswered = questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
   const submit = () => {
+    if (onSubmit) {
+      onSubmit(selections);
+      return;
+    }
     wsClient.answerQuestion(prompt.id, selections);
     removePermission(prompt.id);
   };
 
   const skip = () => {
+    if (onSkip) {
+      onSkip();
+      return;
+    }
     wsClient.answerQuestion(
       prompt.id,
       questions.map(() => []),

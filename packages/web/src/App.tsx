@@ -14,7 +14,6 @@ import { MainPane } from './components/main-pane/MainPane';
 import { SessionDetailPanel } from './components/main-pane/SessionDetailPanel';
 import { StatusBar } from './components/status-bar/StatusBar';
 import { CommandPalette } from './components/command-palette/CommandPalette';
-import { OptionSelector } from './components/option/OptionSelector';
 import { AddProcessModal } from './components/modals/AddProcessModal';
 import { GlobalSettingsModal } from './components/modals/GlobalSettingsModal';
 import { ProjectSettingsModal } from './components/modals/ProjectSettingsModal';
@@ -1462,7 +1461,6 @@ function App() {
         </div>
       )}
 
-      <OptionSelector />
       <CommandPalette />
       <NotificationCenter />
       <ElicitationModalHost />
