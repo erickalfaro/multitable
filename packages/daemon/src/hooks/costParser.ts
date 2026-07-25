@@ -2,32 +2,40 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-// Claude API pricing per token (as of 2025)
-// Opus 4: $15/MTok input, $75/MTok output
-// Sonnet 4: $3/MTok input, $15/MTok output
-// Haiku 3.5: $0.80/MTok input, $4/MTok output
-// Cache write: 1.25x input price, Cache read: 0.1x input price
+// Claude API pricing per MTok (current tiers, verified against the claude-api
+// skill). cacheWrite = 1.25x input (5-minute TTL), cacheRead = 0.1x input.
+//   Opus 4.8:  $5 in  / $25 out
+//   Sonnet 5:  $3 in  / $15 out
+//   Haiku 4.5: $1 in  / $5  out
+// This table is only consulted on the historical-JSONL /cost fallback in
+// api/sessions.ts (a live session's cost comes from the SDK's totalCostUsd).
+// The `includes()` fallbacks in getPricing catch date-suffixed / aliased ids,
+// so exact keys are a bonus, not load-bearing.
 const MODEL_PRICING: Record<string, { inputPerMTok: number; outputPerMTok: number; cacheWritePerMTok: number; cacheReadPerMTok: number }> = {
-  'claude-opus-4-6':      { inputPerMTok: 15,  outputPerMTok: 75, cacheWritePerMTok: 18.75, cacheReadPerMTok: 1.50 },
-  'claude-opus-4-20250514': { inputPerMTok: 15, outputPerMTok: 75, cacheWritePerMTok: 18.75, cacheReadPerMTok: 1.50 },
-  'claude-sonnet-4-20250514': { inputPerMTok: 3, outputPerMTok: 15, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 },
-  'claude-3-5-sonnet':    { inputPerMTok: 3,   outputPerMTok: 15, cacheWritePerMTok: 3.75,  cacheReadPerMTok: 0.30 },
-  'claude-3-5-haiku':     { inputPerMTok: 0.8, outputPerMTok: 4,  cacheWritePerMTok: 1.0,   cacheReadPerMTok: 0.08 },
+  'claude-opus-4-8':   { inputPerMTok: 5, outputPerMTok: 25, cacheWritePerMTok: 6.25, cacheReadPerMTok: 0.50 },
+  'claude-sonnet-5':   { inputPerMTok: 3, outputPerMTok: 15, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 },
+  'claude-haiku-4-5':  { inputPerMTok: 1, outputPerMTok: 5,  cacheWritePerMTok: 1.25, cacheReadPerMTok: 0.10 },
 };
+
+const OPUS_PRICING = MODEL_PRICING['claude-opus-4-8'];
+const SONNET_PRICING = MODEL_PRICING['claude-sonnet-5'];
+const HAIKU_PRICING = MODEL_PRICING['claude-haiku-4-5'];
 
 // Default pricing (Sonnet-tier) if model is unknown
 const DEFAULT_PRICING = { inputPerMTok: 3, outputPerMTok: 15, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 };
 
-function getPricing(model: string | undefined) {
+export function getPricing(model: string | undefined) {
   if (!model) return DEFAULT_PRICING;
   // Try exact match first, then prefix match
   if (MODEL_PRICING[model]) return MODEL_PRICING[model];
   for (const [key, pricing] of Object.entries(MODEL_PRICING)) {
     if (model.startsWith(key) || key.startsWith(model)) return pricing;
   }
-  // Infer from model name
-  if (model.includes('opus')) return MODEL_PRICING['claude-opus-4-6'];
-  if (model.includes('haiku')) return MODEL_PRICING['claude-3-5-haiku'];
+  // Infer from tier — matches date-suffixed / versioned ids the SDK writes to
+  // the JSONL (e.g. claude-opus-4-8-20260101).
+  if (model.includes('opus')) return OPUS_PRICING;
+  if (model.includes('haiku')) return HAIKU_PRICING;
+  if (model.includes('sonnet')) return SONNET_PRICING;
   return DEFAULT_PRICING;
 }
 
@@ -134,4 +142,25 @@ export function parseSessionCost(projectPath: string, claudeSessionId: string): 
     model: lastModel,
     messageCount,
   };
+}
+
+// ponytail: runnable self-check for the tier-fallback logic (the non-trivial
+// part). Run directly with `node dist/hooks/costParser.js` — it throws on a
+// bad rate and exits 0 otherwise; a no-op on import.
+function demo() {
+  const check = (label: string, got: number, want: number) => {
+    if (got !== want) throw new Error(`${label}: expected ${want}, got ${got}`);
+  };
+  // Date-suffixed ids the SDK writes must resolve via the includes() fallback.
+  check('opus 4.8 in', getPricing('claude-opus-4-8-20260101').inputPerMTok, 5);
+  check('opus 4.8 out', getPricing('claude-opus-4-8-20260101').outputPerMTok, 25);
+  check('haiku 4.5 in', getPricing('claude-haiku-4-5').inputPerMTok, 1);
+  check('haiku 4.5 out', getPricing('claude-haiku-4-5').outputPerMTok, 5);
+  check('sonnet in', getPricing('claude-sonnet-5-20260101').inputPerMTok, 3);
+  check('unknown → sonnet default', getPricing(undefined).inputPerMTok, 3);
+  console.log('costParser pricing self-check passed');
+}
+
+if (process.argv[1]?.endsWith('costParser.js')) {
+  demo();
 }

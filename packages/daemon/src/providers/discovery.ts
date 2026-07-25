@@ -270,21 +270,27 @@ export async function discoverGrok(env: NodeJS.ProcessEnv): Promise<DiscoveredMo
 // default tagged ` (current, default)`. We resolve the executable the same way
 // the adapter does (on Windows the PATH entry is a `.cmd` shim, so we spawn the
 // bundled node.exe + index.js directly). Effort is encoded in the model id, so
-// every row is `supportsEffort: false`. Permissive: any failure → `[]` so the
-// seeded CURSOR_BASELINE shows through. See the cursor-cli skill.
+// every row is `supportsEffort: false`. A resolve/spawn/timeout failure THROWS
+// (the catalog records lastError and keeps the last-good/baseline models); only
+// a clean run that parses zero rows returns `[]`. See the cursor-cli skill.
 
 export async function discoverCursor(env: NodeJS.ProcessEnv): Promise<DiscoveredModel[]> {
   let cli: { command: string; prefixArgs: string[] };
   try {
     cli = resolveCursorCli();
-  } catch {
-    return [];
+  } catch (err) {
+    throw err instanceof Error ? err : new Error(String(err));
   }
   let stdout: string;
   try {
-    stdout = await execStdout(cli.command, [...cli.prefixArgs, 'models'], env, 8000);
-  } catch {
-    return [];
+    // 20s (not 8s): `cursor-agent models` measured ~5.8s warm and hits the
+    // network; a cold boot with no compile cache — while all six providers
+    // probe concurrently — routinely exceeds 8s. A timeout here previously
+    // returned [] and silently re-seeded the tiny baseline. Now we let it
+    // throw so the catalog records a real error (see runDiscovery).
+    stdout = await execStdout(cli.command, [...cli.prefixArgs, 'models'], env, 20000);
+  } catch (err) {
+    throw err instanceof Error ? err : new Error(String(err));
   }
 
   const models: DiscoveredModel[] = [];
@@ -316,9 +322,10 @@ export async function discoverCursor(env: NodeJS.ProcessEnv): Promise<Discovered
 // The Copilot SDK exposes the authoritative catalog via `client.listModels()`
 // (per-model `supportedReasoningEfforts` + `defaultReasoningEffort`). We spin
 // a short-lived CopilotClient (spawns the bundled CLI child), list, and stop —
-// same spirit as discoverClaude's throwaway query(). Permissive: any failure
-// (no GitHub auth, CLI spawn error, timeout) → `[]` so COPILOT_BASELINE shows
-// through. `max` is filtered out even where advertised — the SDK's
+// same spirit as discoverClaude's throwaway query(). Any failure (no GitHub
+// auth, CLI spawn error, timeout) THROWS so the catalog records lastError and
+// keeps COPILOT_BASELINE, instead of a timeout masquerading as a clean empty
+// result. `max` is filtered out even where advertised — the SDK's
 // SessionConfig.reasoningEffort enum tops out at `xhigh`, so we never send it.
 export async function discoverCopilot(): Promise<DiscoveredModel[]> {
   const { CopilotClient } = await import('@github/copilot-sdk');
@@ -329,8 +336,11 @@ export async function discoverCopilot(): Promise<DiscoveredModel[]> {
         await client.start();
         return client.listModels();
       })(),
+      // 30s (not 15s): listModels() measured ~9.5s warm; a cold boot spawns the
+      // bundled CLI child + auth handshake while five other providers probe
+      // concurrently, so 15s was borderline.
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('copilot discovery timed out')), 15000),
+        setTimeout(() => reject(new Error('copilot discovery timed out')), 30000),
       ),
     ]);
     return models
@@ -356,8 +366,8 @@ export async function discoverCopilot(): Promise<DiscoveredModel[]> {
           ...(defaultEffort && defaultEffort !== 'max' ? { defaultEffort } : {}),
         };
       });
-  } catch {
-    return [];
+  } catch (err) {
+    throw err instanceof Error ? err : new Error(String(err));
   } finally {
     void client.stop().catch(() => {});
   }
