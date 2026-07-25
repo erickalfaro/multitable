@@ -55,7 +55,7 @@ let persistSeq = 0;
 
 // Periodic re-discovery cadence. Provider CLIs (esp. the system `claude`)
 // self-update; without this a long-running daemon never notices new models.
-const PERIODIC_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+const PERIODIC_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 
 interface CatalogOptions {
   getDaemonEnv: () => NodeJS.ProcessEnv;
@@ -197,26 +197,45 @@ export class ProviderCatalog extends EventEmitter {
     this.refreshTimer = null;
   }
 
-  private async runDiscovery(provider: Provider): Promise<void> {
-    const before = this.state.get(provider);
-    try {
-      let models: DiscoveredModel[];
-      if (provider === 'codex') {
-        models = await discoverCodex(this.opts.getDaemonEnv());
-      } else if (provider === 'hermes') {
-        models = await discoverHermes(this.opts.getDaemonEnv());
-      } else if (provider === 'grok') {
-        models = await discoverGrok(this.opts.getDaemonEnv());
-      } else if (provider === 'cursor') {
-        models = await discoverCursor(this.opts.getDaemonEnv());
-      } else if (provider === 'copilot') {
-        models = await discoverCopilot();
-      } else {
-        models = await discoverClaude(
+  private discoverProvider(provider: Provider): Promise<DiscoveredModel[]> {
+    switch (provider) {
+      case 'codex':
+        return discoverCodex(this.opts.getDaemonEnv());
+      case 'hermes':
+        return discoverHermes(this.opts.getDaemonEnv());
+      case 'grok':
+        return discoverGrok(this.opts.getDaemonEnv());
+      case 'cursor':
+        return discoverCursor(this.opts.getDaemonEnv());
+      case 'copilot':
+        return discoverCopilot();
+      default:
+        return discoverClaude(
           this.opts.discoveryCwd,
           this.opts.resolveClaudeExecutable,
           this.opts.resolveSystemClaudeExecutable,
         );
+    }
+  }
+
+  private async runDiscovery(provider: Provider): Promise<void> {
+    const before = this.state.get(provider);
+    try {
+      let models: DiscoveredModel[];
+      try {
+        models = await this.discoverProvider(provider);
+      } catch (firstErr) {
+        // One bounded retry. Boot fires all six probes at once (refreshAll), so
+        // a cold-start probe can lose a timeout race under contention; a single
+        // retry a moment later usually succeeds without a manual refresh.
+        // ponytail: one retry, not a backoff ladder — the timeouts already
+        // cover the normal cold path; this only catches the contended tail.
+        console.warn(
+          `[catalog] discovery for ${provider} failed, retrying once:`,
+          firstErr instanceof Error ? firstErr.message : String(firstErr),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        models = await this.discoverProvider(provider);
       }
       // If discovery returned no live data but we have a baseline (e.g. Hermes
       // until `hermes models --json` lands), keep the baseline so the picker
