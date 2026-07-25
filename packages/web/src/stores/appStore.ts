@@ -186,7 +186,12 @@ interface AppState {
   customThemes: Theme[];
   activeThemeId: string;
   commandPaletteOpen: boolean;
-  addAgentModalOpen: boolean;
+  // New-agent composer surface. When set, MainPane renders the inline picker
+  // (AgentComposer) for this project in place of the chat/homepage — one of the
+  // mutually-exclusive main-pane surfaces alongside git/file-viewer/overview.
+  // Selection (selectedProcessId) is left intact so Cancel returns to the prior
+  // chat. Replaces the former AddAgentModal overlay.
+  newAgentProjectId: string | null;
   addProcessModalOpen: boolean;
   addProjectModalOpen: boolean;
   globalSettingsOpen: boolean;
@@ -240,7 +245,7 @@ interface AppState {
   updateCustomTheme: (id: string, patch: { name?: string; colors?: Partial<ThemeColors>; isDark?: boolean }) => void;
   deleteCustomTheme: (id: string) => void;
   setCommandPaletteOpen: (open: boolean) => void;
-  setAddAgentModalOpen: (open: boolean) => void;
+  setNewAgentProject: (projectId: string | null) => void;
   setAddProcessModalOpen: (open: boolean) => void;
   setAddProjectModalOpen: (open: boolean) => void;
   setGlobalSettingsOpen: (open: boolean) => void;
@@ -939,7 +944,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     return DEFAULT_THEME_ID;
   })(),
   commandPaletteOpen: false,
-  addAgentModalOpen: false,
+  newAgentProjectId: null,
   addProcessModalOpen: false,
   addProjectModalOpen: false,
   globalSettingsOpen: false,
@@ -994,10 +999,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         prev && prev !== id && prev in s.sessions && !isSessionRetained({ ...s, selectedProcessId: id }, prev)
           ? evictionPatch(s, prev)
           : null;
-      if (id === null) return { ...evicted, selectedProcessId: null };
+      if (id === null) return { ...evicted, selectedProcessId: null, newAgentProjectId: null };
       const proc = s.sessions[id] || s.commands[id] || s.terminals[id];
       if (!proc)
-        return { ...evicted, selectedProcessId: id, selectedGitProjectId: null, selectedFileViewerProjectId: null };
+        return { ...evicted, selectedProcessId: id, selectedGitProjectId: null, selectedFileViewerProjectId: null, newAgentProjectId: null };
       return {
         ...evicted,
         selectedProcessId: id,
@@ -1008,6 +1013,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         sidebarProjectId: proc.projectId,
         selectedGitProjectId: null,
         selectedFileViewerProjectId: null,
+        // Selecting a session (incl. the one just created by the composer)
+        // dismisses the composer.
+        newAgentProjectId: null,
       };
     }),
   setSelectedGitProject: (projectId) =>
@@ -1018,6 +1026,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedProcessId: null,
         selectedFileViewerProjectId: null,
         projectOverviewOpen: false,
+        newAgentProjectId: null,
         focusedProjectId: projectId,
         sidebarProjectId: projectId,
       };
@@ -1030,6 +1039,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedProcessId: null,
         selectedGitProjectId: null,
         projectOverviewOpen: false,
+        newAgentProjectId: null,
         focusedProjectId: projectId,
         sidebarProjectId: projectId,
       };
@@ -1223,7 +1233,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { customThemes: next, activeThemeId: activeId };
     }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
-  setAddAgentModalOpen: (open) => set({ addAgentModalOpen: open }),
+  setNewAgentProject: (projectId) =>
+    set(() => {
+      if (projectId === null) return { newAgentProjectId: null };
+      // Opening the composer clears the other main-pane surfaces (mirrors
+      // setSelectedGitProject/setSelectedFileViewer). selectedProcessId is left
+      // as-is so Cancel returns to whatever chat was open; MainPane checks
+      // newAgentProjectId ahead of the session branch so the picker still wins.
+      return {
+        newAgentProjectId: projectId,
+        selectedGitProjectId: null,
+        selectedFileViewerProjectId: null,
+        projectOverviewOpen: false,
+        focusedProjectId: projectId,
+        sidebarProjectId: projectId,
+      };
+    }),
   setAddProcessModalOpen: (open) => set({ addProcessModalOpen: open }),
   setAddProjectModalOpen: (open) => set({ addProjectModalOpen: open }),
   setGlobalSettingsOpen: (open) => set({ globalSettingsOpen: open }),
@@ -1303,7 +1328,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setProjectOverviewOpen: (open) =>
     set(() =>
       open
-        ? { projectOverviewOpen: true, selectedGitProjectId: null, selectedFileViewerProjectId: null }
+        ? { projectOverviewOpen: true, selectedGitProjectId: null, selectedFileViewerProjectId: null, newAgentProjectId: null }
         : { projectOverviewOpen: false },
     ),
   setContextMenu: (menu) => set({ contextMenu: menu }),

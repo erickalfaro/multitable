@@ -4,6 +4,7 @@ import { useIsMobile } from '../../lib/useIsMobile';
 import { TerminalView } from './TerminalView';
 import { ProjectOverview } from './ProjectOverview';
 import { SessionChat } from './chat/SessionChat';
+import { AgentComposer } from './AgentComposer';
 import { GitMainView } from './git/GitMainView';
 import { FileViewerMainView } from './file-viewer/FileViewerMainView';
 import { SessionWall } from './wall/SessionWall';
@@ -18,6 +19,8 @@ export function MainPane() {
   const selectedFileViewerProjectId = useAppStore((s) => s.selectedFileViewerProjectId);
   const selectedGitProjectId = useAppStore((s) => s.selectedGitProjectId);
   const projectOverviewOpen = useAppStore((s) => s.projectOverviewOpen);
+  const newAgentProjectId = useAppStore((s) => s.newAgentProjectId);
+  const setNewAgentProject = useAppStore((s) => s.setNewAgentProject);
   const focusedProjectId = useAppStore((s) => s.focusedProjectId);
   const process = useAppStore((s) =>
     selectedProcessId
@@ -27,6 +30,21 @@ export function MainPane() {
       : undefined,
   );
   const isMobile = useIsMobile();
+
+  // New-agent composer takes the whole pane while active — the picker stands in
+  // for the chat during the new-agent phase. Checked first (and ahead of the
+  // session branch) because selectedProcessId is intentionally left intact so
+  // Cancel returns to the prior chat.
+  if (newAgentProjectId) {
+    return (
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <AgentComposer
+          projectId={newAgentProjectId}
+          onClose={() => setNewAgentProject(null)}
+        />
+      </div>
+    );
+  }
 
   if (selectedFileViewerProjectId) {
     return (

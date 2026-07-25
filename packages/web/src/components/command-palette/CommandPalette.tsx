@@ -31,7 +31,7 @@ export function CommandPalette() {
     toggleProjectExpanded,
     setFocusedProject,
     setProjectOverviewOpen,
-    setAddAgentModalOpen,
+    setNewAgentProject,
     setAddProcessModalOpen,
     setAddProjectModalOpen,
     setGlobalSettingsOpen,
@@ -162,7 +162,7 @@ export function CommandPalette() {
       category: 'Create',
       action: () => {
         if (!requireFocused()) return;
-        setAddAgentModalOpen(true);
+        if (focusedProjectId) setNewAgentProject(focusedProjectId);
       },
     });
     result.push({
@@ -227,7 +227,7 @@ export function CommandPalette() {
     toggleProjectExpanded,
     setFocusedProject,
     setProjectOverviewOpen,
-    setAddAgentModalOpen,
+    setNewAgentProject,
     setAddProcessModalOpen,
     setAddProjectModalOpen,
     setGlobalSettingsOpen,

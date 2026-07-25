@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { useAppStore } from '../../stores/appStore';
 import toast from 'react-hot-toast';
-import { Search, RefreshCw } from 'lucide-react';
-import { Modal, Button, Input, ProviderLogo, Spinner } from '../ui';
+import { Search, RefreshCw, X } from 'lucide-react';
+import { Button, Input, ProviderLogo, Spinner } from '../ui';
 import { useTranscripts, type TranscriptSession } from '../../hooks/useTranscripts';
 import { useCodexTranscripts } from '../../hooks/useCodexTranscripts';
 import { resumePastSession, resumePastCodexThread, selectPinnedSession } from '../../lib/pastAgents';
@@ -19,23 +19,24 @@ import { cleanModelLabel } from '../../lib/modelName';
 import { emphasisFill } from '../../lib/emphasis';
 import { useIsMobile } from '../../lib/useIsMobile';
 
-// Modal body geometry. The body is given a fixed total height so the dialog
-// frame never resizes after opening — every internal state transition (model
-// catalog fetch, past-agents fetch, provider swap) happens inside fixed-size
-// regions, so the user never sees the modal grow or shrink under them.
-// Presets well shows 2 rows of tiles (56px each + 6px gap = 118px); any
-// additional rows are reachable by scrolling within the well.
-const BODY_HEIGHT = 620;
+// Inline "new agent" composer — the picker that used to be the AddAgentModal
+// overlay, now rendered as a main-pane surface (MainPane branches on
+// `newAgentProjectId`). During the new-agent phase there's no chat to show, so
+// the picker takes the chat area's place. Presets/model/mode/worktree keep
+// their fixed section heights; the past-agents list flexes to fill whatever
+// vertical space remains and scrolls internally.
 const PRESETS_HEIGHT = 118;
 const MODEL_SECTION_HEIGHT = 120;
 // Mode picker sits between the model picker and past-sessions. Single row of
 // small chips + a label; only shown when the provider declares > 1 mode.
 const MODE_SECTION_HEIGHT = 58;
 // Worktree section mirrors the mode row: label + one toggle-chip/input row.
-// Only shown when the project is a git repo. Height is constant whether the
-// toggle is on or off (the input appears beside the chip, not below it).
+// Only shown when the project is a git repo.
 const WORKTREE_SECTION_HEIGHT = 58;
 const SECTION_GAP = 14;
+// The picker column is centered in the (potentially wide) main pane and capped
+// so it stays readable rather than stretching edge-to-edge on a large monitor.
+const COLUMN_MAX_WIDTH = 720;
 
 type AgentProviderOption = 'claude' | 'codex' | 'hermes' | 'grok' | 'cursor' | 'copilot' | undefined;
 
@@ -70,14 +71,14 @@ type ModelsState =
   | { status: 'ready'; models: DiscoveredModel[] }
   | { status: 'error'; message: string };
 
-export function AddAgentModal({ onClose, projectId }: Props) {
+export function AgentComposer({ onClose, projectId }: Props) {
   const store = useAppStore();
   const projectPath = useAppStore((s) => s.projects.find((p) => p.id === projectId)?.path);
+  const projectName = useAppStore((s) => s.projects.find((p) => p.id === projectId)?.name);
   // Read straight from the shared model catalog. Populated at app boot from
   // the daemon's `/api/providers/catalog` snapshot and kept fresh by the
-  // `providers:catalog-updated` WS broadcast — so opening this modal never
-  // triggers a fetch. The Refresh button is the only path that hits the
-  // network.
+  // `providers:catalog-updated` WS broadcast — so opening this never triggers a
+  // fetch. The Refresh button is the only path that hits the network.
   const claudeModels = useAppStore((s) => s.modelCatalog.claude);
   const codexModels = useAppStore((s) => s.modelCatalog.codex);
   const hermesModels = useAppStore((s) => s.modelCatalog.hermes);
@@ -114,9 +115,8 @@ export function AddAgentModal({ onClose, projectId }: Props) {
   } | null>(null);
 
   // Derived view-state for the model picker. `null` catalog → ready+empty
-  // (which the picker renders as a graceful empty-state); the boot seed
-  // virtually guarantees this is populated by the time the user opens this
-  // modal.
+  // (rendered as a graceful empty-state); the boot seed virtually guarantees
+  // this is populated by the time the user gets here.
   const modelsForProvider: DiscoveredModel[] | null =
     agentProvider === 'claude'
       ? claudeModels
@@ -193,8 +193,8 @@ export function AddAgentModal({ onClose, projectId }: Props) {
   }, [agentProvider, modelsForProvider, selectedPastSession]);
 
   // Fetch capabilities for the active provider (cached). Only fires when we
-  // haven't seen this provider in this modal session — provider capabilities
-  // don't change at runtime, so once-per-modal is plenty.
+  // haven't seen this provider yet — provider capabilities don't change at
+  // runtime, so once is plenty.
   useEffect(() => {
     if (!agentProvider) return;
     if (capsCache[agentProvider]) return;
@@ -205,7 +205,7 @@ export function AddAgentModal({ onClose, projectId }: Props) {
         if (cancelled) return;
         setCapsCache((prev) => ({ ...prev, [agentProvider]: res.capabilities }));
       } catch {
-        /* non-fatal — modal still works, mode picker just won't render */
+        /* non-fatal — the composer still works, mode picker just won't render */
       }
     })();
     return () => {
@@ -279,9 +279,10 @@ export function AddAgentModal({ onClose, projectId }: Props) {
           : {}),
       });
       store.upsertSession(session);
+      // Selecting the new session clears newAgentProjectId (see appStore) — the
+      // composer is replaced by the live chat.
       store.setSelectedProcess(session.id);
       toast.success('Agent added');
-      onClose();
     } catch (err) {
       // Surface the server's message — branch collisions (409) and git
       // failures carry the actionable detail in the error body.
@@ -293,6 +294,7 @@ export function AddAgentModal({ onClose, projectId }: Props) {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSubmit();
+    if (e.key === 'Escape') onClose();
   };
 
   const needsModel = !selectedPastSession && !!selectedPreset && !!selectedPreset.command;
@@ -313,133 +315,188 @@ export function AddAgentModal({ onClose, projectId }: Props) {
   const showModeSection =
     !selectedPastSession && !!activeCaps && activeCaps.modes.length > 1;
   const showWorktreeSection = !selectedPastSession && isRepo;
-  const pastSectionHeight =
-    BODY_HEIGHT -
-    PRESETS_HEIGHT -
-    (showModelSection ? MODEL_SECTION_HEIGHT + SECTION_GAP : 0) -
-    (showModeSection ? MODE_SECTION_HEIGHT + SECTION_GAP : 0) -
-    (showWorktreeSection ? WORKTREE_SECTION_HEIGHT + SECTION_GAP : 0);
 
   return (
-    <Modal
-      open
-      onClose={onClose}
-      width={620}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            onClick={handleSubmit}
-            disabled={submitDisabled}
-            loading={loading}
-          >
-            {startLabel}
-          </Button>
-        </>
-      }
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        backgroundColor: 'var(--bg-primary)',
+      }}
     >
-      {/* Fixed-height body. Internal sections are laid out top-down with
-          stable heights, so the modal frame never resizes during async work. */}
+      {/* Header bar — titles the surface and offers an explicit close (Esc /
+          Cancel also work). Mirrors the other main-pane surface headers. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 10,
+          padding: '14px 20px',
+          borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+          New agent
+        </span>
+        {projectName && (
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>· {projectName}</span>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          title="Cancel (Esc)"
+          aria-label="Cancel"
+          style={{
+            marginLeft: 'auto',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 26,
+            height: 26,
+            borderRadius: 'var(--radius-snug)',
+            border: '1px solid var(--border)',
+            background: 'transparent',
+            color: 'var(--text-muted)',
+            cursor: 'pointer',
+          }}
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      {/* Body — centered, width-capped picker column. Fills remaining height so
+          the past-agents list flexes rather than the whole surface scrolling. */}
       <div
         onKeyDown={handleKeyDown}
         style={{
-          height: BODY_HEIGHT,
+          flex: 1,
+          minHeight: 0,
           display: 'flex',
-          flexDirection: 'column',
-          gap: SECTION_GAP,
+          justifyContent: 'center',
+          padding: '20px 24px',
         }}
       >
-        <AgentPresetsRow
-          agents={AGENTS}
-          selectedAgent={selectedAgent}
-          desaturated={!!selectedPastSession}
-          onPick={handlePresetClick}
-          height={PRESETS_HEIGHT}
-        />
-
-        {showModelSection && (
-          <div style={{ height: MODEL_SECTION_HEIGHT, flexShrink: 0 }}>
-            <ModelPicker
-              provider={agentProvider!}
-              state={modelsState}
-              selected={selectedModel}
-              onSelect={setSelectedModel}
-              onRefresh={async () => {
-                const provider = agentProvider!;
-                refreshError.current = null;
-                setRefreshingProvider(provider);
-                try {
-                  await api.providers.refresh(provider);
-                  // The daemon broadcasts the fresh catalog via the
-                  // `providers:catalog-updated` WS event, which the App-
-                  // level handler funnels into `setModelCatalog`. As a
-                  // safety net (e.g. flaky WS) we also fetch synchronously.
-                  const res = await api.providers.models(provider);
-                  const refreshed = (res.models ?? []) as DiscoveredModel[];
-                  store.setModelCatalog(provider, refreshed);
-                  toast.success(`${provider} catalog refreshed`, { duration: 1500 });
-                } catch (err) {
-                  const message = err instanceof Error ? err.message : String(err);
-                  refreshError.current = { provider, message };
-                  forceRender((n) => n + 1);
-                  toast.error(`Refresh failed: ${message}`);
-                } finally {
-                  setRefreshingProvider(undefined);
-                }
-              }}
-            />
-          </div>
-        )}
-
-        {showModeSection && activeCaps && (
-          <div style={{ height: MODE_SECTION_HEIGHT, flexShrink: 0 }}>
-            <ModePicker
-              modes={activeCaps.modes}
-              scope={activeCaps.modeSwitchScope}
-              selected={selectedMode}
-              onSelect={setSelectedMode}
-            />
-          </div>
-        )}
-
-        {showWorktreeSection && (
-          <div style={{ height: WORKTREE_SECTION_HEIGHT, flexShrink: 0 }}>
-            <WorktreePicker
-              enabled={worktreeEnabled}
-              branch={worktreeBranch}
-              onToggle={handleWorktreeToggle}
-              onBranchChange={setWorktreeBranch}
-            />
-          </div>
-        )}
-
-        {projectPath && (
-          <PastSessionsMerged
-            heightPx={pastSectionHeight}
-            claudeSessions={pastGroup?.sessions ?? []}
-            codexSessions={codexGroup?.sessions ?? []}
-            claudeLoading={pastLoading}
-            codexLoading={codexLoading}
-            error={pastError ?? codexError}
-            selectedKey={
-              selectedPastSession
-                ? `${selectedPastSession.provider}:${selectedPastSession.sessionId}`
-                : null
-            }
-            onPickRow={handlePickPastRow}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onPullAllClaude={() => {
-              if (pastGroup) loadMoreForCwd(pastGroup.cwd, pastGroup.totalCount);
-            }}
-            claudeHasMoreOnServer={
-              !!pastGroup && pastGroup.totalCount > pastGroup.sessions.length
-            }
+        <div
+          style={{
+            width: '100%',
+            maxWidth: COLUMN_MAX_WIDTH,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: SECTION_GAP,
+          }}
+        >
+          <AgentPresetsRow
+            agents={AGENTS}
+            selectedAgent={selectedAgent}
+            desaturated={!!selectedPastSession}
+            onPick={handlePresetClick}
+            height={PRESETS_HEIGHT}
           />
-        )}
+
+          {showModelSection && (
+            <div style={{ height: MODEL_SECTION_HEIGHT, flexShrink: 0 }}>
+              <ModelPicker
+                provider={agentProvider!}
+                state={modelsState}
+                selected={selectedModel}
+                onSelect={setSelectedModel}
+                onRefresh={async () => {
+                  const provider = agentProvider!;
+                  refreshError.current = null;
+                  setRefreshingProvider(provider);
+                  try {
+                    await api.providers.refresh(provider);
+                    // The daemon broadcasts the fresh catalog via the
+                    // `providers:catalog-updated` WS event, which the App-
+                    // level handler funnels into `setModelCatalog`. As a
+                    // safety net (e.g. flaky WS) we also fetch synchronously.
+                    const res = await api.providers.models(provider);
+                    const refreshed = (res.models ?? []) as DiscoveredModel[];
+                    store.setModelCatalog(provider, refreshed);
+                    toast.success(`${provider} catalog refreshed`, { duration: 1500 });
+                  } catch (err) {
+                    const message = err instanceof Error ? err.message : String(err);
+                    refreshError.current = { provider, message };
+                    forceRender((n) => n + 1);
+                    toast.error(`Refresh failed: ${message}`);
+                  } finally {
+                    setRefreshingProvider(undefined);
+                  }
+                }}
+              />
+            </div>
+          )}
+
+          {showModeSection && activeCaps && (
+            <div style={{ height: MODE_SECTION_HEIGHT, flexShrink: 0 }}>
+              <ModePicker
+                modes={activeCaps.modes}
+                scope={activeCaps.modeSwitchScope}
+                selected={selectedMode}
+                onSelect={setSelectedMode}
+              />
+            </div>
+          )}
+
+          {showWorktreeSection && (
+            <div style={{ height: WORKTREE_SECTION_HEIGHT, flexShrink: 0 }}>
+              <WorktreePicker
+                enabled={worktreeEnabled}
+                branch={worktreeBranch}
+                onToggle={handleWorktreeToggle}
+                onBranchChange={setWorktreeBranch}
+              />
+            </div>
+          )}
+
+          {projectPath && (
+            <PastSessionsMerged
+              claudeSessions={pastGroup?.sessions ?? []}
+              codexSessions={codexGroup?.sessions ?? []}
+              claudeLoading={pastLoading}
+              codexLoading={codexLoading}
+              error={pastError ?? codexError}
+              selectedKey={
+                selectedPastSession
+                  ? `${selectedPastSession.provider}:${selectedPastSession.sessionId}`
+                  : null
+              }
+              onPickRow={handlePickPastRow}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              onPullAllClaude={() => {
+                if (pastGroup) loadMoreForCwd(pastGroup.cwd, pastGroup.totalCount);
+              }}
+              claudeHasMoreOnServer={
+                !!pastGroup && pastGroup.totalCount > pastGroup.sessions.length
+              }
+            />
+          )}
+        </div>
       </div>
-    </Modal>
+
+      {/* Footer action bar */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: 8,
+          padding: '12px 20px',
+          borderTop: '1px solid var(--border)',
+          flexShrink: 0,
+        }}
+      >
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={handleSubmit} disabled={submitDisabled} loading={loading}>
+          {startLabel}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -460,7 +517,7 @@ function AgentPresetsRow({
   onPick,
   height,
 }: AgentPresetsRowProps) {
-  // 4 columns is ~75px per tile inside a full-width phone modal — unreadable.
+  // 4 columns is ~75px per tile on a phone-width pane — unreadable.
   const isMobile = useIsMobile();
   return (
     <div
@@ -781,7 +838,6 @@ interface MergedRow extends TranscriptSession {
 }
 
 interface MergedProps {
-  heightPx: number;
   claudeSessions: TranscriptSession[];
   codexSessions: TranscriptSession[];
   claudeLoading: boolean;
@@ -796,7 +852,6 @@ interface MergedProps {
 }
 
 function PastSessionsMerged({
-  heightPx,
   claudeSessions,
   codexSessions,
   claudeLoading,
@@ -839,13 +894,12 @@ function PastSessionsMerged({
   return (
     <div
       style={{
-        height: heightPx,
+        flex: 1,
+        minHeight: 0,
         paddingTop: 10,
         borderTop: '1px solid var(--border)',
         display: 'flex',
         flexDirection: 'column',
-        minHeight: 0,
-        flexShrink: 0,
       }}
     >
       <div
