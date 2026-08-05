@@ -7,8 +7,13 @@ import { GitConfirmDialog } from './GitConfirmDialog';
 
 interface Props {
   projectId: string;
-  /** Bumped by GitPanel on every status change so the list stays fresh. */
-  refreshKey: number;
+  /**
+   * `head|branch` from GitPanel. Worktree membership only changes on commits,
+   * branch flips, and this component's own add/remove actions — reloading on
+   * every working-tree status tick ran `git worktree list` plus one
+   * `git status` per worktree each time an agent touched a file.
+   */
+  headKey: string;
   onError: (message: string) => void;
 }
 
@@ -19,7 +24,7 @@ interface Props {
 // a confirm that names the agent. Orphans remove directly: one click when
 // clean, a discard confirm when dirty. Either way nothing "floating" on disk
 // is invisible or unkillable.
-export function GitWorktreeList({ projectId, refreshKey, onError }: Props) {
+export function GitWorktreeList({ projectId, headKey, onError }: Props) {
   const upsertSession = useAppStore((s) => s.upsertSession);
   const [worktrees, setWorktrees] = useState<GitWorktree[] | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<GitWorktree | null>(null);
@@ -34,7 +39,7 @@ export function GitWorktreeList({ projectId, refreshKey, onError }: Props) {
 
   useEffect(() => {
     load();
-  }, [load, refreshKey]);
+  }, [load, headKey]);
 
   const remove = async (wt: GitWorktree, force: boolean) => {
     setRemoving(wt.path);

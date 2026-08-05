@@ -1,14 +1,10 @@
 /**
- * Left project rail — rebuilt from first principles.
+ * Left project rail — a fixed 60px column of project marks.
  *
- * Structure:
- *   OUTER shell: clips to 60px idle, expands to 188px on hover (750ms dwell)
- *   INNER track: always 188px wide
- *   Each row: [ 60px mark column | label column ]
- *
- * Collapsed, overflow clips the label column — only the mark column is
- * visible, and marks are flex-centered in that 60px. Expand reveals labels
- * without moving the marks.
+ * The rail never widens. Hovering a row for 1.5s (or keyboard-focusing it)
+ * shows a floating accent-tinted tooltip to the right of the row with the
+ * project name + path (session rows: name + live snippet) — see RailTooltip.
+ * One tooltip instance per rail, shared via RailTooltipContext.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -35,11 +31,15 @@ import { ContextMenu } from '../context-menu/ContextMenu';
 import { LogoArt } from './LogoArt';
 import { CATEGORY_COLOR_VAR, CATEGORY_ICON } from '../../lib/alertVisuals';
 import { ProjectGlyphIcon } from './ProjectGlyphIcon';
-import { RAIL_COLLAPSED, RAIL_EXPANDED, RAIL_MARK_COL } from '../../lib/railGeometry';
+import { RAIL_COLLAPSED, RAIL_MARK_COL } from '../../lib/railGeometry';
+import {
+  RailTooltipContext,
+  RailTipTitle,
+  RailTipSub,
+  useRailTooltip,
+  useRailTooltipController,
+} from './RailTooltip';
 
-
-const EXPAND_DELAY_MS = 750;
-const COLLAPSE_DELAY_MS = 140;
 const ROW_H = 38;
 
 function projectInitials(name: string): string {
@@ -195,15 +195,20 @@ function ProjectMark({
   );
 }
 
-/** Full-width (188px) row shell shared by home / add / project / session. */
+/**
+ * Row shell shared by home / add / project rows. Fills the 60px gutter; the
+ * mouse/focus handlers receive the event so callers can anchor the tooltip
+ * on `e.currentTarget`. No native `title` — the RailTooltip replaces it.
+ */
 function RailRow({
   children,
   height = ROW_H,
   onClick,
   onMouseEnter,
   onMouseLeave,
+  onFocus,
+  onBlur,
   onContextMenu,
-  title,
   ariaLabel,
   ariaCurrent,
   background,
@@ -214,10 +219,11 @@ function RailRow({
   children: React.ReactNode;
   height?: number;
   onClick?: () => void;
-  onMouseEnter?: () => void;
+  onMouseEnter?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onMouseLeave?: () => void;
+  onFocus?: (e: React.FocusEvent<HTMLButtonElement>) => void;
+  onBlur?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
-  title?: string;
   ariaLabel?: string;
   ariaCurrent?: boolean | 'true' | 'false' | 'page' | 'step' | 'location' | 'date' | 'time';
   background?: string;
@@ -232,16 +238,16 @@ function RailRow({
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      onFocus={onFocus}
+      onBlur={onBlur}
       onContextMenu={onContextMenu}
-      title={title}
       aria-label={ariaLabel}
       aria-current={ariaCurrent}
       style={{
         display: 'flex',
         flexDirection: 'row',
         alignItems: 'center',
-        width: RAIL_EXPANDED,
-        minWidth: RAIL_EXPANDED,
+        width: '100%',
         height,
         padding: 0,
         margin: 0,
@@ -262,35 +268,6 @@ function RailRow({
     >
       {children}
     </button>
-  );
-}
-
-function LabelCell({
-  children,
-  style,
-}: {
-  children: React.ReactNode;
-  style?: React.CSSProperties;
-}) {
-  return (
-    <span
-      style={{
-        flex: 1,
-        minWidth: 0,
-        height: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        paddingLeft: 10,
-        paddingRight: 10,
-        overflow: 'hidden',
-        whiteSpace: 'nowrap',
-        textOverflow: 'ellipsis',
-        fontSize: 12.5,
-        ...style,
-      }}
-    >
-      {children}
-    </span>
   );
 }
 
@@ -324,21 +301,15 @@ function RailDivider({
   dropBefore,
   dropColor,
   entryProps,
-  onMenuOpenChange,
 }: {
   id: string;
   dragging: boolean;
   dropBefore: boolean;
   dropColor: string;
   entryProps?: EntryDragProps;
-  onMenuOpenChange?: (open: boolean) => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [hover, setHover] = useState(false);
-
-  useEffect(() => {
-    onMenuOpenChange?.(menu !== null);
-  }, [menu, onMenuOpenChange]);
 
   return (
     <div
@@ -353,7 +324,7 @@ function RailDivider({
       style={{
         position: 'relative',
         flexShrink: 0,
-        width: RAIL_EXPANDED,
+        width: '100%',
         padding: '6px 0',
         cursor: entryProps ? 'grab' : 'default',
         opacity: dragging ? 0.4 : 1,
@@ -394,16 +365,12 @@ function ProjectRailItem({
   dropBefore,
   dropColor,
   entryProps,
-  onMenuOpenChange,
-  onNavigate,
 }: {
   project: Project;
   dragging: boolean;
   dropBefore: boolean;
   dropColor: string;
   entryProps?: EntryDragProps;
-  onMenuOpenChange?: (open: boolean) => void;
-  onNavigate?: () => void;
 }) {
   const color = useProjectColor(project.id);
   const dark = useIsDark();
@@ -424,17 +391,7 @@ function ProjectRailItem({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null);
   const [glyphPicker, setGlyphPicker] = useState<{ x: number; y: number } | null>(null);
-  // Session preview menus also pin the rail sheet open.
-  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
-
-  useEffect(() => {
-    onMenuOpenChange?.(
-      menu !== null ||
-        colorPicker !== null ||
-        glyphPicker !== null ||
-        sessionMenuOpen,
-    );
-  }, [menu, colorPicker, glyphPicker, sessionMenuOpen, onMenuOpenChange]);
+  const tip = useRailTooltip();
 
   const select = () => {
     const store = useAppStore.getState();
@@ -442,10 +399,16 @@ function ProjectRailItem({
     store.setFocusedProject(project.id);
   };
 
-  const hue = color.dot;
+  const tipContent = (
+    <>
+      <RailTipTitle>{project.name}</RailTipTitle>
+      <RailTipSub>{project.path}</RailTipSub>
+    </>
+  );
+
   // Projects never use open-right dock chrome — only the circular emblem.
   // Open-right + panel left-gap are session-only (see RailSessionPreview).
-  const markLit = active || ownsSelection;
+  const hue = color.dot;
 
   return (
     <div
@@ -458,7 +421,7 @@ function ProjectRailItem({
         flexDirection: 'column',
         // Sessions nest under the emblem with a little breathing room
         gap: 2,
-        width: RAIL_EXPANDED,
+        width: '100%',
         opacity: dragging ? 0.4 : 1,
         touchAction: entryProps ? 'none' : undefined,
         // Separate project clusters from each other
@@ -470,13 +433,20 @@ function ProjectRailItem({
         className="mt-rail-pill mt-rail-project"
         height={44}
         onClick={select}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
+        onMouseEnter={(e) => {
+          setHover(true);
+          tip?.show(e.currentTarget, tipContent, hue);
+        }}
+        onMouseLeave={() => {
+          setHover(false);
+          tip?.hide();
+        }}
+        onFocus={(e) => tip?.showNow(e.currentTarget, tipContent, hue)}
+        onBlur={() => tip?.hide()}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
-        title={`${project.name}\n${project.path}`}
         ariaLabel={project.name}
         ariaCurrent={active}
         opacity={1}
@@ -500,20 +470,6 @@ function ProjectRailItem({
             projectInitials(project.name)
           )}
         </ProjectMark>
-        <LabelCell
-          style={{
-            fontWeight: active ? 650 : 500,
-            fontSize: 13,
-            letterSpacing: '0.01em',
-            color: active
-              ? 'var(--text-primary)'
-              : ownsSelection
-                ? 'var(--text-secondary)'
-                : 'var(--text-muted)',
-          }}
-        >
-          {project.name}
-        </LabelCell>
         {total > 0 && (() => {
           const onlyUnread = permissionCount === 0 && unreadAttention > 0;
           const tint =
@@ -556,14 +512,9 @@ function ProjectRailItem({
       </RailRow>
 
       {previewIds.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, width: RAIL_EXPANDED }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%' }}>
           {previewIds.map((sessionId) => (
-            <RailSessionPreview
-              key={sessionId}
-              sessionId={sessionId}
-              onNavigate={onNavigate}
-              onMenuOpenChange={setSessionMenuOpen}
-            />
+            <RailSessionPreview key={sessionId} sessionId={sessionId} />
           ))}
         </div>
       )}
@@ -617,11 +568,9 @@ function ProjectRailItem({
 }
 
 export function ProjectRail({
-  alwaysExpanded = false,
   compact = false,
   sectionsHidden = false,
 }: {
-  alwaysExpanded?: boolean;
   compact?: boolean;
   /** @deprecated */
   sectionsHidden?: boolean;
@@ -636,20 +585,12 @@ export function ProjectRail({
   const dark = useIsDark();
   const [homeHover, setHomeHover] = useState(false);
   const [addHover, setAddHover] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [menuPinned, setMenuPinned] = useState(false);
-  const enterTimer = useRef<number | undefined>(undefined);
-  const leaveTimer = useRef<number | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
 
-  useEffect(
-    () => () => {
-      window.clearTimeout(enterTimer.current);
-      window.clearTimeout(leaveTimer.current);
-    },
-    [],
-  );
+  // Tooltips are desktop-rail only — the mobile drawer (compact) shows the
+  // full sections column right next to the rail, so labels are redundant.
+  const { controller: tip, tooltip } = useRailTooltipController(compact);
 
   const railEntries = useMemo(() => orderRailEntries(projects, projectNav), [projects, projectNav]);
 
@@ -660,7 +601,10 @@ export function ProjectRail({
     onCommit: setProjectNavEntries,
   });
 
-  const open = !compact && (alwaysExpanded || expanded || menuPinned || dragging);
+  // Reordering owns the pointer — drop any pending/visible tooltip.
+  useEffect(() => {
+    if (dragging) tip?.cancel();
+  }, [dragging, tip]);
 
   // Panel left-gap + open-right dock are SESSION-only. Clicking a project
   // emblem must NOT open the frame — only a selected session does.
@@ -721,23 +665,8 @@ export function ProjectRail({
       ro.disconnect();
       setSeam(null);
     };
-  }, [sidebarProjectId, selectedProcessId, railEntries, open, compact]);
+  }, [sidebarProjectId, selectedProcessId, railEntries, compact]);
   void sectionsHidden;
-
-  const onEnter = () => {
-    window.clearTimeout(leaveTimer.current);
-    enterTimer.current = window.setTimeout(() => setExpanded(true), EXPAND_DELAY_MS);
-  };
-  const onLeave = () => {
-    if (dragging) return;
-    window.clearTimeout(enterTimer.current);
-    leaveTimer.current = window.setTimeout(() => setExpanded(false), COLLAPSE_DELAY_MS);
-  };
-  const collapseNow = () => {
-    window.clearTimeout(enterTimer.current);
-    window.clearTimeout(leaveTimer.current);
-    setExpanded(false);
-  };
 
   const dragEntry = dragEntryId ? railEntries.find((e) => e.id === dragEntryId) : undefined;
   const dropColor =
@@ -755,12 +684,11 @@ export function ProjectRail({
     store.setSidebarProject(null);
   };
 
-  /** Inner track — always full expanded width. Outer shell clips it. */
+  /** Inner track — fills the fixed-width gutter. */
   const track = (
     <div
       style={{
-        width: RAIL_EXPANDED,
-        minWidth: RAIL_EXPANDED,
+        width: '100%',
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
@@ -772,9 +700,16 @@ export function ProjectRail({
       <RailRow
         height={40}
         onClick={goToDashboard}
-        onMouseEnter={() => setHomeHover(true)}
-        onMouseLeave={() => setHomeHover(false)}
-        title="View all projects"
+        onMouseEnter={(e) => {
+          setHomeHover(true);
+          tip?.show(e.currentTarget, <RailTipTitle>All projects</RailTipTitle>);
+        }}
+        onMouseLeave={() => {
+          setHomeHover(false);
+          tip?.hide();
+        }}
+        onFocus={(e) => tip?.showNow(e.currentTarget, <RailTipTitle>All projects</RailTipTitle>)}
+        onBlur={() => tip?.hide()}
         ariaLabel="Home — view all projects"
         ariaCurrent={onDashboard}
         background={
@@ -789,22 +724,21 @@ export function ProjectRail({
             <LogoArt />
           </span>
         </MarkCell>
-        <LabelCell
-          style={{
-            fontWeight: onDashboard ? 600 : 500,
-            color: onDashboard ? 'var(--text-primary)' : 'var(--text-secondary)',
-          }}
-        >
-          All projects
-        </LabelCell>
       </RailRow>
 
       <RailRow
         height={36}
         onClick={() => setAddProjectModalOpen(true)}
-        onMouseEnter={() => setAddHover(true)}
-        onMouseLeave={() => setAddHover(false)}
-        title="Add a new project"
+        onMouseEnter={(e) => {
+          setAddHover(true);
+          tip?.show(e.currentTarget, <RailTipTitle>Add project</RailTipTitle>);
+        }}
+        onMouseLeave={() => {
+          setAddHover(false);
+          tip?.hide();
+        }}
+        onFocus={(e) => tip?.showNow(e.currentTarget, <RailTipTitle>Add project</RailTipTitle>)}
+        onBlur={() => tip?.hide()}
         ariaLabel="Add a new project"
         background={
           addHover ? 'color-mix(in oklch, var(--text-primary) 5%, transparent)' : 'transparent'
@@ -815,7 +749,6 @@ export function ProjectRail({
         <MarkCell>
           <Plus size={14} />
         </MarkCell>
-        <LabelCell style={{ fontWeight: 500 }}>Add project</LabelCell>
       </RailRow>
 
       <div style={{ height: 4, flexShrink: 0 }} />
@@ -842,7 +775,6 @@ export function ProjectRail({
               dropBefore={dropIndex === i && dragging}
               dropColor={dropColor}
               entryProps={compact ? undefined : getEntryProps(entry.id)}
-              onMenuOpenChange={setMenuPinned}
             />
           ) : (
             <ProjectRailItem
@@ -852,8 +784,6 @@ export function ProjectRail({
               dropBefore={dropIndex === i && dragging}
               dropColor={dropColor}
               entryProps={compact ? undefined : getEntryProps(entry.id)}
-              onMenuOpenChange={setMenuPinned}
-              onNavigate={collapseNow}
             />
           ),
         )}
@@ -873,65 +803,27 @@ export function ProjectRail({
     </div>
   );
 
-  // Mobile / always-expanded: no clip animation
-  if (alwaysExpanded || compact) {
-    const w = compact ? RAIL_COLLAPSED : RAIL_EXPANDED;
-    return (
+  // One shape everywhere: a fixed 60px gutter. Row labels live in the
+  // floating RailTooltip (portal — rendered as a sibling so the gutter's
+  // overflow clipping can't touch it).
+  return (
+    <RailTooltipContext.Provider value={tip}>
       <div
         ref={slotRef}
         className="mt-rail-gutter"
         style={{
-          width: w,
-          flex: `0 0 ${w}px`,
+          width: RAIL_COLLAPSED,
+          flex: `0 0 ${RAIL_COLLAPSED}px`,
           height: '100%',
+          position: 'relative',
+          zIndex: 5,
           overflow: 'hidden',
           background: 'transparent',
         }}
       >
         {track}
       </div>
-    );
-  }
-
-  // Desktop: outer shell clips inner track
-  return (
-    <div
-      ref={slotRef}
-      className="mt-rail-gutter"
-      style={{
-        width: RAIL_COLLAPSED,
-        flex: `0 0 ${RAIL_COLLAPSED}px`,
-        height: '100%',
-        position: 'relative',
-        zIndex: 5,
-        background: 'transparent',
-      }}
-    >
-      <div
-        onMouseEnter={onEnter}
-        onMouseLeave={onLeave}
-        onFocusCapture={() => {
-          window.clearTimeout(leaveTimer.current);
-          setExpanded(true);
-        }}
-        onBlurCapture={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node)) onLeave();
-        }}
-        className={open ? 'mt-rail-sheet' : undefined}
-        style={{
-          position: 'absolute',
-          top: 0,
-          bottom: 0,
-          left: 0,
-          width: open ? RAIL_EXPANDED : RAIL_COLLAPSED,
-          overflow: 'hidden',
-          background: open ? undefined : 'transparent',
-          transition:
-            'width var(--dur-med) var(--ease-out), background var(--dur-med) var(--ease-out), box-shadow var(--dur-med) var(--ease-out)',
-        }}
-      >
-        {track}
-      </div>
-    </div>
+      {tooltip}
+    </RailTooltipContext.Provider>
   );
 }

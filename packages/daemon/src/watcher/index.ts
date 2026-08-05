@@ -1,13 +1,20 @@
 import chokidar from 'chokidar';
 import fs from 'fs';
 import path from 'path';
-import { watchBackendOptions } from '../watch-options.js';
+import {
+  watchBackendOptions,
+  pollingBackendOptions,
+  canFallBackToPolling,
+  notePollingFallback,
+  isWatchResourceError,
+} from '../watch-options.js';
 
 type FSWatcher = ReturnType<typeof chokidar.watch>;
 
 interface WatchEntry {
   watcher: FSWatcher;
   timer: NodeJS.Timeout | null;
+  fallingBack?: boolean;
 }
 
 const DEBOUNCE_MS = 500;
@@ -56,7 +63,8 @@ export class FileWatcher {
     processId: string,
     patterns: string[],
     cwd: string,
-    onChanged: () => void
+    onChanged: () => void,
+    opts: { forcePolling?: boolean } = {}
   ): void {
     // Stop existing watcher for this process
     this.unwatchProcess(processId);
@@ -68,7 +76,7 @@ export class FileWatcher {
     );
 
     const watcher = chokidar.watch(globPatterns, {
-      ...watchBackendOptions(),
+      ...(opts.forcePolling ? pollingBackendOptions() : watchBackendOptions()),
       persistent: false,
       ignoreInitial: true,
       cwd,
@@ -90,6 +98,21 @@ export class FileWatcher {
     watcher.on('add', debounced);
     watcher.on('unlink', debounced);
     watcher.on('error', (err) => {
+      // OS watch budget exhausted: recreate this watch on the polling backend
+      // (once) and flip the process-wide sticky fallback for future attaches.
+      if (isWatchResourceError(err)) {
+        if (!opts.forcePolling && canFallBackToPolling() && !entry.fallingBack) {
+          entry.fallingBack = true;
+          notePollingFallback(cwd);
+          this.watchPatterns(processId, patterns, cwd, onChanged, { forcePolling: true });
+          return;
+        }
+        console.warn(
+          `[watcher] filesystem watch limit reached for process ${processId}; ` +
+            'some files will not be watched.'
+        );
+        return;
+      }
       console.error(`[watcher] pattern watcher error (${processId}):`, err);
     });
 

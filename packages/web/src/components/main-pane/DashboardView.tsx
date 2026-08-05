@@ -172,12 +172,17 @@ function ProjectCard({ project, procs, onOpen, onSelectProcess }: ProjectCardPro
    ───────────────────────────────────────────────────────────── */
 
 export function DashboardView() {
-  const store = useAppStore();
-  const { projects, sessions, commands, terminals, expandProject, setProjectOverviewOpen } = store;
+  const projects = useAppStore((s) => s.projects);
+  const sessions = useAppStore((s) => s.sessions);
+  const commands = useAppStore((s) => s.commands);
+  const terminals = useAppStore((s) => s.terminals);
+  const expandProject = useAppStore((s) => s.expandProject);
+  const setProjectOverviewOpen = useAppStore((s) => s.setProjectOverviewOpen);
 
   const selectProcess = (proc: ManagedProcess) => {
-    store.setProjectOverviewOpen(false);
-    store.setSelectedProcess(proc.id);
+    const st = useAppStore.getState();
+    st.setProjectOverviewOpen(false);
+    st.setSelectedProcess(proc.id);
     if ((proc.type === 'command' || proc.type === 'terminal') && proc.state === 'stopped') {
       api.processes.start(proc.id).catch(() => toast.error('Failed to start'));
     }

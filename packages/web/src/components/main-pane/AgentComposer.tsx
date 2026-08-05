@@ -71,7 +71,6 @@ type ModelsState =
   | { status: 'error'; message: string };
 
 export function AgentComposer({ onClose, projectId }: Props) {
-  const store = useAppStore();
   const projectPath = useAppStore((s) => s.projects.find((p) => p.id === projectId)?.path);
   const projectName = useAppStore((s) => s.projects.find((p) => p.id === projectId)?.name);
   // Read straight from the shared model catalog. Populated at app boot from
@@ -277,10 +276,11 @@ export function AgentComposer({ onClose, projectId }: Props) {
           ? { worktree: { branch: worktreeBranch.trim() } }
           : {}),
       });
-      store.upsertSession(session);
+      const st = useAppStore.getState();
+      st.upsertSession(session);
       // Selecting the new session clears newAgentProjectId (see appStore) — the
       // composer is replaced by the live chat.
-      store.setSelectedProcess(session.id);
+      st.setSelectedProcess(session.id);
       toast.success('Agent added');
     } catch (err) {
       // Surface the server's message — branch collisions (409) and git
@@ -417,7 +417,7 @@ export function AgentComposer({ onClose, projectId }: Props) {
                     // safety net (e.g. flaky WS) we also fetch synchronously.
                     const res = await api.providers.models(provider);
                     const refreshed = (res.models ?? []) as DiscoveredModel[];
-                    store.setModelCatalog(provider, refreshed);
+                    useAppStore.getState().setModelCatalog(provider, refreshed);
                     toast.success(`${provider} catalog refreshed`, { duration: 1500 });
                   } catch (err) {
                     const message = err instanceof Error ? err.message : String(err);

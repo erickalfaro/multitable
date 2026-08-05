@@ -175,9 +175,10 @@ export const api = {
         }>
       >(`/api/projects/${id}/files${suffix ? `?${suffix}` : ''}`);
     },
-    // Paginated, memory-bounded directory read for the File Viewer tree. Passing
-    // `limit` switches the daemon to the envelope response (vs the legacy array
-    // returned by `files()` above, still used by the @-mention index).
+    // Paginated, memory-bounded directory read for the File Viewer tree and the
+    // @-mention index. Passing `limit` switches the daemon to the envelope
+    // response (vs the legacy array returned by `files()` above, kept for
+    // compatibility only).
     filesPage: (
       id: string,
       opts: { path?: string; all?: boolean; limit: number; offset: number },

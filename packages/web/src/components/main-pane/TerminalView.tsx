@@ -23,7 +23,9 @@ export function TerminalView({ processId, process }: Props) {
   const attachKind =
     process?.type === 'session' ? 'session' : process?.type === 'terminal' ? 'terminal' : null;
   const containerRef = useTerminal(processId, !!terminalDisabled, { attachKind });
-  const { detailPanelOpen, setDetailPanelOpen, setMobileDrawerOpen } = useAppStore();
+  const detailPanelOpen = useAppStore((s) => s.detailPanelOpen);
+  const setDetailPanelOpen = useAppStore((s) => s.setDetailPanelOpen);
+  const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
   const isMobile = useIsMobile();
   const projectName = useAppStore(
     (s) => session ? s.projects.find((p) => p.id === session.projectId)?.name : undefined,

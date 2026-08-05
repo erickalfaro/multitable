@@ -552,10 +552,25 @@ function isDuplicateMessage(a: Message, b: Message): boolean {
   return fa === fb;
 }
 
+// WS/REST overlap duplicates only ever land near the tail (a replayed frame,
+// a reconnect re-delivery) — scanning the entire transcript per incoming
+// message was O(existing × incoming) and ran on every tool-event of a
+// retained session. Bound the scan to the recent tail; mergeMessages' full
+// dedupById pass remains the self-heal for anything older.
+const DEDUP_SCAN_TAIL = 200;
+
 function appendDeduped(existing: Message[], incoming: Message[]): Message[] {
   const out = [...existing];
   for (const msg of incoming) {
-    if (out.some((seen) => isDuplicateMessage(seen, msg))) continue;
+    const from = Math.max(0, out.length - DEDUP_SCAN_TAIL);
+    let dup = false;
+    for (let i = out.length - 1; i >= from; i--) {
+      if (isDuplicateMessage(out[i], msg)) {
+        dup = true;
+        break;
+      }
+    }
+    if (dup) continue;
     out.push(msg);
   }
   return out;
@@ -658,7 +673,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       // reordered) get explicit positions before the splice.
       const entries = materializeNavEntries(s.projects, s.projectNav);
       const idx = entries.findIndex((e) => e.kind === 'project' && e.id === projectId);
-      if (idx === -1) return {};
+      // No-op guards return `s` (NOT `{}`): an empty partial still produces a
+      // new root state object, notifying every subscriber for nothing.
+      if (idx === -1) return s;
       entries.splice(idx + 1, 0, { kind: 'divider', id: newDividerId() });
       const next: ProjectNavPrefs = { ...s.projectNav, entries: normalizeNavEntries(entries) };
       persistProjectNav(next);
@@ -669,7 +686,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const entries = s.projectNav.entries.filter(
         (e) => e.kind !== 'divider' || e.id !== dividerId,
       );
-      if (entries.length === s.projectNav.entries.length) return {};
+      if (entries.length === s.projectNav.entries.length) return s;
       const next: ProjectNavPrefs = { ...s.projectNav, entries: normalizeNavEntries(entries) };
       persistProjectNav(next);
       return { projectNav: next };
@@ -1072,10 +1089,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
   setRailSeamY: (y) =>
     set((s) => {
+      // Driven by a per-frame scroll rAF in ProjectRail — the no-op guards
+      // MUST return `s`, or every scroll frame notifies the whole store.
       const cur = s.railSeamY;
-      if (y === cur) return {};
+      if (y === cur) return s;
       // Sub-pixel jitter guard — scroll measurements arrive per frame.
-      if (y != null && cur != null && Math.abs(y - cur) < 0.5) return {};
+      if (y != null && cur != null && Math.abs(y - cur) < 0.5) return s;
       return { railSeamY: y };
     }),
   togglePinSession: (id) =>
@@ -1137,7 +1156,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const region = s.wallLayout.regions.find((r) =>
         r.tiles.some((t) => t.sessionId === sessionId),
       );
-      if (!region) return {};
+      if (!region) return s;
       const tiles = resizeTile(region.tiles, sessionId, w, h, region.cols);
       const next: WallLayout = {
         version: 2,
@@ -1751,7 +1770,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   enqueueSend: (sessionId, text) =>
     set((s) => {
       const trimmed = text.trim();
-      if (!trimmed) return {};
+      if (!trimmed) return s;
       const current = s.pendingSendsBySession[sessionId] ?? [];
       return {
         pendingSendsBySession: {
@@ -1763,7 +1782,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   removePendingSend: (sessionId, index) =>
     set((s) => {
       const current = s.pendingSendsBySession[sessionId];
-      if (!current || index < 0 || index >= current.length) return {};
+      if (!current || index < 0 || index >= current.length) return s;
       const next = current.slice(0, index).concat(current.slice(index + 1));
       return {
         pendingSendsBySession: { ...s.pendingSendsBySession, [sessionId]: next },
@@ -1773,7 +1792,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     let head: string | undefined;
     set((s) => {
       const current = s.pendingSendsBySession[sessionId];
-      if (!current || current.length === 0) return {};
+      if (!current || current.length === 0) return s;
       head = current[0];
       return {
         pendingSendsBySession: {
@@ -1835,14 +1854,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   consumeComposerRecall: (sessionId) =>
     set((s) => {
-      if (!s.composerRecallBySession[sessionId]) return {};
+      if (!s.composerRecallBySession[sessionId]) return s;
       const next = { ...s.composerRecallBySession };
       delete next[sessionId];
       return { composerRecallBySession: next };
     }),
   clearComposerOriginNote: (sessionId) =>
     set((s) => {
-      if (!s.composerOriginNoteBySession[sessionId]) return {};
+      if (!s.composerOriginNoteBySession[sessionId]) return s;
       const next = { ...s.composerOriginNoteBySession };
       delete next[sessionId];
       return { composerOriginNoteBySession: next };

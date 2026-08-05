@@ -25,11 +25,20 @@ export interface UseCyclePhaseOptions {
   speed?: number;
 }
 
+// Quantize the continuous 0..1 phase so React commits ~24 updates per cycle
+// instead of one per animation frame. Each loader renders 25 dot spans with
+// fresh style objects per phase change — at 60fps per loader (rail previews,
+// sidebar rows, chat) that was the sidebar's dominant render cost. 24 steps
+// is visually indistinguishable for these small ripple loaders.
+const CYCLE_PHASE_STEPS = 24;
+
 export function useCyclePhase({ active, cycleMsBase, speed = 1 }: UseCyclePhaseOptions): number {
   const [phase, setPhase] = useState(0);
+  const currentQuantRef = useRef(-1);
 
   useEffect(() => {
     if (!active) {
+      currentQuantRef.current = -1;
       setPhase(0);
       return;
     }
@@ -38,16 +47,19 @@ export function useCyclePhase({ active, cycleMsBase, speed = 1 }: UseCyclePhaseO
     const raw = cycleMsBase / safeSpeed;
     const cycleMs = raw > 0 && Number.isFinite(raw) ? raw : 1000;
     const start = performance.now();
-    let rafId = 0;
 
-    const tick = (now: number) => {
+    const update = (now: number) => {
       const elapsed = ((now - start) % cycleMs + cycleMs) % cycleMs;
-      setPhase(elapsed / cycleMs);
-      rafId = requestAnimationFrame(tick);
+      const quant = Math.floor((elapsed / cycleMs) * CYCLE_PHASE_STEPS);
+      if (quant !== currentQuantRef.current) {
+        currentQuantRef.current = quant;
+        setPhase(quant / CYCLE_PHASE_STEPS);
+      }
     };
 
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
+    update(performance.now());
+    // Shared frame bus: all live loaders ride ONE rAF loop instead of one each.
+    return subscribeFrame(update);
   }, [active, cycleMsBase, speed]);
 
   return phase;

@@ -59,15 +59,29 @@ export function GitPanel({ projectId }: Props) {
     };
   }, [projectId, setGitStatus]);
 
-  // Bump refreshKey whenever status changes so child diff pane refetches.
-  // Also clear any stale error on the next successful status change.
+  // Bump refreshKey only when the status CONTENT changes so the child diff
+  // pane refetches. Keying on the object identity refetched on every WS frame
+  // and REST seed even when nothing moved — with the daemon's watcher ticking
+  // during an agent turn that was a diff refetch every 500ms.
+  const statusSig = status
+    ? [
+        status.head,
+        status.branch,
+        status.ahead,
+        status.behind,
+        sigOfFiles(status.staged),
+        sigOfFiles(status.unstaged),
+        sigOfFiles(status.untracked),
+        sigOfFiles(status.conflicted),
+      ].join('|')
+    : '';
   useEffect(() => {
-    if (status) {
+    if (statusSig) {
       setRefreshKey((k) => k + 1);
       setError(null);
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     }
-  }, [status]);
+  }, [statusSig]);
 
   useEffect(() => {
     return () => {
@@ -299,6 +313,7 @@ export function GitPanel({ projectId }: Props) {
         selectedPath={selectedPath}
         selectedBucket={selectedBucket}
         refreshKey={refreshKey}
+        headKey={`${status.head ?? ''}|${status.branch ?? ''}`}
         isMobile={isMobile}
         showMobileDiff={showMobileDiff}
         onBack={() => setMobileDiffOpen(false)}
@@ -387,6 +402,7 @@ interface ProjectBodyProps {
   selectedPath: string | null;
   selectedBucket: 'staged' | 'unstaged' | null;
   refreshKey: number;
+  headKey: string;
   isMobile: boolean;
   showMobileDiff: boolean;
   onBack: () => void;
@@ -407,6 +423,7 @@ function ProjectBody({
   selectedPath,
   selectedBucket,
   refreshKey,
+  headKey,
   isMobile,
   showMobileDiff,
   onBack,
@@ -455,7 +472,7 @@ function ProjectBody({
           onDiscard={onDiscard}
           onDiscardAll={onDiscardAll}
         />
-        <GitWorktreeList projectId={projectId} refreshKey={refreshKey} onError={onDiffError} />
+        <GitWorktreeList projectId={projectId} headKey={headKey} onError={onDiffError} />
       </div>
     </div>
   );
@@ -506,6 +523,10 @@ function Empty({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
+}
+
+function sigOfFiles(list: GitFileEntry[]): string {
+  return list.map((f) => f.path + f.status).join(',');
 }
 
 function toMessage(err: unknown, fallback: string): string {
