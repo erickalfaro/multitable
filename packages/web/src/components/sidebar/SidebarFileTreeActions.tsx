@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Minus, Plus } from 'lucide-react';
+import { Check, Copy, ExternalLink, Minus, Plus } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import { copyToClipboard } from '../../lib/clipboard';
+import { api } from '../../lib/api';
 
 interface Props {
+  projectId: string;
   filePath: string;
   // Resolved active session for this project. null → "Add to context" is
   // disabled (no session to attach the file to).
@@ -26,7 +28,7 @@ const btnBase: React.CSSProperties = {
     'background-color var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast)',
 };
 
-export function SidebarFileTreeActions({ filePath, targetSessionId }: Props) {
+export function SidebarFileTreeActions({ projectId, filePath, targetSessionId }: Props) {
   const selectedFiles = useAppStore((s) =>
     targetSessionId ? (s.selectedFilesBySession[targetSessionId] ?? EMPTY) : EMPTY,
   );
@@ -127,6 +129,31 @@ export function SidebarFileTreeActions({ filePath, targetSessionId }: Props) {
         }}
       >
         {copied ? <Check size={11} /> : <Copy size={11} />}
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          void api.projects.openInDefaultApp(projectId, filePath);
+        }}
+        title="Open in default app"
+        style={{
+          ...btnBase,
+          background: 'transparent',
+          borderColor: 'var(--border)',
+          color: 'var(--text-muted)',
+          cursor: 'pointer',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = 'var(--text-primary)';
+          e.currentTarget.style.borderColor = 'var(--text-muted)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = 'var(--text-muted)';
+          e.currentTarget.style.borderColor = 'var(--border)';
+        }}
+      >
+        <ExternalLink size={11} />
       </button>
     </>
   );

@@ -5,7 +5,6 @@ import { useIsMobile } from '../../lib/useIsMobile';
 import { SessionHeaderBar } from './SessionHeaderBar';
 import { ProcessBanner } from './ProcessBanner';
 import { TerminalKeyboard } from './TerminalKeyboard';
-import { PermissionBar } from '../permission/PermissionBar';
 import type { ManagedProcess, Session } from '../../lib/types';
 
 interface Props {
@@ -101,8 +100,6 @@ export function TerminalView({ processId, process }: Props) {
               style={{ width: '100%', flex: 1, minHeight: 0 }}
             />
             <TerminalKeyboard processId={processId} />
-            {/* Session-scoped permission confirmations (overlay on terminal) */}
-            {session && <PermissionBar sessionId={session.id} />}
           </div>
         )}
       </div>

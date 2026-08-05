@@ -442,6 +442,7 @@ function ProjectBody({
       />
       <div className="mt-scroll" style={{ flex: 1, overflow: 'auto' }}>
         <GitChangeList
+          projectId={projectId}
           staged={status.staged}
           unstaged={status.unstaged}
           untracked={status.untracked}

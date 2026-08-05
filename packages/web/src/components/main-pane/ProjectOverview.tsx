@@ -351,8 +351,7 @@ export function ProjectOverview({ projectId }: Props) {
   };
 
   const handleAddSession = () => {
-    store.setFocusedProject(projectId);
-    store.setAddAgentModalOpen(true);
+    store.setNewAgentProject(projectId);
   };
 
   const handleAddCommand = () => {

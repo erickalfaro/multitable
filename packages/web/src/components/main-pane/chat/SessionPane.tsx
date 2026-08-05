@@ -6,7 +6,6 @@ import { api } from '../../../lib/api';
 import { useIsMobile } from '../../../lib/useIsMobile';
 import { SessionHeaderBar } from '../SessionHeaderBar';
 import { ProcessBanner } from '../ProcessBanner';
-import { PermissionBar } from '../../permission/PermissionBar';
 import { MessageList } from './MessageList';
 import { ChatScroller, useChatScroller } from './ChatScroller';
 import { ChatInputCM } from './ChatInputCM';
@@ -32,7 +31,6 @@ interface DensityConfig {
   showBanner: boolean;
   showPinnedPrompt: boolean;
   showComposer: boolean;
-  showPermissionBar: boolean;
   /** Slice the messages array to the last N before rendering. null = all. */
   tailLimit: number | null;
   /** Filter out reasoning + tool messages before rendering. */
@@ -58,7 +56,6 @@ const DENSITY: Record<SessionPaneDensity, DensityConfig> = {
     showBanner: true,
     showPinnedPrompt: true,
     showComposer: true,
-    showPermissionBar: true,
     tailLimit: COMFORTABLE_TAIL,
     proseOnly: false,
   },
@@ -67,7 +64,6 @@ const DENSITY: Record<SessionPaneDensity, DensityConfig> = {
     showBanner: true,
     showPinnedPrompt: false,
     showComposer: true,
-    showPermissionBar: true,
     tailLimit: 12,
     proseOnly: false,
   },
@@ -76,7 +72,6 @@ const DENSITY: Record<SessionPaneDensity, DensityConfig> = {
     showBanner: false,
     showPinnedPrompt: false,
     showComposer: false,
-    showPermissionBar: false,
     tailLimit: 3,
     proseOnly: true,
   },
@@ -335,7 +330,6 @@ export function SessionPane({ sessionId, session, density = 'comfortable' }: Pro
               active={session.state === 'running'}
             />
           ))}
-        {cfg.showPermissionBar && <PermissionBar sessionId={sessionId} />}
       </WorkspaceTint>
     </div>
   );

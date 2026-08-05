@@ -14,8 +14,6 @@ import { MainPane } from './components/main-pane/MainPane';
 import { SessionDetailPanel } from './components/main-pane/SessionDetailPanel';
 import { StatusBar } from './components/status-bar/StatusBar';
 import { CommandPalette } from './components/command-palette/CommandPalette';
-import { OptionSelector } from './components/option/OptionSelector';
-import { AddAgentModal } from './components/modals/AddAgentModal';
 import { AddProcessModal } from './components/modals/AddProcessModal';
 import { GlobalSettingsModal } from './components/modals/GlobalSettingsModal';
 import { ProjectSettingsModal } from './components/modals/ProjectSettingsModal';
@@ -649,8 +647,16 @@ function App() {
         store.removeSession(msg.payload.sessionId);
       }),
       wsClient.on('permission:prompt', (msg: any) => {
-        store.addPermission(msg.payload.prompt);
+        const prompt = msg.payload.prompt;
+        store.addPermission(prompt);
         playPermissionChime();
+        // Auto-surface: dock the picker in the right panel's Ask tab when a
+        // blocking prompt targets the session the user is currently viewing.
+        const live = useAppStore.getState();
+        if (prompt?.sessionId && prompt.sessionId === live.selectedProcessId) {
+          live.setDetailPanelOpen(true);
+          live.setDetailPanelTab('ask');
+        }
       }),
       wsClient.on('permission:resolved', (msg: any) => {
         store.removePermission(msg.payload.id);
@@ -1463,7 +1469,6 @@ function App() {
         </div>
       )}
 
-      <OptionSelector />
       <CommandPalette />
       <NotificationCenter />
       <ElicitationModalHost />
@@ -1495,12 +1500,6 @@ function App() {
           },
         }}
       />
-      {store.addAgentModalOpen && store.focusedProjectId && (
-        <AddAgentModal
-          projectId={store.focusedProjectId}
-          onClose={() => store.setAddAgentModalOpen(false)}
-        />
-      )}
       {store.addProcessModalOpen && store.focusedProjectId && (
         <AddProcessModal
           projectId={store.focusedProjectId}

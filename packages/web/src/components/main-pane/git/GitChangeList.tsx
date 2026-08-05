@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Plus, Minus, Trash2 } from 'lucide-react';
+import { Plus, Minus, Trash2, ExternalLink } from 'lucide-react';
 import type { GitFileEntry } from '../../../lib/types';
+import { api } from '../../../lib/api';
 import { GitChangeRow } from './GitChangeRow';
 
 type ChangeBucket = 'unstaged' | 'untracked';
 
 interface Props {
+  projectId: string;
   staged: GitFileEntry[];
   unstaged: GitFileEntry[];
   untracked: GitFileEntry[];
@@ -20,6 +22,7 @@ interface Props {
 }
 
 export function GitChangeList({
+  projectId,
   staged,
   unstaged,
   untracked,
@@ -32,6 +35,11 @@ export function GitChangeList({
   onDiscard,
   onDiscardAll,
 }: Props) {
+  const openBtn = (p: string) => (
+    <RowBtn onClick={() => void api.projects.openInDefaultApp(projectId, p)} title="Open in default app">
+      <ExternalLink size={12} />
+    </RowBtn>
+  );
   // VS Code convention: "Changes" rolls up modified-and-tracked AND untracked
   // files into one bucket. Each row keeps its origin so the action calls the
   // right API (untracked still goes through `git add`, which `stage` does).
@@ -54,7 +62,7 @@ export function GitChangeList({
               file={file}
               isSelected={false}
               onClick={() => {}}
-              actions={null}
+              actions={openBtn(file.path)}
             />
           ))}
         </Section>
@@ -81,9 +89,12 @@ export function GitChangeList({
                 isSelected={isSelected}
                 onClick={() => onSelect(file, 'staged')}
                 actions={
-                  <RowBtn onClick={() => onUnstage([file.path])} title="Unstage Changes">
-                    <Minus size={12} />
-                  </RowBtn>
+                  <>
+                    {openBtn(file.path)}
+                    <RowBtn onClick={() => onUnstage([file.path])} title="Unstage Changes">
+                      <Minus size={12} />
+                    </RowBtn>
+                  </>
                 }
               />
             );
@@ -119,6 +130,7 @@ export function GitChangeList({
                 onClick={() => onSelect(file, 'unstaged')}
                 actions={
                   <>
+                    {openBtn(file.path)}
                     <RowBtn
                       onClick={() => onDiscard([file.path])}
                       title="Discard Changes"

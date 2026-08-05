@@ -313,9 +313,7 @@ export function ProjectSections({ project }: Props) {
         // ~10 most-recent rows visible; older sessions reached by scrolling.
         scrollMaxHeight={440}
         onAdd={() => {
-          const store = useAppStore.getState();
-          store.setFocusedProject(project.id);
-          store.setAddAgentModalOpen(true);
+          useAppStore.getState().setNewAgentProject(project.id);
         }}
       >
         {projectSessions.length > 0 ? (
