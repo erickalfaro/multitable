@@ -164,9 +164,11 @@
   --glass-tint: var(--glass-bg);
   --blur-glass: var(--blur);
 
-  /* ── Floating shell — the app window inset from the viewport edge. ───── */
-  --shell-inset: 10px;
-  --shell-radius: 20px;
+  /* ── App shell — full-bleed: no inset, no radius, no frame. Tokens stay
+     so the shell-aligned overlays (CommandConsole) keep one source of
+     truth if the floating look ever comes back. ────────────────────────── */
+  --shell-inset: 0px;
+  --shell-radius: 0px;
   --shell-bg: oklch(18% 0.01 280 / 0.88);
 
   /* ── Ambient backdrop — base + soft blooms under the WebGL metal field.
@@ -278,8 +280,8 @@
     inset 0 1px 0 var(--metal-specular),
     inset 0 -1px 0 oklch(20% 0.01 280 / 0.06);
 
-  --shell-inset: 10px;
-  --shell-radius: 20px;
+  --shell-inset: 0px;
+  --shell-radius: 0px;
   --shell-bg: oklch(98% 0.004 80 / 0.92);
 
   --ambient-base: oklch(92% 0.01 80);
@@ -320,17 +322,6 @@ html, body, #root {
 .mt-app-shell {
   height: 100vh;
   height: 100dvh;
-}
-
-/* Phones: the floating shell goes full-bleed — glass insets waste the limited
-   width. Collapsing the tokens makes the inline `padding: var(--shell-inset)`
-   and `.mt-shell` radius go to zero with no JS branch. */
-@media (max-width: 640px) {
-  :root,
-  [data-theme='light'] {
-    --shell-inset: 0px;
-    --shell-radius: 0px;
-  }
 }
 
 body {
@@ -1218,18 +1209,15 @@ select:focus-visible,
   z-index: 1;
 }
 
-/* Floating app window — single frosted plate (the only blur under the cursor). */
+/* Full-bleed app plate — single frosted surface (the only blur under the
+   cursor). No border/outer ring: at the viewport edge a frame reads as a
+   hairline outline rather than a floating window. */
 .mt-shell {
   background: var(--shell-bg);
   -webkit-backdrop-filter: blur(var(--blur)) saturate(1.15);
   backdrop-filter: blur(var(--blur)) saturate(1.15);
-  border: 1px solid var(--glass-border);
+  border: none;
   border-radius: var(--shell-radius);
-  box-shadow:
-    var(--glass-shadow),
-    0 0 0 1px color-mix(in oklch, var(--space-accent) 12%, transparent),
-    0 0 80px -24px var(--bloom),
-    var(--metal-depth);
   overflow: hidden;
 }
 

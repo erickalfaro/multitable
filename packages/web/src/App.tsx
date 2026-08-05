@@ -1277,7 +1277,8 @@ function App() {
 
   return (
     // Ambient backdrop — opaque canvas + the per-project accent bloom. The app
-    // floats inside it as a single glass shell inset by --shell-inset. Fixed
+    // fills it edge-to-edge as a single glass shell (--shell-inset is 0; the
+    // token stays so shell-aligned overlays share one source of truth). Fixed
     // overlays (drawers, palette, modals, toasts) are SIBLINGS of the shell so
     // they never inherit the shell's backdrop-filter containing block.
     <div
