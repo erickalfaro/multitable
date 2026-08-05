@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, Copy, ExternalLink, Minus, Plus } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 import { copyToClipboard } from '../../lib/clipboard';
+import { absoluteFilePath } from '../../lib/filePath';
 import { api } from '../../lib/api';
 
 interface Props {
@@ -33,6 +34,7 @@ export function SidebarFileTreeActions({ projectId, filePath, targetSessionId }:
     targetSessionId ? (s.selectedFilesBySession[targetSessionId] ?? EMPTY) : EMPTY,
   );
   const toggleSelectedFile = useAppStore((s) => s.toggleSelectedFile);
+  const projectPath = useAppStore((s) => s.projects.find((p) => p.id === projectId)?.path);
   const isSelected = !!targetSessionId && selectedFiles.includes(filePath);
 
   const [copied, setCopied] = useState(false);
@@ -46,9 +48,12 @@ export function SidebarFileTreeActions({ projectId, filePath, targetSessionId }:
 
   const copyPath = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    // Copy the project-rooted relative path — that's what callers paste into
-    // prompts, commits, and @-mentions.
-    const ok = await copyToClipboard(filePath);
+    // Copy the FULL absolute path (project root + relative), so it pastes into
+    // any shell, editor, or agent prompt without needing the project cwd as
+    // context. Falls back to the relative path if the project isn't loaded yet.
+    const ok = await copyToClipboard(
+      projectPath ? absoluteFilePath(projectPath, filePath) : filePath,
+    );
     if (!ok) return;
     setCopied(true);
     if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
@@ -105,7 +110,11 @@ export function SidebarFileTreeActions({ projectId, filePath, targetSessionId }:
       <button
         type="button"
         onClick={copyPath}
-        title="Copy path"
+        title={
+          projectPath
+            ? `Copy full path — ${absoluteFilePath(projectPath, filePath)}`
+            : 'Copy full path'
+        }
         style={{
           ...btnBase,
           background: copied
