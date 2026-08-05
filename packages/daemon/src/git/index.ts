@@ -9,6 +9,14 @@ import type {
 } from '../types.js';
 
 function git(projectPath: string): SimpleGit {
+  // Children inherit the daemon's env, including GIT_OPTIONAL_LOCKS=0 (set at
+  // startup in index.ts) so read-only commands — notably `git status` — don't
+  // take index.lock and rewrite .git/index to refresh stat data. The
+  // GitWatcher deliberately watches .git/index for commit/branch detection;
+  // without that var every status run could itself trigger the next watcher
+  // tick. Deliberately NOT simple-git's .env(): an explicit env is run through
+  // its unsafe-vars scanner, which rejects everyday inherited vars like
+  // GIT_EDITOR.
   return simpleGit(projectPath);
 }
 
@@ -86,8 +94,10 @@ export async function getStatusSummary(projectPath: string): Promise<GitStatusSu
       head: null,
     };
   }
-  const status = await git(projectPath).status();
-  const head = await getCurrentCommit(projectPath);
+  const [status, head] = await Promise.all([
+    git(projectPath).status(),
+    getCurrentCommit(projectPath),
+  ]);
   return {
     isRepo: true,
     branch: status.current ?? null,

@@ -1,16 +1,10 @@
 /**
- * Left rail geometry — first principles.
+ * Left rail geometry.
  *
- * INNER track is always RAIL_EXPANDED wide.
- * OUTER shell clips to RAIL_COLLAPSED when idle, expands to RAIL_EXPANDED on hover.
- *
- * Each row is:
- *   [ MARK_COL (60px, content centered) | LABEL (rest) ]
- *
- * Collapsed, you only see the mark column → everything is centered in the panel.
- * Expanded, labels appear to the right → marks never move.
+ * The rail is a fixed RAIL_COLLAPSED-wide column; rows show only their mark,
+ * centered in RAIL_MARK_COL. Labels live in the floating RailTooltip (shown
+ * after a hover dwell) — the rail itself never widens.
  */
 export const RAIL_COLLAPSED = 60;
-export const RAIL_EXPANDED = 188;
-/** Identity / mark column — equals collapsed shell width. */
+/** Identity / mark column — equals the rail width. */
 export const RAIL_MARK_COL = RAIL_COLLAPSED;

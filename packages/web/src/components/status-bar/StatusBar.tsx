@@ -4,12 +4,12 @@ import { Settings, Bell, Bug } from 'lucide-react';
 import { IconButton } from '../ui';
 
 export function StatusBar() {
-  const {
-    setGlobalSettingsOpen,
-    setNotificationCenterOpen,
-    devLogOpen,
-    setDevLogOpen,
-  } = useAppStore();
+  // Narrow selectors — destructuring a selector-less useAppStore() subscribes
+  // to every store write, re-rendering this always-mounted bar per WS event.
+  const setGlobalSettingsOpen = useAppStore((s) => s.setGlobalSettingsOpen);
+  const setNotificationCenterOpen = useAppStore((s) => s.setNotificationCenterOpen);
+  const devLogOpen = useAppStore((s) => s.devLogOpen);
+  const setDevLogOpen = useAppStore((s) => s.setDevLogOpen);
   const totalUnread = useAppStore((s) =>
     Object.values(s.unreadBySession).reduce((n, v) => n + v, 0),
   );

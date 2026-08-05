@@ -873,31 +873,51 @@ export function createProjectsRouter(
       }
     }
 
+    // Legacy plain-array response (no ?limit). No internal callers remain (the
+    // @-mention index moved to the paginated form) but the shape is kept for
+    // compatibility — now with the same streaming read + entry cap so a huge
+    // directory can't block the event loop unbounded.
+    let legacyDir: fs.Dir | null = null;
     try {
-      const entries = fs.readdirSync(resolved);
-      const result = entries
-        .filter(keep)
-        .map((name) => {
-          try {
-            const fullPath = path.join(resolved, name);
-            const stat = fs.statSync(fullPath);
-            const entryRelPath = relPath ? `${relPath}/${name}` : name;
-            return {
-              name,
-              path: entryRelPath,
-              type: stat.isDirectory() ? 'directory' : 'file',
-              size: stat.size,
-              modifiedAt: stat.mtimeMs,
-            };
-          } catch {
-            const entryRelPath = relPath ? `${relPath}/${name}` : name;
-            return { name, path: entryRelPath, type: 'file', size: 0, modifiedAt: 0 };
-          }
-        })
-        .sort(sortEntries);
+      legacyDir = fs.opendirSync(resolved);
+      const result: {
+        name: string;
+        path: string;
+        type: 'directory' | 'file';
+        size: number;
+        modifiedAt: number;
+      }[] = [];
+      for (let dirent = legacyDir.readSync(); dirent !== null; dirent = legacyDir.readSync()) {
+        if (!keep(dirent.name)) continue;
+        if (result.length >= MAX_DIR_ENTRIES) break;
+        const entryRelPath = relPath ? `${relPath}/${dirent.name}` : dirent.name;
+        let size = 0;
+        let modifiedAt = 0;
+        try {
+          const stat = fs.statSync(path.join(resolved, dirent.name));
+          size = stat.size;
+          modifiedAt = stat.mtimeMs;
+        } catch {
+          /* entry vanished mid-scan */
+        }
+        result.push({
+          name: dirent.name,
+          path: entryRelPath,
+          type: dirent.isDirectory() ? 'directory' : 'file',
+          size,
+          modifiedAt,
+        });
+      }
+      result.sort(sortEntries);
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ error: err.message || 'Failed to read directory' });
+    } finally {
+      try {
+        legacyDir?.closeSync();
+      } catch {
+        /* already closed / never opened */
+      }
     }
   });
 

@@ -96,12 +96,26 @@ class WsClient {
       try {
         const msg = JSON.parse(evt.data) as WsMessage;
         const isPty = msg.type === 'pty-output' || msg.type === 'scrollback';
-        devLog.add({
-          category: isPty ? 'ws-pty' : 'ws-in',
-          label: msg.type,
-          detail: previewWsMessage(msg),
-          data: msg,
-        });
+        // Only pay for the rich entry (payload JSON.stringify + retained full
+        // message object) while the DevLog panel is open. Streaming deltas
+        // carry the CUMULATIVE turn text, so stringifying every frame with
+        // the panel closed was O(turn²) main-thread work — and the ring
+        // buffer pinned 5000 full payloads. Entries logged while closed keep
+        // type + pid only; that's enough to see traffic when the panel opens.
+        if (useAppStore.getState().devLogOpen) {
+          devLog.add({
+            category: isPty ? 'ws-pty' : 'ws-in',
+            label: msg.type,
+            detail: previewWsMessage(msg),
+            data: msg,
+          });
+        } else {
+          devLog.add({
+            category: isPty ? 'ws-pty' : 'ws-in',
+            label: msg.type,
+            detail: msg.processId ? `pid=${msg.processId.slice(0, 8)}` : undefined,
+          });
+        }
         const handlers = this.handlers.get(msg.type) ?? [];
         handlers.forEach(h => h(msg));
         const allHandlers = this.handlers.get('*') ?? [];

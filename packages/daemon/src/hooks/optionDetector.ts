@@ -109,25 +109,7 @@ export interface DetectedOptions {
   rawText: string;
 }
 
-export async function detectOptions(
-  projectPath: string,
-  claudeSessionId: string
-): Promise<DetectedOptions | null> {
-  const jsonlPath = getSessionJsonlPath(projectPath, claudeSessionId);
-
-  let content: string;
-  try {
-    content = fs.readFileSync(jsonlPath, 'utf8');
-  } catch {
-    return null;
-  }
-
-  const lines = content.trim().split('\n').filter(Boolean);
-  if (lines.length === 0) return null;
-
-  // Find last assistant message
-  let lastAssistantText: string | null = null;
-
+function findLastAssistantText(lines: string[]): string | null {
   for (let i = lines.length - 1; i >= 0; i--) {
     let entry: JsonlEntry;
     try {
@@ -136,19 +118,72 @@ export async function detectOptions(
       continue;
     }
 
-    if (
-      entry.type === 'assistant' ||
-      (entry.message && entry.message.role === 'assistant')
-    ) {
+    if (entry.type === 'assistant' || (entry.message && entry.message.role === 'assistant')) {
       const msg = entry.message || entry;
       const text = extractTextFromContent(msg.content);
-      if (text) {
-        lastAssistantText = text;
-        break;
-      }
+      if (text) return text;
     }
   }
+  return null;
+}
 
+// Only the last assistant message matters, and it lives at the end of the
+// JSONL. Read a bounded tail window instead of the whole file — this runs
+// after every turn end and session transcripts grow to many MB.
+const TAIL_WINDOW_BYTES = 256 * 1024;
+
+function readTail(filePath: string): { text: string; coveredWholeFile: boolean } | null {
+  let fd: number;
+  try {
+    fd = fs.openSync(filePath, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - TAIL_WINDOW_BYTES);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    let text = buf.toString('utf8');
+    // Started mid-file: the first line is (probably) partial — drop it.
+    if (start > 0) {
+      const nl = text.indexOf('\n');
+      text = nl === -1 ? '' : text.slice(nl + 1);
+    }
+    return { text, coveredWholeFile: start === 0 };
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+export async function detectOptions(
+  projectPath: string,
+  claudeSessionId: string
+): Promise<DetectedOptions | null> {
+  const jsonlPath = getSessionJsonlPath(projectPath, claudeSessionId);
+
+  const tail = readTail(jsonlPath);
+  if (!tail) return null;
+
+  let content = tail.text;
+  let lines = content.trim().split('\n').filter(Boolean);
+
+  // Rare: no assistant entry in the tail window and the window didn't cover
+  // the whole file — fall back to one full read.
+  if (!findLastAssistantText(lines) && !tail.coveredWholeFile) {
+    try {
+      content = fs.readFileSync(jsonlPath, 'utf8');
+    } catch {
+      return null;
+    }
+    lines = content.trim().split('\n').filter(Boolean);
+  }
+
+  if (lines.length === 0) return null;
+
+  const lastAssistantText = findLastAssistantText(lines);
   if (!lastAssistantText) return null;
 
   const options = parseNumberedOptions(lastAssistantText);

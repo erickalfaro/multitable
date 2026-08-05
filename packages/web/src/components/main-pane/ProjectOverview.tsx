@@ -296,27 +296,35 @@ function EmptyState({ label, onAdd, addLabel }: { label: string; onAdd: () => vo
 }
 
 export function ProjectOverview({ projectId }: Props) {
-  const store = useAppStore();
-  const project = store.projects.find((p) => p.id === projectId);
+  const project = useAppStore((s) => s.projects.find((p) => p.id === projectId));
+  const selectedProcessId = useAppStore((s) => s.selectedProcessId);
+  const multiSelectedSessionIds = useAppStore((s) => s.multiSelectedSessionIds);
+  const allSessions = useAppStore((s) => s.sessions);
+  const pendingPermissions = useAppStore((s) => s.pendingPermissions);
+  const streamingBySession = useAppStore((s) => s.streamingBySession);
+  const toolProgressBySession = useAppStore((s) => s.toolProgressBySession);
+  const statusBySession = useAppStore((s) => s.statusBySession);
+  const allCommands = useAppStore((s) => s.commands);
+  const allTerminals = useAppStore((s) => s.terminals);
 
   const forceIds = [
-    store.selectedProcessId,
-    ...store.multiSelectedSessionIds,
+    selectedProcessId,
+    ...multiSelectedSessionIds,
   ].filter((id): id is string => !!id);
-  const sessions = Object.values(store.sessions)
+  const sessions = Object.values(allSessions)
     .filter((s) => {
       if (s.projectId !== projectId) return false;
-      const hasPermission = store.pendingPermissions.some((p) => p.sessionId === s.id);
+      const hasPermission = pendingPermissions.some((p) => p.sessionId === s.id);
       const isLive =
         s.state === 'running' ||
-        !!store.streamingBySession[s.id] ||
-        !!store.toolProgressBySession[s.id] ||
-        (store.statusBySession[s.id]?.status ?? null) !== null;
+        !!streamingBySession[s.id] ||
+        !!toolProgressBySession[s.id] ||
+        (statusBySession[s.id]?.status ?? null) !== null;
       return isSessionListed(s, { forceIds, hasPermission, isLive });
     })
     .sort((a, b) => sessionRecencyMs(b) - sessionRecencyMs(a));
-  const commands = Object.values(store.commands).filter((c) => c.projectId === projectId);
-  const terminals = Object.values(store.terminals).filter((t) => t.projectId === projectId);
+  const commands = Object.values(allCommands).filter((c) => c.projectId === projectId);
+  const terminals = Object.values(allTerminals).filter((t) => t.projectId === projectId);
 
   const runningTotal = [...sessions, ...commands, ...terminals].filter(isProcessActive).length;
   const runningSessions = sessions.filter(isProcessActive).length;
@@ -327,8 +335,9 @@ export function ProjectOverview({ projectId }: Props) {
   // the overview so Terminal mounts, and auto-resume/start stopped sessions
   // (with the double-RAF so xterm has fitted before we send cols/rows).
   const selectProcess = (proc: ManagedProcess) => {
-    store.setProjectOverviewOpen(false);
-    store.setSelectedProcess(proc.id);
+    const st = useAppStore.getState();
+    st.setProjectOverviewOpen(false);
+    st.setSelectedProcess(proc.id);
 
     // Sessions are SDK-driven: no start/resume action — first turn auto-starts.
     // Commands and terminals still spawn via PtyManager.
@@ -343,7 +352,7 @@ export function ProjectOverview({ projectId }: Props) {
   const handleAddTerminal = async () => {
     try {
       const terminal = await api.terminals.create(projectId, {});
-      store.upsertTerminal(terminal);
+      useAppStore.getState().upsertTerminal(terminal);
       selectProcess(terminal);
     } catch {
       toast.error('Failed to create terminal');
@@ -351,12 +360,13 @@ export function ProjectOverview({ projectId }: Props) {
   };
 
   const handleAddSession = () => {
-    store.setNewAgentProject(projectId);
+    useAppStore.getState().setNewAgentProject(projectId);
   };
 
   const handleAddCommand = () => {
-    store.setFocusedProject(projectId);
-    store.setAddProcessModalOpen(true);
+    const st = useAppStore.getState();
+    st.setFocusedProject(projectId);
+    st.setAddProcessModalOpen(true);
   };
 
   const gridStyle: React.CSSProperties = {
@@ -404,7 +414,10 @@ export function ProjectOverview({ projectId }: Props) {
             Idle
           </Badge>
         ) : null}
-        <IconButton label="Project settings" onClick={() => store.setProjectSettingsOpen(true)}>
+        <IconButton
+          label="Project settings"
+          onClick={() => useAppStore.getState().setProjectSettingsOpen(true)}
+        >
           <Settings size={15} />
         </IconButton>
       </div>

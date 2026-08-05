@@ -1752,19 +1752,22 @@ select:focus-visible,
   box-shadow: none !important;
 }
 
-/* Hover labels only — soft lift over the body, same hue family as the plate. */
-.mt-rail-sheet {
-  background: color-mix(
-    in oklch,
-    var(--space-accent) 3%,
-    var(--glass-bg-opaque)
-  );
-  box-shadow: 12px 0 28px -16px oklch(0% 0 0 / 0.45);
-  border: none;
+/* Rail hover tooltip — the floating label that replaced the expand-on-hover
+ * sheet. Accent tint + geometry are inline (per-project hue); the class owns
+ * the entrance motion and the reduced-transparency fallback. */
+@keyframes mt-rail-tip-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .mt-rail-sheet {
-    background: var(--glass-bg-opaque);
+  .mt-rail-tip {
+    background: var(--glass-bg-opaque) !important;
   }
 }
 

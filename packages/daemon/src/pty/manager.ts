@@ -24,6 +24,9 @@ const PARENT_CLAUDE_ENV_KEYS = [
   'CLAUDE_CODE_IPC_FD',
   'CLAUDE_CODE_PARENT_SESSION_ID',
   'CLAUDE_AGENT_SDK_VERSION',
+  // Set by the daemon for its own git spawns (see index.ts) — user terminals
+  // should keep stock interactive git behavior, so don't let it leak in.
+  'GIT_OPTIONAL_LOCKS',
 ];
 
 function scrubParentClaudeEnv(env: NodeJS.ProcessEnv): Record<string, string> {

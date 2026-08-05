@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react';
-import { Bell } from 'lucide-react';
+import React, { useState } from 'react';
 import {
   useAppStore,
   useRailSessionSnippet,
@@ -9,37 +8,24 @@ import { SessionStatusLoader } from './SessionStatusLoader';
 import { dockOutline, dockPool } from '../../lib/emphasis';
 import { projectHueCss } from '../../lib/metalPalette';
 import { useIsDark } from '../../hooks/useIsDark';
-import { RAIL_EXPANDED, RAIL_MARK_COL } from '../../lib/railGeometry';
+import { RAIL_MARK_COL } from '../../lib/railGeometry';
 import { buildSessionMenuItems } from '../../lib/sessionMenuItems';
 import { ContextMenu } from '../context-menu/ContextMenu';
+import { RailTipTitle, RailTipSub, useRailTooltip } from './RailTooltip';
 
 /**
- * Session under a project on the rail.
- * Row is always RAIL_EXPANDED wide; mark sits centered in the left RAIL_MARK_COL.
- * Parent clips to 60px when collapsed → mark is centered in the panel.
- * Right-click opens the same session menu as the Agents list (Pin to Wall, …).
+ * Session under a project on the rail — just the status mark in the fixed
+ * 60px column. Name + live snippet appear in the shared RailTooltip on hover
+ * dwell / focus. Right-click opens the same session menu as the Agents list.
  */
-export function RailSessionPreview({
-  sessionId,
-  onNavigate,
-  onMenuOpenChange,
-}: {
-  sessionId: string;
-  onNavigate?: () => void;
-  /** Keep the rail sheet expanded while the session context menu is open. */
-  onMenuOpenChange?: (open: boolean) => void;
-}) {
+export function RailSessionPreview({ sessionId }: { sessionId: string }) {
   const session = useAppStore((s) => s.sessions[sessionId]);
   const selected = useAppStore((s) => s.selectedProcessId === sessionId);
-  const snippet = useRailSessionSnippet(sessionId);
   const attention = useRailSessionAttention(sessionId);
   const dark = useIsDark();
   const [hover, setHover] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-
-  useEffect(() => {
-    onMenuOpenChange?.(menu !== null);
-  }, [menu, onMenuOpenChange]);
+  const tip = useRailTooltip();
 
   if (!session) return null;
 
@@ -48,7 +34,6 @@ export function RailSessionPreview({
     const store = useAppStore.getState();
     store.clearMultiSelectedSessions();
     store.setSelectedProcess(sessionId);
-    onNavigate?.();
   };
 
   const openMenu = (e: React.MouseEvent) => {
@@ -58,8 +43,10 @@ export function RailSessionPreview({
   };
 
   const selectHue = projectHueCss(session.projectId, dark);
+  // Content is a component so the snippet stays LIVE while the tooltip is
+  // open (streaming text updates render through the portal).
+  const tipContent = <SessionTipContent sessionId={sessionId} />;
   // Selected session is ALWAYS open on the right — never a closed box.
-  const title = snippet ? `${session.name}\n${snippet}` : session.name;
   const pool = selected
     ? {
         ...dockPool(selectHue, { fill: 10, tone: 'medium' }),
@@ -82,16 +69,22 @@ export function RailSessionPreview({
         className={'mt-rail-session' + (selected ? ' is-docked is-docked-open' : '')}
         onClick={jump}
         onContextMenu={openMenu}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        title={title}
+        onMouseEnter={(e) => {
+          setHover(true);
+          tip?.show(e.currentTarget, tipContent, selectHue);
+        }}
+        onMouseLeave={() => {
+          setHover(false);
+          tip?.hide();
+        }}
+        onFocus={(e) => tip?.showNow(e.currentTarget, tipContent, selectHue)}
+        onBlur={() => tip?.hide()}
         aria-label={session.name}
         style={{
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'center',
-          width: RAIL_EXPANDED,
-          minWidth: RAIL_EXPANDED,
+          width: '100%',
           height: 30,
           padding: 0,
           margin: 0,
@@ -103,6 +96,7 @@ export function RailSessionPreview({
           opacity: selected ? 1 : 0.82,
           ...pool,
           flexShrink: 0,
+          position: 'relative',
           transition:
             'background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
         }}
@@ -128,71 +122,23 @@ export function RailSessionPreview({
             active={session.state === 'running'}
           />
         </span>
-
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            height: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            paddingRight: 10,
-            overflow: 'hidden',
-          }}
-        >
+        {attention ? (
+          // The Bell used to sit in the expanded label column; collapsed rows
+          // signal attention with a small amber dot beside the mark instead.
           <span
+            aria-hidden
             style={{
-              flex: 1,
-              minWidth: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'center',
-              gap: 0,
-              overflow: 'hidden',
+              position: 'absolute',
+              top: 5,
+              left: RAIL_MARK_COL - 18,
+              width: 5,
+              height: 5,
+              borderRadius: '50%',
+              background: 'var(--accent-amber)',
+              pointerEvents: 'none',
             }}
-          >
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: selected ? 560 : 450,
-                lineHeight: 1.25,
-                color: selected ? 'var(--text-primary)' : 'var(--text-muted)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {session.name}
-            </span>
-            <span
-              style={{
-                fontSize: 10,
-                lineHeight: 1.2,
-                color: 'var(--text-muted)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontVariantNumeric: 'tabular-nums',
-                minHeight: 12,
-              }}
-            >
-              {snippet || '\u00a0'}
-            </span>
-          </span>
-          {attention ? (
-            <span
-              aria-hidden
-              style={{
-                flexShrink: 0,
-                color: 'var(--accent-amber)',
-                display: 'inline-flex',
-              }}
-            >
-              <Bell size={9} />
-            </span>
-          ) : null}
-        </span>
+          />
+        ) : null}
       </button>
 
       {menu && (
@@ -202,6 +148,19 @@ export function RailSessionPreview({
           onClose={() => setMenu(null)}
         />
       )}
+    </>
+  );
+}
+
+/** Tooltip body: session name + the live activity snippet, updating in place. */
+function SessionTipContent({ sessionId }: { sessionId: string }) {
+  const name = useAppStore((s) => s.sessions[sessionId]?.name);
+  const snippet = useRailSessionSnippet(sessionId);
+  if (!name) return null;
+  return (
+    <>
+      <RailTipTitle>{name}</RailTipTitle>
+      {snippet ? <RailTipSub>{snippet}</RailTipSub> : null}
     </>
   );
 }

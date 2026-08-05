@@ -2,7 +2,13 @@ import chokidar from 'chokidar';
 import fs from 'fs';
 import path from 'path';
 import { getStatusSummary, isGitRepo } from './index.js';
-import { watchBackendOptions, isWatchResourceError } from '../watch-options.js';
+import {
+  watchBackendOptions,
+  pollingBackendOptions,
+  canFallBackToPolling,
+  notePollingFallback,
+  isWatchResourceError,
+} from '../watch-options.js';
 import type { GitStatusSummary } from '../types.js';
 
 type FSWatcher = ReturnType<typeof chokidar.watch>;
@@ -12,9 +18,16 @@ interface WatchEntry {
   timer: NodeJS.Timeout | null;
   inflight: boolean;
   warnedResource?: boolean;
+  fallingBack?: boolean;
+  lastEmitted?: string;
 }
 
 const DEBOUNCE_MS = 500;
+
+// Recursion backstop for the working-tree watch. Deeper trees than this are
+// almost always generated/vendored content the ignore lists missed; changes
+// below the cap simply won't trigger a status refresh.
+const WATCH_DEPTH = Number(process.env.MULTITABLE_WATCH_DEPTH) || 12;
 
 // Read `.gitignore` at the project root and translate each pattern into the
 // glob shape chokidar's `ignored` option expects. We don't need 100%-faithful
@@ -85,14 +98,19 @@ export class GitWatcher {
     key: string,
     projectPath: string,
     emit: (status: GitStatusSummary) => void,
+    opts: { forcePolling?: boolean } = {},
   ): void {
+    // Carry the last emitted signature across re-attaches (polling fallback)
+    // so the fresh initial tick doesn't re-broadcast an unchanged status.
+    const prevSig = this.watchers.get(key)?.lastEmitted;
     this.unwatch(key);
     if (!isGitRepo(projectPath)) return;
 
     const watcher = chokidar.watch(projectPath, {
-      ...watchBackendOptions(),
+      ...(opts.forcePolling ? pollingBackendOptions() : watchBackendOptions()),
       persistent: false,
       ignoreInitial: true,
+      depth: WATCH_DEPTH,
       ignored: [
         '**/node_modules/**',
         '**/.vite/**',           // Vite dev-server cache; rewrites constantly during HMR
@@ -146,7 +164,7 @@ export class GitWatcher {
       }
     } catch {}
 
-    const entry: WatchEntry = { watcher, timer: null, inflight: false };
+    const entry: WatchEntry = { watcher, timer: null, inflight: false, lastEmitted: prevSig };
     const tick = () => this.refresh(projectPath, entry, emit);
 
     const debounced = () => {
@@ -166,15 +184,23 @@ export class GitWatcher {
     // don't surface as unhandled rejections from chokidar's internals.
     watcher.on('error', (err: unknown) => {
       if (isWatchResourceError(err)) {
-        // inotify/file-descriptor budget exhausted. With polling on by default
-        // this should not happen, but on hosts forced to native inotify it can.
-        // Warn once per watcher, then go quiet — the daemon keeps running.
+        // OS watch budget exhausted. Recreate this watch on the polling
+        // backend (once — chokidar can fire the error repeatedly) and flip
+        // the process-wide sticky fallback for future attaches. The re-attach
+        // fires a fresh initial tick, deduped by the lastEmitted dirty-check.
+        if (!opts.forcePolling && canFallBackToPolling() && !entry.fallingBack) {
+          entry.fallingBack = true;
+          notePollingFallback(projectPath);
+          this.attach(key, projectPath, emit, { forcePolling: true });
+          return;
+        }
+        // Already polling (or fallback disabled): warn once per watcher, then
+        // go quiet — the daemon keeps running with partial coverage.
         if (!entry.warnedResource) {
           entry.warnedResource = true;
           console.warn(
             `[git/watcher] filesystem watch limit reached for ${projectPath}; ` +
-              'some files will not be watched. Polling is enabled by default ' +
-              '(unset MULTITABLE_WATCH_NATIVE) or raise fs.inotify.max_user_watches.',
+              'some files will not be watched. Raise fs.inotify.max_user_watches (Linux).',
           );
         }
         return;
@@ -185,8 +211,14 @@ export class GitWatcher {
     this.watchers.set(key, entry);
 
     // Emit an initial status so subscribers don't have to fetch separately.
-    void tick();
+    // Serialized through initChain: at daemon boot every project attaches at
+    // once, and running the initial statuses one at a time avoids a thundering
+    // herd of git processes on the libuv thread pool. Debounced ticks after
+    // real fs events are unaffected.
+    this.initChain = this.initChain.then(tick).catch(() => {});
   }
+
+  private initChain: Promise<void> = Promise.resolve();
 
   unwatch(key: string): void {
     const entry = this.watchers.get(key);
@@ -211,6 +243,13 @@ export class GitWatcher {
     entry.inflight = true;
     try {
       const status = await getStatusSummary(projectPath);
+      // Only broadcast real changes. Chatter from fs events that didn't move
+      // the status (build artifacts, .git internals rewriting, the initial
+      // tick after a fallback re-attach) otherwise fans out to every WS
+      // client and triggers refetch cascades in the web app.
+      const sig = JSON.stringify(status);
+      if (sig === entry.lastEmitted) return;
+      entry.lastEmitted = sig;
       emit(status);
     } catch {
       // Repos in transitional states (rebase mid-flight, etc.) can throw —

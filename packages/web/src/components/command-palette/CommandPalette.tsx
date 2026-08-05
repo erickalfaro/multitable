@@ -17,9 +17,17 @@ interface CommandItem {
   shortcut?: string[];
 }
 
+// Thin always-mounted gate: subscribes to ONE boolean. The body below carries
+// a whole-store subscription plus an items useMemo over every session — while
+// mounted it re-runs on every store write, so it must only exist while open.
 export function CommandPalette() {
+  const open = useAppStore((s) => s.commandPaletteOpen);
+  if (!open) return null;
+  return <CommandPaletteBody />;
+}
+
+function CommandPaletteBody() {
   const {
-    commandPaletteOpen,
     setCommandPaletteOpen,
     projects,
     sessions,
@@ -248,8 +256,6 @@ export function CommandPalette() {
   // Near-top placement + capped list height on mobile so the soft keyboard
   // doesn't cover the results.
   const isMobile = useIsMobile();
-
-  if (!commandPaletteOpen) return null;
 
   return (
     <div

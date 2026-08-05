@@ -50,13 +50,32 @@ import type { Session, AgentProvider, UsageLimitSnapshot } from './lib/types';
 const RUNNING_SAFETY_POLL_MS = 60_000;
 
 function App() {
-  const store = useAppStore();
+  // Narrow selectors ONLY. A whole-store `useAppStore()` subscription here
+  // re-rendered the entire desktop tree (rail + sections + main pane + status
+  // bar + palette) on EVERY store write, including every streaming delta —
+  // silently defeating the narrow-selector discipline in every child. Event
+  // handlers and the mount-only WS effect read via useAppStore.getState()
+  // instead (fresh at call time, no stale closures, no subscription).
   useTheme();
   useAmbientAccent();
 
   const isMobile = useIsMobile();
-  const mobileDrawerOpen = store.mobileDrawerOpen;
-  const setMobileDrawerOpen = store.setMobileDrawerOpen;
+  const mobileDrawerOpen = useAppStore((s) => s.mobileDrawerOpen);
+  const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
+  const selectedProcessId = useAppStore((s) => s.selectedProcessId);
+  const selectedFileViewerProjectId = useAppStore((s) => s.selectedFileViewerProjectId);
+  const selectedGitProjectId = useAppStore((s) => s.selectedGitProjectId);
+  const focusedProjectId = useAppStore((s) => s.focusedProjectId);
+  const projects = useAppStore((s) => s.projects);
+  const isSessionFocused = useAppStore((s) => !!(s.selectedProcessId && s.sessions[s.selectedProcessId]));
+  const addProcessModalOpen = useAppStore((s) => s.addProcessModalOpen);
+  const setAddProcessModalOpen = useAppStore((s) => s.setAddProcessModalOpen);
+  const globalSettingsOpen = useAppStore((s) => s.globalSettingsOpen);
+  const setGlobalSettingsOpen = useAppStore((s) => s.setGlobalSettingsOpen);
+  const projectSettingsOpen = useAppStore((s) => s.projectSettingsOpen);
+  const setProjectSettingsOpen = useAppStore((s) => s.setProjectSettingsOpen);
+  const addProjectModalOpen = useAppStore((s) => s.addProjectModalOpen);
+  const setAddProjectModalOpen = useAppStore((s) => s.setAddProjectModalOpen);
 
   // Close drawer when a process, file-viewer, or git surface is selected on
   // mobile. File-viewer/git selection sets selectedProcessId to null — a no-op
@@ -64,9 +83,9 @@ function App() {
   useEffect(() => {
     if (isMobile) setMobileDrawerOpen(false);
   }, [
-    store.selectedProcessId,
-    store.selectedFileViewerProjectId,
-    store.selectedGitProjectId,
+    selectedProcessId,
+    selectedFileViewerProjectId,
+    selectedGitProjectId,
     isMobile,
     setMobileDrawerOpen,
   ]);
@@ -154,10 +173,10 @@ function App() {
 
   // Clear per-session unread alert badge when the session becomes selected.
   useEffect(() => {
-    if (store.selectedProcessId) {
-      useAppStore.getState().markSessionRead(store.selectedProcessId);
+    if (selectedProcessId) {
+      useAppStore.getState().markSessionRead(selectedProcessId);
     }
-  }, [store.selectedProcessId]);
+  }, [selectedProcessId]);
 
   // Tab title + favicon badge — driven by total unread across all sessions.
   // Cleared automatically when the user gives the tab focus, since the
@@ -191,10 +210,7 @@ function App() {
 
   // The merged SessionHeaderBar takes over as the mobile top bar when a session
   // is the focused process, so the app-level top bar is suppressed there.
-  const focusedProject = store.projects.find((p) => p.id === store.focusedProjectId);
-  const isSessionFocused = !!(
-    store.selectedProcessId && store.sessions[store.selectedProcessId]
-  );
+  const focusedProject = projects.find((p) => p.id === focusedProjectId);
   const showAppTopBar = isMobile && !isSessionFocused;
 
   useEffect(() => {
@@ -208,7 +224,7 @@ function App() {
       api.projects
         .list()
         .then(async projects => {
-          store.setProjects(projects);
+          useAppStore.getState().setProjects(projects);
           if (projects.length === 0) return;
 
           // Restore expanded state from localStorage (intersect with known ids)
@@ -278,9 +294,10 @@ function App() {
           const liveSessionIds = new Set(allSessions.map((s) => s.id));
           const liveCommandIds = new Set(allCommands.map((c) => c.id));
           const liveTerminalIds = new Set(allTerminals.map((t) => t.id));
-          store.mergeSessions(allSessions);
-          store.mergeCommands(allCommands);
-          store.mergeTerminals(allTerminals);
+          const st = useAppStore.getState();
+          st.mergeSessions(allSessions);
+          st.mergeCommands(allCommands);
+          st.mergeTerminals(allTerminals);
           // Prune cached entries that no longer exist server-side (session
           // was deleted while the tab was away). Drop them via the existing
           // remove reducers so messagesBySession + messagesMeta entries get
@@ -325,7 +342,7 @@ function App() {
                   allSessions.some((s) => s.id === savedId) ||
                   allCommands.some((c) => c.id === savedId) ||
                   allTerminals.some((t) => t.id === savedId);
-                if (exists) store.setSelectedProcess(savedId);
+                if (exists) useAppStore.getState().setSelectedProcess(savedId);
                 else localStorage.removeItem('mt:selectedProcessId');
               }
             }
@@ -608,7 +625,7 @@ function App() {
       }),
       wsClient.on('process-state-changed', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
-        if (pid) store.updateProcessState(pid, msg.payload.state);
+        if (pid) useAppStore.getState().updateProcessState(pid, msg.payload.state);
       }),
       wsClient.on('daemon-log', (msg: any) => {
         // Pipe daemon-side log entries (timers, watchdogs, etc.) into the
@@ -627,47 +644,43 @@ function App() {
       }),
       wsClient.on('process-metrics', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
-        if (pid) store.updateProcessMetrics(pid, msg.payload);
+        if (pid) useAppStore.getState().updateProcessMetrics(pid, msg.payload);
       }),
       wsClient.on('session:updated', (msg: any) => {
         // Preserve in-memory claudeState since the backend broadcasts the DB
-        // row which doesn't carry transient stats.
-        const incoming: Session = msg.payload.session;
-        const existing = store.sessions[incoming.id];
-        store.upsertSession(
-          existing?.claudeState
-            ? { ...incoming, claudeState: existing.claudeState }
-            : incoming
-        );
+        // row which doesn't carry transient stats. upsertCanonicalSession reads
+        // the LIVE store — the old closure-captured snapshot here meant the
+        // preservation never saw post-boot claudeState.
+        upsertCanonicalSession(msg.payload.session);
       }),
       wsClient.on('session:created', (msg: any) => {
-        store.upsertSession(msg.payload.session);
+        useAppStore.getState().upsertSession(msg.payload.session);
       }),
       wsClient.on('session:deleted', (msg: any) => {
-        store.removeSession(msg.payload.sessionId);
+        useAppStore.getState().removeSession(msg.payload.sessionId);
       }),
       wsClient.on('permission:prompt', (msg: any) => {
         const prompt = msg.payload.prompt;
-        store.addPermission(prompt);
+        const live = useAppStore.getState();
+        live.addPermission(prompt);
         playPermissionChime();
         // Auto-surface: dock the picker in the right panel's Ask tab when a
         // blocking prompt targets the session the user is currently viewing.
-        const live = useAppStore.getState();
         if (prompt?.sessionId && prompt.sessionId === live.selectedProcessId) {
           live.setDetailPanelOpen(true);
           live.setDetailPanelTab('ask');
         }
       }),
       wsClient.on('permission:resolved', (msg: any) => {
-        store.removePermission(msg.payload.id);
+        useAppStore.getState().removePermission(msg.payload.id);
       }),
       wsClient.on('permission:expired', (msg: any) => {
-        store.removePermission(msg.payload.id);
+        useAppStore.getState().removePermission(msg.payload.id);
       }),
       wsClient.on('session:options-detected', (msg: any) => {
         const { sessionId, options, question } = msg.payload || {};
         if (typeof sessionId !== 'string' || !Array.isArray(options)) return;
-        store.setSessionOptions(sessionId, {
+        useAppStore.getState().setSessionOptions(sessionId, {
           sessionId,
           question: typeof question === 'string' ? question : 'Choose an option:',
           options,
@@ -675,7 +688,7 @@ function App() {
       }),
       wsClient.on('session:notification', (msg: any) => {
         const { sessionId, payload } = msg.payload || {};
-        const session = sessionId ? store.sessions[sessionId] : null;
+        const session = sessionId ? useAppStore.getState().sessions[sessionId] : null;
         const name = session?.name ?? 'Claude';
         const message = payload?.message || 'Needs your attention';
         toast(`${name}: ${message}`, { duration: 5000 });
@@ -775,25 +788,25 @@ function App() {
         const projectId = msg.payload?.projectId;
         const status = msg.payload?.status;
         if (typeof projectId === 'string' && status) {
-          store.setGitStatus(projectId, status);
+          useAppStore.getState().setGitStatus(projectId, status);
         }
       }),
       wsClient.on('git:session-status-changed', (msg: any) => {
         const sessionId = msg.payload?.sessionId;
         const status = msg.payload?.status;
         if (typeof sessionId === 'string' && status) {
-          store.setSessionGitStatus(sessionId, status);
+          useAppStore.getState().setSessionGitStatus(sessionId, status);
         }
       }),
       wsClient.on('session:tool-event', (msg: any) => {
         const pid = msg.processId || msg.payload?.processId;
         const messages = msg.payload?.messages;
         if (!pid || !Array.isArray(messages) || messages.length === 0) return;
-        store.appendMessages(pid, messages);
         // Fan out to Attention Stream: tool_use → new event, tool_result →
         // patch the matching event with output + error flag. Provider is read
         // from the live store snapshot since this handler runs outside React.
         const live = useAppStore.getState();
+        live.appendMessages(pid, messages);
         const session = live.sessions[pid];
         const provider = session?.agentProvider ?? 'claude';
         const events = deriveAttentionEvents(pid, provider, messages);
@@ -812,16 +825,18 @@ function App() {
         const pid = msg.processId || msg.payload?.processId;
         const messages = msg.payload?.messages;
         if (pid && Array.isArray(messages) && messages.length > 0) {
-          store.appendMessages(pid, messages);
+          const live = useAppStore.getState();
+          live.appendMessages(pid, messages);
           // A new turn supersedes options detected from the previous one (the
           // daemon clears its copy too); drop the stale selector immediately.
-          store.clearSessionOptions(pid);
+          live.clearSessionOptions(pid);
         }
       }),
       wsClient.on('session:turn-error', (msg: any) => {
         const message = msg.payload?.message || 'Turn failed';
         const pid = msg.processId;
-        const session = pid ? store.sessions[pid] : null;
+        const live = useAppStore.getState();
+        const session = pid ? live.sessions[pid] : null;
         const name = session?.name ?? 'Agent';
         toast.error(`${name}: ${message}`, { duration: 6000, style: { maxWidth: 480 } });
         // The daemon already pushes a canonical "Turn failed: ..." system
@@ -829,7 +844,7 @@ function App() {
         // second copy here — that would put two error bubbles in the chat.
         if (pid) {
           assistantDeltaBatch.remove(pid);
-          store.setStreamingText(pid, '');
+          live.setStreamingText(pid, '');
         }
       }),
       wsClient.on('session:reconciled', (msg: any) => {
@@ -847,7 +862,7 @@ function App() {
         const oldId = msg.payload?.oldId;
         const newId = msg.payload?.newId;
         if (typeof sessionId === 'string' && typeof oldId === 'string' && typeof newId === 'string') {
-          store.rekeyMessage(sessionId, oldId, newId);
+          useAppStore.getState().rekeyMessage(sessionId, oldId, newId);
         }
       }),
       wsClient.on('session:send-error', (msg: any) => {
@@ -855,7 +870,7 @@ function App() {
         const pid = msg.processId || msg.payload?.processId;
         toast.error(message, { duration: 4000 });
         if (pid) {
-          store.appendMessages(pid, [
+          useAppStore.getState().appendMessages(pid, [
             {
               id: `send-error-${Date.now()}`,
               ts: Date.now(),
@@ -1500,29 +1515,26 @@ function App() {
           },
         }}
       />
-      {store.addProcessModalOpen && store.focusedProjectId && (
+      {addProcessModalOpen && focusedProjectId && (
         <AddProcessModal
-          projectId={store.focusedProjectId}
-          onClose={() => store.setAddProcessModalOpen(false)}
+          projectId={focusedProjectId}
+          onClose={() => setAddProcessModalOpen(false)}
         />
       )}
-      {store.globalSettingsOpen && (
+      {globalSettingsOpen && (
         <GlobalSettingsModal
-          onClose={() => store.setGlobalSettingsOpen(false)}
+          onClose={() => setGlobalSettingsOpen(false)}
         />
       )}
-      {store.projectSettingsOpen && (() => {
-        const project = store.projects.find(p => p.id === store.focusedProjectId);
-        return project ? (
-          <ProjectSettingsModal
-            project={project}
-            onClose={() => store.setProjectSettingsOpen(false)}
-          />
-        ) : null;
-      })()}
-      {store.addProjectModalOpen && (
+      {projectSettingsOpen && focusedProject && (
+        <ProjectSettingsModal
+          project={focusedProject}
+          onClose={() => setProjectSettingsOpen(false)}
+        />
+      )}
+      {addProjectModalOpen && (
         <AddProjectModal
-          onClose={() => store.setAddProjectModalOpen(false)}
+          onClose={() => setAddProjectModalOpen(false)}
         />
       )}
     </div>

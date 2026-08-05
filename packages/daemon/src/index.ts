@@ -58,6 +58,16 @@ process.on('unhandledRejection', (reason) => {
 async function main() {
   console.log('Starting MultiTable daemon...');
 
+  // Daemon-spawned git must never take optional locks: `git status` otherwise
+  // rewrites .git/index (stat-cache refresh), and the GitWatcher watches
+  // .git/index for commit/branch detection — a status→index-write→fs-event
+  // feedback loop. Set process-wide so simple-git children inherit it
+  // (avoiding simple-git's unsafe-env scanner, which an explicit .env() call
+  // would trigger on innocuous inherited vars like GIT_EDITOR). User-facing
+  // PTY terminals scrub this var back OUT (pty/manager.ts) so interactive git
+  // keeps stock behavior. `??=` respects an operator-provided value.
+  process.env.GIT_OPTIONAL_LOCKS ??= '0';
+
   // 1. Load global config
   const config = loadGlobalConfig();
 

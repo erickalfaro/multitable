@@ -19,13 +19,17 @@ interface FileIndex {
   entries: FileIndexEntry[];
 }
 
-// In-memory index per project, refreshed at most every 20s. Walks the project
+// In-memory index per project, refreshed at most every 60s. Walks the project
 // tree one level at a time because the backend returns flat listings per path
-// — we BFS up to a reasonable depth / cap to keep latency low.
+// — we BFS up to a reasonable depth / cap to keep latency low. Uses the
+// paginated `filesPage` endpoint (streaming, capped, stats only what it
+// returns) — the legacy `files()` array form does an unbounded synchronous
+// readdir+stat on the daemon and must not be fed whole project trees.
 const indexCache = new Map<string, FileIndex>();
-const INDEX_TTL_MS = 20_000;
+const INDEX_TTL_MS = 60_000;
 const MAX_ENTRIES = 8000;
 const MAX_DEPTH = 5;
+const PAGE_LIMIT = 1000;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.turbo', '.cache', 'coverage']);
 
 async function walkProject(projectId: string): Promise<FileIndexEntry[]> {
@@ -33,9 +37,19 @@ async function walkProject(projectId: string): Promise<FileIndexEntry[]> {
   const queue: Array<{ path: string; depth: number }> = [{ path: '', depth: 0 }];
   while (queue.length && out.length < MAX_ENTRIES) {
     const { path, depth } = queue.shift()!;
-    let entries: Array<{ name: string; path: string; type: string }> = [];
+    const entries: Array<{ name: string; path: string; type: string }> = [];
     try {
-      entries = (await api.projects.files(projectId, path || undefined)) as any;
+      let offset = 0;
+      for (;;) {
+        const page = await api.projects.filesPage(projectId, {
+          path: path || undefined,
+          limit: PAGE_LIMIT,
+          offset,
+        });
+        entries.push(...page.entries);
+        if (!page.hasMore || entries.length >= MAX_ENTRIES) break;
+        offset += page.entries.length;
+      }
     } catch {
       continue;
     }
@@ -51,14 +65,26 @@ async function walkProject(projectId: string): Promise<FileIndexEntry[]> {
   return out;
 }
 
+// Overlapping callers (every composer mount warms the index) share one walk.
+const inflightWalks = new Map<string, Promise<FileIndexEntry[]>>();
+
 async function getIndex(projectId: string): Promise<FileIndexEntry[]> {
   const cached = indexCache.get(projectId);
   if (cached && Date.now() - cached.loadedAt < INDEX_TTL_MS) {
     return cached.entries;
   }
-  const entries = await walkProject(projectId);
-  indexCache.set(projectId, { projectId, loadedAt: Date.now(), entries });
-  return entries;
+  const inflight = inflightWalks.get(projectId);
+  if (inflight) return inflight;
+  const walk = walkProject(projectId)
+    .then((entries) => {
+      indexCache.set(projectId, { projectId, loadedAt: Date.now(), entries });
+      return entries;
+    })
+    .finally(() => {
+      inflightWalks.delete(projectId);
+    });
+  inflightWalks.set(projectId, walk);
+  return walk;
 }
 
 // Kick the index early (e.g. when the composer mounts) so the first @ is fast.
